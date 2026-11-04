@@ -1,8 +1,58 @@
-import { useState } from 'react'
+import React, { useEffect, useState } from 'react'
 import './App.css'
 
 const loginRoles = ['User', 'Instructor', 'Admin']
 const registerRoles = ['User', 'Instructor']
+const expertiseAreas = [
+  'Business & Management',
+  'Computer Science',
+  'Data Science & Analytics',
+  'Design & Creative Arts',
+  'Education',
+  'Engineering',
+  'Finance & Accounting',
+  'Health & Wellness',
+  'Languages',
+  'Marketing & Communication',
+  'Mathematics',
+  'Personal Development',
+  'Science',
+]
+const subjectsByExpertise = {
+  'Business & Management': ['Entrepreneurship', 'Leadership', 'Project Management', 'Human Resources', 'Operations'],
+  'Computer Science': ['Web Development', 'Mobile Development', 'Programming', 'Cybersecurity', 'Cloud Computing'],
+  'Data Science & Analytics': ['Data Analysis', 'Machine Learning', 'Artificial Intelligence', 'Data Visualization', 'Statistics'],
+  'Design & Creative Arts': ['Graphic Design', 'UX/UI Design', 'Illustration', 'Photography', 'Video Editing'],
+  Education: ['Curriculum Design', 'Instructional Design', 'Early Childhood Education', 'Special Education'],
+  Engineering: ['Mechanical Engineering', 'Electrical Engineering', 'Civil Engineering', 'Robotics'],
+  'Finance & Accounting': ['Financial Planning', 'Bookkeeping', 'Investment Analysis', 'Tax Accounting'],
+  'Health & Wellness': ['Nutrition', 'Fitness', 'Mental Wellness', 'Public Health'],
+  Languages: ['English Language Learning', 'Spanish', 'French', 'Language Teaching'],
+  'Marketing & Communication': ['Digital Marketing', 'Content Marketing', 'Social Media', 'Public Relations'],
+  Mathematics: ['Algebra', 'Calculus', 'Geometry', 'Applied Mathematics'],
+  'Personal Development': ['Communication Skills', 'Career Development', 'Productivity', 'Public Speaking'],
+  Science: ['Biology', 'Chemistry', 'Physics', 'Environmental Science'],
+}
+const teachingLanguages = ['English', 'Spanish', 'French', 'German', 'Hindi', 'Mandarin', 'Portuguese', 'Other']
+const countryCodes = [
+  { country: 'United States / Canada', code: '+1' },
+  { country: 'United Kingdom', code: '+44' },
+  { country: 'India', code: '+91' },
+  { country: 'Australia', code: '+61' },
+  { country: 'New Zealand', code: '+64' },
+  { country: 'Germany', code: '+49' },
+  { country: 'France', code: '+33' },
+  { country: 'Other', code: '+' },
+]
+
+function getPasswordStrength(password) {
+  return [
+    password.length >= 8,
+    /[a-z]/.test(password) && /[A-Z]/.test(password),
+    /\d/.test(password),
+    /[^a-zA-Z0-9]/.test(password),
+  ].filter(Boolean).length
+}
 
 function BrandMark() {
   return (
@@ -12,7 +62,7 @@ function BrandMark() {
   )
 }
 
-function PasswordField({ id, label, value, onChange, autoComplete }) {
+function PasswordField({ id, name = id, label, value, onChange, autoComplete, strength }) {
   const [visible, setVisible] = useState(false)
 
   return (
@@ -21,10 +71,13 @@ function PasswordField({ id, label, value, onChange, autoComplete }) {
       <div className="password-input">
         <input
           id={id}
-          name={id}
+          name={name}
           type={visible ? 'text' : 'password'}
           value={value}
-          onChange={onChange}
+          onChange={(event) => {
+            event.currentTarget.setCustomValidity('')
+            onChange(event)
+          }}
           autoComplete={autoComplete}
           minLength={8}
           required
@@ -38,6 +91,20 @@ function PasswordField({ id, label, value, onChange, autoComplete }) {
           {visible ? 'Hide' : 'Show'}
         </button>
       </div>
+      {strength !== undefined && (
+        <div className="password-strength" aria-live="polite">
+          <div className="password-strength-bars" aria-hidden="true">
+            {[1, 2, 3, 4].map((level) => (
+              <span key={level} className={strength >= level ? `is-level-${strength}` : ''} />
+            ))}
+          </div>
+          <span>
+            {value.length === 0
+              ? 'Use 8+ characters with a mix of letters, numbers, and symbols.'
+              : ['Very weak', 'Weak', 'Fair', 'Good', 'Strong'][strength]}
+          </span>
+        </div>
+      )}
     </div>
   )
 }
@@ -61,6 +128,544 @@ function RoleTabs({ roles, selectedRole, onSelect, label }) {
   )
 }
 
+function InstructorRegistrationForm({ onMessage }) {
+  const [step, setStep] = useState(1)
+  const [values, setValues] = useState({
+    fullName: '',
+    email: '',
+    username: '',
+    password: '',
+    confirmPassword: '',
+    countryCode: '+1',
+    phone: '',
+    professionalTitle: '',
+    expertise: [],
+    subjects: [],
+    customSubjects: [],
+    customSubject: '',
+    experience: '',
+    languages: [],
+    customLanguage: '',
+    termsAccepted: false,
+  })
+  const [profilePicture, setProfilePicture] = useState(null)
+  const [photoError, setPhotoError] = useState('')
+  const [photoPreview, setPhotoPreview] = useState('')
+  const [expertiseSearch, setExpertiseSearch] = useState('')
+  const [selectionErrors, setSelectionErrors] = useState({})
+  const passwordStrength = getPasswordStrength(values.password)
+
+  useEffect(() => {
+    if (!profilePicture) {
+      setPhotoPreview('')
+      return undefined
+    }
+
+    const previewUrl = URL.createObjectURL(profilePicture)
+    setPhotoPreview(previewUrl)
+    return () => URL.revokeObjectURL(previewUrl)
+  }, [profilePicture])
+
+  function updateValue(event) {
+    const { name, value, type, checked } = event.currentTarget
+    event.currentTarget.setCustomValidity('')
+    setValues((current) => ({ ...current, [name]: type === 'checkbox' ? checked : value }))
+  }
+
+  function toggleSelection(name, option) {
+    if (name === 'expertise') {
+      setValues((current) => {
+        const expertise = current.expertise.includes(option)
+          ? current.expertise.filter((item) => item !== option)
+          : [...current.expertise, option]
+        const availableSubjects = expertise.flatMap((area) => subjectsByExpertise[area])
+
+        return {
+          ...current,
+          expertise,
+          subjects: [
+            ...current.subjects.filter((subject) => current.customSubjects.includes(subject)),
+            ...current.subjects.filter((subject) => availableSubjects.includes(subject)),
+          ],
+        }
+      })
+      setSelectionErrors((current) => ({ ...current, expertise: '', subjects: '' }))
+      return
+    }
+
+    setValues((current) => ({
+      ...current,
+      [name]: current[name].includes(option)
+        ? current[name].filter((item) => item !== option)
+        : [...current[name], option],
+      ...(name === 'languages' && option === 'Other' && current.languages.includes(option)
+        ? { customLanguage: '' }
+        : {}),
+    }))
+    setSelectionErrors((current) => ({ ...current, [name]: '' }))
+  }
+
+  function addCustomSubject(event) {
+    const subject = values.customSubject.trim()
+    const input = event.currentTarget.form.elements.customSubject
+    const isDuplicate = [...values.subjects, ...values.customSubjects].some(
+      (item) => item.toLowerCase() === subject.toLowerCase(),
+    )
+    if (!subject) {
+      input.setCustomValidity('')
+      return
+    }
+
+    input.setCustomValidity(
+      isDuplicate ? 'This subject or skill has already been added.' : '',
+    )
+
+    if (!input.reportValidity()) return
+
+    setValues((current) => ({
+      ...current,
+      subjects: [...current.subjects, subject],
+      customSubjects: [...current.customSubjects, subject],
+      customSubject: '',
+    }))
+    setSelectionErrors((current) => ({ ...current, subjects: '' }))
+  }
+
+  function removeCustomSubject(subject) {
+    setValues((current) => ({
+      ...current,
+      subjects: current.subjects.filter((item) => item !== subject),
+      customSubjects: current.customSubjects.filter((item) => item !== subject),
+    }))
+  }
+
+  function handlePhotoChange(event) {
+    const file = event.currentTarget.files?.[0]
+    setPhotoError('')
+
+    if (!file) {
+      setProfilePicture(null)
+      return
+    }
+
+    if (!file.type.startsWith('image/')) {
+      setPhotoError('Choose an image file, such as a JPG or PNG.')
+      event.currentTarget.value = ''
+      setProfilePicture(null)
+      return
+    }
+
+    if (file.size > 5 * 1024 * 1024) {
+      setPhotoError('Your profile picture must be 5 MB or smaller.')
+      event.currentTarget.value = ''
+      setProfilePicture(null)
+      return
+    }
+
+    setProfilePicture(file)
+  }
+
+  function handleSubmit(event) {
+    event.preventDefault()
+    const form = event.currentTarget
+
+    if (step === 1) {
+      const password = form.elements.password
+      const confirmPassword = form.elements.confirmPassword
+      const username = form.elements.username
+      password.setCustomValidity(
+        passwordStrength >= 3
+          ? ''
+          : 'Use at least 8 characters and meet 3 of these: uppercase and lowercase letters, a number, and a symbol.',
+      )
+      username.setCustomValidity(
+        /^[a-zA-Z0-9._-]{3,30}$/.test(values.username)
+          ? ''
+          : 'Use 3–30 letters, numbers, dots, underscores, or hyphens.',
+      )
+      confirmPassword.setCustomValidity(
+        values.password === values.confirmPassword ? '' : 'Your passwords do not match.',
+      )
+
+      if (!form.reportValidity()) return
+      setStep(2)
+      return
+    }
+
+    const nextSelectionErrors = {
+      expertise: values.expertise.length ? '' : 'Select at least one area of expertise.',
+      subjects:
+        values.subjects.some((subject) => !values.customSubjects.includes(subject)) ||
+        values.customSubjects.length > 0
+          ? ''
+          : 'Select or add at least one subject or skill.',
+      languages: values.languages.length
+        ? values.languages.includes('Other') && !values.customLanguage.trim()
+          ? 'Enter the other language you teach.'
+          : ''
+        : 'Select at least one teaching language.',
+    }
+    const phone = form.elements.phone
+    const phoneDigits = values.phone.replace(/\D/g, '')
+    phone.setCustomValidity(
+      phoneDigits.length >= 7 && phoneDigits.length <= 15 && /^[0-9\s().-]+$/.test(values.phone.trim())
+        ? ''
+        : 'Enter a phone number with 7–15 digits. Spaces, parentheses, dots, and hyphens are allowed.',
+    )
+    if (form.elements.customSubject) {
+      form.elements.customSubject.setCustomValidity('')
+    }
+    if (values.languages.includes('Other')) {
+      const customLanguage = form.elements.customLanguage
+      customLanguage.setCustomValidity(
+        values.customLanguage.trim() ? '' : 'Enter the other language you teach.',
+      )
+    }
+    setSelectionErrors(nextSelectionErrors)
+
+    if (
+      !form.reportValidity() ||
+      nextSelectionErrors.expertise ||
+      nextSelectionErrors.subjects ||
+      nextSelectionErrors.languages
+    ) return
+
+    onMessage(
+      'Your instructor application is ready. Account access will be available when Morrow is connected to its authentication service.',
+    )
+  }
+
+  const filteredExpertise = expertiseAreas.filter((area) =>
+    area.toLowerCase().includes(expertiseSearch.trim().toLowerCase()),
+  )
+
+  return (
+    <form className="auth-form instructor-form" onSubmit={handleSubmit} noValidate>
+      <div className="form-heading">
+        <p className="eyebrow">INSTRUCTOR APPLICATION</p>
+        <h1 id="instructor-step-title">
+          {step === 1 ? 'Create your account.' : 'Share your expertise.'}
+        </h1>
+        <p className="form-subtitle">
+          {step === 1
+            ? 'Start with your account details. You can add your teaching profile next.'
+            : 'Tell us about your experience and how you’ll help learners grow.'}
+        </p>
+      </div>
+
+      <ol className="registration-progress" aria-label="Registration progress">
+        {['Account Details', 'Professional Details'].map((label, index) => {
+          const itemStep = index + 1
+          return (
+            <li
+              key={label}
+              className={step === itemStep ? 'is-current' : step > itemStep ? 'is-complete' : ''}
+              aria-current={step === itemStep ? 'step' : undefined}
+            >
+              <span className="progress-step-number">{step > itemStep ? '✓' : itemStep}</span>
+              <span>{label}</span>
+            </li>
+          )
+        })}
+      </ol>
+
+      {step === 1 ? (
+        <>
+          <div className="form-fields instructor-grid">
+            <div className="field">
+              <label htmlFor="instructor-full-name">Full name</label>
+              <input
+                id="instructor-full-name"
+                name="fullName"
+                type="text"
+                autoComplete="name"
+                minLength={2}
+                maxLength={100}
+                value={values.fullName}
+                onChange={updateValue}
+                required
+              />
+            </div>
+            <div className="field">
+              <label htmlFor="instructor-email">Email address</label>
+              <input
+                id="instructor-email"
+                name="email"
+                type="email"
+                autoComplete="email"
+                value={values.email}
+                onChange={updateValue}
+                required
+              />
+            </div>
+            <div className="field">
+              <label htmlFor="instructor-username">Username</label>
+              <input
+                id="instructor-username"
+                name="username"
+                type="text"
+                autoComplete="username"
+                minLength={3}
+                maxLength={30}
+                title="Use 3–30 letters, numbers, dots, underscores, or hyphens."
+                value={values.username}
+                onChange={updateValue}
+                required
+              />
+            </div>
+            <div className="field profile-picture-field">
+              <label htmlFor="profile-picture">Profile picture <span>(optional)</span></label>
+              <div className="profile-picture-control">
+                <div className="profile-picture-preview" aria-hidden="true">
+                  {photoPreview
+                    ? <img src={photoPreview} alt="" />
+                    : <span>{values.fullName.trim().charAt(0).toUpperCase() || '＋'}</span>}
+                </div>
+                <div className="profile-picture-copy">
+                  <label className="upload-button" htmlFor="profile-picture">Choose a photo</label>
+                  <span>JPG or PNG, up to 5 MB</span>
+                  <input
+                    id="profile-picture"
+                    name="profilePicture"
+                    type="file"
+                    accept="image/*"
+                    onChange={handlePhotoChange}
+                    aria-describedby={photoError ? 'profile-picture-error' : 'profile-picture-help'}
+                  />
+                </div>
+              </div>
+              <span id="profile-picture-help" className="field-hint">A clear, friendly headshot works best.</span>
+              {photoError && <span id="profile-picture-error" className="field-error" role="alert">{photoError}</span>}
+            </div>
+            <PasswordField
+              id="instructor-password"
+              name="password"
+              label="Password"
+              value={values.password}
+              onChange={updateValue}
+              autoComplete="new-password"
+              strength={passwordStrength}
+            />
+            <PasswordField
+              id="instructor-confirm-password"
+              name="confirmPassword"
+              label="Confirm password"
+              value={values.confirmPassword}
+              onChange={updateValue}
+              autoComplete="new-password"
+            />
+          </div>
+          <button className="primary-button" type="submit">
+            Continue to professional details <span aria-hidden="true">→</span>
+          </button>
+        </>
+      ) : (
+        <>
+          <div className="form-fields instructor-grid">
+            <div className="field">
+              <label htmlFor="instructor-phone">Phone number</label>
+              <div className="phone-input">
+                <select
+                  id="instructor-country-code"
+                  name="countryCode"
+                  aria-label="Phone country code"
+                  value={values.countryCode}
+                  onChange={updateValue}
+                >
+                  {countryCodes.map(({ country, code }) => (
+                    <option key={`${country}-${code}`} value={code}>{code} — {country}</option>
+                  ))}
+                </select>
+                <input
+                  id="instructor-phone"
+                  name="phone"
+                  type="tel"
+                  autoComplete="tel-national"
+                  inputMode="tel"
+                  title="Enter 7–15 digits; spaces, parentheses, dots, and hyphens are allowed."
+                  placeholder="Phone number"
+                  value={values.phone}
+                  onChange={updateValue}
+                  required
+                />
+              </div>
+            </div>
+            <div className="field">
+              <label htmlFor="professional-title">Professional title</label>
+              <input
+                id="professional-title"
+                name="professionalTitle"
+                type="text"
+                placeholder="e.g. Senior Product Designer"
+                maxLength={100}
+                value={values.professionalTitle}
+                onChange={updateValue}
+                required
+              />
+            </div>
+            <fieldset className="field selection-field full-span">
+              <legend>Area of expertise <span className="required-mark">*</span></legend>
+              <p className="field-hint">Search and select all that apply.</p>
+              <input
+                className="expertise-search"
+                type="search"
+                aria-label="Search areas of expertise"
+                placeholder="Search expertise"
+                value={expertiseSearch}
+                onChange={(event) => setExpertiseSearch(event.currentTarget.value)}
+              />
+              <div className="choice-grid expertise-choices">
+                {filteredExpertise.length ? filteredExpertise.map((area) => (
+                  <label className="choice-chip" key={area}>
+                    <input
+                      type="checkbox"
+                      checked={values.expertise.includes(area)}
+                      onChange={() => toggleSelection('expertise', area)}
+                    />
+                    <span>{area}</span>
+                  </label>
+                )) : <span className="field-hint">No matching areas. Try another search.</span>}
+              </div>
+              {selectionErrors.expertise && <span className="field-error" role="alert">{selectionErrors.expertise}</span>}
+            </fieldset>
+            <fieldset className="field selection-field full-span">
+              <legend>Specific subjects / skills <span className="required-mark">*</span></legend>
+              <p className="field-hint">Choose from the subjects for your selected expertise areas, or add your own.</p>
+              {values.expertise.length ? (
+                <div className="subject-category-list">
+                  {values.expertise.map((area) => (
+                    <div className="subject-category" key={area}>
+                      <p className="subject-category-title">{area}</p>
+                      <div className="choice-grid">
+                        {subjectsByExpertise[area].map((subject) => (
+                          <label className="choice-chip" key={subject}>
+                            <input
+                              type="checkbox"
+                              name="subjects"
+                              value={subject}
+                              checked={values.subjects.includes(subject)}
+                              onChange={() => toggleSelection('subjects', subject)}
+                            />
+                            <span>{subject}</span>
+                          </label>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="field-hint">Select an area of expertise to see related subjects and skills.</p>
+              )}
+              {values.expertise.length > 0 && (
+                <div className="custom-subject-entry">
+                  <input
+                    id="custom-subject"
+                    name="customSubject"
+                    type="text"
+                    maxLength={80}
+                    placeholder="Add a custom subject or skill"
+                    value={values.customSubject}
+                    onChange={updateValue}
+                  />
+                  <button className="back-button" type="button" onClick={addCustomSubject}>Add</button>
+                </div>
+              )}
+              {values.customSubjects.length > 0 && (
+                <div className="choice-grid custom-subject-list" aria-label="Custom subjects">
+                  {values.customSubjects.map((subject) => (
+                    <span className="custom-subject-item" key={subject}>
+                      <input type="hidden" name="subjects" value={subject} />
+                      <input type="hidden" name="customSubjects" value={subject} />
+                      <button
+                        className="custom-subject-chip"
+                        type="button"
+                        onClick={() => removeCustomSubject(subject)}
+                        aria-label={`Remove custom subject ${subject}`}
+                      >
+                        {subject}<span aria-hidden="true"> ×</span>
+                      </button>
+                    </span>
+                  ))}
+                </div>
+              )}
+              {selectionErrors.subjects && <span className="field-error" role="alert">{selectionErrors.subjects}</span>}
+            </fieldset>
+            <div className="field">
+              <label htmlFor="teaching-experience">Teaching experience</label>
+              <select
+                id="teaching-experience"
+                name="experience"
+                value={values.experience}
+                onChange={updateValue}
+                required
+              >
+                <option value="">Select experience</option>
+                <option value="fresher">Fresher / No Experience</option>
+                <option value="less-than-1">Less than 1 year</option>
+                <option value="1-3">1–3 years</option>
+                <option value="3-5">3–5 years</option>
+                <option value="5-10">5–10 years</option>
+                <option value="10+">10+ years</option>
+              </select>
+            </div>
+            <fieldset className="field selection-field full-span">
+              <legend>Teaching languages <span className="required-mark">*</span></legend>
+              <div className="choice-grid language-choices">
+                {teachingLanguages.map((language) => (
+                  <label className="choice-chip" key={language}>
+                    <input
+                      type="checkbox"
+                      checked={values.languages.includes(language)}
+                      onChange={() => toggleSelection('languages', language)}
+                    />
+                    <span>{language}</span>
+                  </label>
+                ))}
+              </div>
+              {values.languages.includes('Other') && (
+                <div className="field custom-language-field">
+                  <label htmlFor="custom-language">Other teaching language</label>
+                  <input
+                    id="custom-language"
+                    name="customLanguage"
+                    type="text"
+                    maxLength={60}
+                    placeholder="Enter a language"
+                    value={values.customLanguage}
+                    onChange={updateValue}
+                    required
+                  />
+                </div>
+              )}
+              {selectionErrors.languages && <span className="field-error" role="alert">{selectionErrors.languages}</span>}
+            </fieldset>
+            <label className="terms-checkbox full-span">
+              <input
+                name="termsAccepted"
+                type="checkbox"
+                checked={values.termsAccepted}
+                onChange={updateValue}
+                required
+              />
+              <span>I agree to the <a href="#instructor-terms">Instructor Terms &amp; Conditions</a>.</span>
+            </label>
+          </div>
+          <p className="approval-note">
+            <span className="approval-dot" aria-hidden="true" />
+            Instructor accounts are reviewed and require admin approval.
+          </p>
+          <div className="wizard-actions">
+            <button className="back-button" type="button" onClick={() => setStep(1)}>Back</button>
+            <button className="primary-button" type="submit">
+              Submit instructor application <span aria-hidden="true">→</span>
+            </button>
+          </div>
+        </>
+      )}
+    </form>
+  )
+}
+
 function AuthForm({ mode, role, onMessage }) {
   const [password, setPassword] = useState('')
   const [confirmPassword, setConfirmPassword] = useState('')
@@ -81,6 +686,15 @@ function AuthForm({ mode, role, onMessage }) {
     } else if (!isRegistering) {
       identifier.setCustomValidity(
         /^[a-zA-Z0-9._-]{3,30}$/.test(identifier.value)
+          ? ''
+          : 'Use 3–30 letters, numbers, dots, underscores, or hyphens.',
+      )
+    }
+
+    if (isRegistering) {
+      const username = form.elements.username
+      username.setCustomValidity(
+        /^[a-zA-Z0-9._-]{3,30}$/.test(username.value)
           ? ''
           : 'Use 3–30 letters, numbers, dots, underscores, or hyphens.',
       )
@@ -163,9 +777,11 @@ function AuthForm({ mode, role, onMessage }) {
               autoComplete="username"
               minLength={3}
               maxLength={30}
-              pattern="[a-zA-Z0-9._-]{3,30}"
               title="Use 3–30 letters, numbers, dots, underscores, or hyphens."
               required
+              onChange={(event) => {
+                event.currentTarget.setCustomValidity('')
+              }}
             />
           </div>
         )}
@@ -367,7 +983,7 @@ function App() {
 
       <section className="form-panel" aria-label="Account access">
         <div className="mobile-brand"><BrandMark /></div>
-        <div className="auth-shell">
+        <div className={isRegistering && selectedRole === 'Instructor' ? 'auth-shell auth-shell--instructor' : 'auth-shell'}>
           <div className="mode-switch" aria-label="Choose account action">
             <button
               type="button"
@@ -397,12 +1013,16 @@ function App() {
             />
           </div>
 
-          <AuthForm
-            key={`${mode}-${selectedRole}`}
-            mode={mode}
-            role={selectedRole}
-            onMessage={setMessage}
-          />
+          {isRegistering && selectedRole === 'Instructor' ? (
+            <InstructorRegistrationForm key="instructor-registration" onMessage={setMessage} />
+          ) : (
+            <AuthForm
+              key={`${mode}-${selectedRole}`}
+              mode={mode}
+              role={selectedRole}
+              onMessage={setMessage}
+            />
+          )}
           <div className="form-message" role="status" aria-live="polite">
             {message}
           </div>
