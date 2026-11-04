@@ -6,15 +6,8 @@ const registerRoles = ['User', 'Instructor']
 
 function BrandMark() {
   return (
-    <a className="brand" href="#" aria-label="Morrow learning home">
-      <span className="brand-mark" aria-hidden="true">
-        <svg viewBox="0 0 32 32" fill="none">
-          <path d="M5.5 8.5c4.2-.9 7.7.1 10.5 2.8v14c-2.8-2.7-6.3-3.7-10.5-2.8v-14Z" />
-          <path d="M26.5 8.5c-4.2-.9-7.7.1-10.5 2.8v14c2.8-2.7 6.3-3.7 10.5-2.8v-14Z" />
-          <path d="M9 13c1.7-.1 3.2.3 4.5 1.2M23 13c-1.7-.1-3.2.3-4.5 1.2" />
-        </svg>
-      </span>
-      <span>morrow<span className="brand-period">.</span></span>
+    <a className="brand" href="#" aria-label="aiHustle home">
+      <img src="/logo.png" alt="aiHustle" />
     </a>
   )
 }
@@ -116,7 +109,11 @@ function AuthForm({ mode, role, onMessage }) {
         : 'A little closer to your goals.'
 
   return (
-    <form className="auth-form" onSubmit={handleSubmit} noValidate>
+    <form
+      className={isRegistering ? 'auth-form' : 'auth-form login-form'}
+      onSubmit={handleSubmit}
+      noValidate
+    >
       <div className="form-heading">
         <p className="eyebrow">{isRegistering ? 'CREATE YOUR ACCOUNT' : 'YOUR LEARNING SPACE'}</p>
         <h1>{title}</h1>
@@ -125,7 +122,7 @@ function AuthForm({ mode, role, onMessage }) {
             ? isInstructor
               ? 'Share your expertise with a community ready to learn.'
               : 'Build a learning habit that takes you somewhere new.'
-            : 'Sign in to pick up right where you left off.'}
+            : ''}
         </p>
       </div>
 
@@ -230,7 +227,7 @@ function AuthForm({ mode, role, onMessage }) {
       )}
 
       <button className="primary-button" type="submit">
-        {isRegistering ? 'Create account' : `Sign in as ${role.toLowerCase()}`}
+        {isRegistering ? 'Create account' : `Log in as ${role.toLowerCase()}`}
         <span aria-hidden="true">→</span>
       </button>
 
@@ -261,6 +258,7 @@ function App() {
   const [loginRole, setLoginRole] = useState('User')
   const [registerRole, setRegisterRole] = useState('User')
   const [message, setMessage] = useState('')
+  const [isDark, setIsDark] = useState(false)
   const isRegistering = mode === 'register'
   const selectedRole = isRegistering ? registerRole : loginRole
 
@@ -276,7 +274,25 @@ function App() {
   }
 
   return (
-    <main className="auth-page">
+    <main className="auth-page" data-theme={isDark ? 'dark' : 'light'}>
+      <button
+        className="theme-toggle"
+        type="button"
+        aria-label={`Switch to ${isDark ? 'light' : 'dark'} theme`}
+        onClick={() => setIsDark((current) => !current)}
+      >
+        {isDark ? (
+          <svg viewBox="0 0 20 20" aria-hidden="true">
+            <circle cx="10" cy="10" r="3.5" />
+            <path d="M10 1.8v2M10 16.2v2M18.2 10h-2M3.8 10h-2m14-5.8-1.4 1.4M5.6 14.4l-1.4 1.4m11.6 0-1.4-1.4M5.6 5.6 4.2 4.2" />
+          </svg>
+        ) : (
+          <svg viewBox="0 0 20 20" aria-hidden="true">
+            <path d="M16.8 12.2A7.3 7.3 0 0 1 7.8 3.2a7.3 7.3 0 1 0 9 9Z" />
+          </svg>
+        )}
+        <span>{isDark ? 'Light mode' : 'Dark mode'}</span>
+      </button>
       <section className="welcome-panel" aria-label="Welcome to Morrow">
         <div className="welcome-top">
           <BrandMark />
@@ -305,6 +321,40 @@ function App() {
           <div className="progress-label"><span>One lesson at a time</span><span>✦</span></div>
         </div>
 
+        <div className="hero-features" aria-label="Learn, teach, and grow">
+          <div className="hero-feature">
+            <span className="feature-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none">
+                <path d="m2.5 9 9.5-5 9.5 5-9.5 5-9.5-5Z" />
+                <path d="M6.5 11.2v4.3c3.2 2.7 7.8 2.7 11 0v-4.3M21.5 9v6" />
+              </svg>
+            </span>
+            <strong>LEARN</strong>
+            <span className="feature-description">Anytime, anywhere</span>
+          </div>
+          <div className="hero-feature">
+            <span className="feature-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none">
+                <circle cx="9" cy="8" r="3" />
+                <path d="M3.5 19v-1.5A5.5 5.5 0 0 1 9 12a5.5 5.5 0 0 1 5.5 5.5V19h-11Z" />
+                <path d="M16 5.3a3 3 0 0 1 0 5.8m2 2a5.5 5.5 0 0 1 2.5 4.6V19h-4" />
+              </svg>
+            </span>
+            <strong>TEACH</strong>
+            <span className="feature-description">Share your knowledge</span>
+          </div>
+          <div className="hero-feature">
+            <span className="feature-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none">
+                <path d="M4 19V5M4 19h17" />
+                <path d="m7 15 4-4 3 2 5-6M15.5 7H19v3.5" />
+              </svg>
+            </span>
+            <strong>GROW</strong>
+            <span className="feature-description">Build a better you</span>
+          </div>
+        </div>
+
         <div className="welcome-footer">
           <div className="avatar-stack" aria-hidden="true">
             <span>M</span><span>A</span><span>J</span><span>+</span>
@@ -325,7 +375,7 @@ function App() {
               aria-pressed={!isRegistering}
               onClick={() => switchMode('login')}
             >
-              Sign in
+              Login
             </button>
             <button
               type="button"
