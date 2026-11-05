@@ -47,7 +47,14 @@ const instructorFields = {
   },
 }
 
-export const Student = createAccountModel('Student', 'students', 'student')
+const studentFields = {
+  accountType: {
+    type: String,
+    enum: ['college', 'independent'],
+  },
+}
+
+export const Student = createAccountModel('Student', 'students', 'student', studentFields)
 export const Instructor = createAccountModel('Instructor', 'instructors', 'instructor', instructorFields)
 export const Admin = createAccountModel('Admin', 'admins', 'admin')
 

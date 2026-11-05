@@ -9,7 +9,7 @@ import { accountModelsByRole } from '../models/account-models.js'
 import { authenticate, requireRoles } from '../middleware/auth.js'
 
 const router = Router()
-const registrationRoles = new Set(['student', 'instructor'])
+const registrationRoles = new Set(['student'])
 const usernamePattern = /^[a-zA-Z0-9._-]{3,30}$/
 const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 const instructorExperiences = new Set(['fresher', 'less-than-1', '1-3', '3-5', '5-10', '10+'])
@@ -244,6 +244,8 @@ router.post('/register', async (req, res, next) => {
       password,
       confirmPassword,
       role,
+      accountType,
+      collegeId,
       instructorDetails,
       professionalDetails,
       termsAccepted,
@@ -252,7 +254,14 @@ router.post('/register', async (req, res, next) => {
     const normalizedRole = submittedRole === 'user' ? 'student' : submittedRole
 
     if (!registrationRoles.has(normalizedRole)) {
-      return res.status(400).json({ message: 'Choose student or instructor registration.' })
+      return res.status(400).json({ message: 'Public registration is available for independent students only.' })
+    }
+    if (
+      (accountType !== undefined &&
+        (typeof accountType !== 'string' || accountType.trim().toLowerCase() !== 'independent')) ||
+      collegeId !== undefined
+    ) {
+      return res.status(400).json({ message: 'Public registration is available for independent students only.' })
     }
     if (
       typeof fullName !== 'string' ||
@@ -279,9 +288,6 @@ router.post('/register', async (req, res, next) => {
       Buffer.byteLength(password, 'utf8') > 72
     ) {
       return res.status(400).json({ message: 'Use a password of at least 8 characters.' })
-    }
-    if (normalizedRole !== 'student' && normalizedRole !== 'instructor') {
-      return res.status(400).json({ message: 'Public registration is available for students and instructors only.' })
     }
     if (typeof confirmPassword !== 'string' || password !== confirmPassword) {
       return res.status(400).json({ message: 'Your passwords do not match.' })
@@ -342,8 +348,8 @@ router.post('/register', async (req, res, next) => {
             email: normalizedEmail,
             username: normalizedUsername,
             passwordHash,
-            status: normalizedRole === 'instructor' ? 'pending' : 'active',
-            ...(normalizedProfessionalDetails && { professionalDetails: normalizedProfessionalDetails }),
+            accountType: 'independent',
+            status: 'active',
           }],
           { session },
         )
@@ -353,9 +359,7 @@ router.post('/register', async (req, res, next) => {
     }
 
     return res.status(201).json({
-      message: normalizedRole === 'instructor'
-        ? 'Instructor application submitted and pending admin approval.'
-        : 'Account created successfully.',
+      message: 'Account created successfully.',
       user: {
         id: String(account._id),
         fullName: account.fullName,

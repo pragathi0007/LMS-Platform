@@ -1,10 +1,9 @@
 import React, { useEffect, useRef, useState } from 'react'
 import AdminDashboard from './AdminDashboard.jsx'
 import InstructorDashboard from './InstructorDashboard.jsx'
+import StudentDashboard from './StudentDashboard.jsx'
 import './App.css'
 
-const loginRoles = ['Student', 'Instructor', 'Admin']
-const registerRoles = ['Student', 'Instructor']
 const expertiseAreas = [
   'Business & Management',
   'Computer Science',
@@ -847,7 +846,7 @@ function InstructorRegistrationForm({ onMessage }) {
   )
 }
 
-function AuthForm({ mode, role, onMessage }) {
+function AuthForm({ mode, role, onMessage, onRegistrationSuccess }) {
   const [password, setPassword] = useState('')
   const [confirmPassword, setConfirmPassword] = useState('')
   const [isSubmitting, setIsSubmitting] = useState(false)
@@ -953,8 +952,8 @@ function AuthForm({ mode, role, onMessage }) {
               username: form.elements.username.value,
               password,
               confirmPassword,
-              professionalDetails: isInstructor ? form.elements.professionalDetails.value : undefined,
-              role: role.toLowerCase() === 'student' ? 'user' : role.toLowerCase(),
+              role: 'student',
+              accountType: 'independent',
             }
           : {
               identifier: identifier.value,
@@ -977,12 +976,7 @@ function AuthForm({ mode, role, onMessage }) {
           throw new Error('The server could not confirm account creation. Please try again.')
         }
 
-        onMessage(
-          isInstructor
-            ? 'Your instructor application was submitted and is awaiting admin approval.'
-            : 'Your account was created successfully. You can now log in.',
-          'success',
-        )
+        onRegistrationSuccess('Your account was created successfully. You can now log in.')
         return
       }
 
@@ -1142,14 +1136,14 @@ function AuthForm({ mode, role, onMessage }) {
       noValidate
     >
       <div className="form-heading">
-        <p className="eyebrow">{isRegistering ? 'CREATE YOUR ACCOUNT' : 'YOUR LEARNING SPACE'}</p>
-        <h1>{title}</h1>
+        {isRegistering && <p className="eyebrow">CREATE YOUR ACCOUNT</p>}
+        <h1>{isRegistering ? title : 'Login'}</h1>
         <p className="form-subtitle">
           {isRegistering
             ? isInstructor
               ? 'Share your expertise with a community ready to learn.'
               : 'Build a learning habit that takes you somewhere new.'
-            : ''}
+            : title}
         </p>
       </div>
 
@@ -1263,7 +1257,7 @@ function AuthForm({ mode, role, onMessage }) {
       >
         {isSubmitting
           ? isRegistering ? 'Creating account...' : 'Logging in...'
-          : isRegistering ? 'Create account' : `Log in as ${role.toLowerCase()}`}
+          : isRegistering ? 'Create account' : 'Log in'}
         {!isSubmitting && <span aria-hidden="true">→</span>}
       </button>
 
@@ -1343,6 +1337,18 @@ function DashboardPage({ role }) {
     window.location.replace('/')
   }
 
+  if (role === 'student') {
+    return (
+      <StudentDashboard
+        user={user}
+        loading={!user && !error}
+        error={error}
+        onRetry={() => window.location.reload()}
+        onLogout={signOut}
+      />
+    )
+  }
+
   if (role === 'admin' && user) {
     return <AdminDashboard email={user.email} onLogout={signOut} />
   }
@@ -1390,12 +1396,10 @@ function DashboardPage({ role }) {
 
 function App() {
   const [mode, setMode] = useState('login')
-  const [loginRole, setLoginRole] = useState('Student')
-  const [registerRole, setRegisterRole] = useState('Student')
   const [message, setMessage] = useState(null)
   const [isDark, setIsDark] = useState(false)
   const isRegistering = mode === 'register'
-  const selectedRole = isRegistering ? registerRole : loginRole
+  const selectedRole = 'Student'
   const dashboardRole = Object.entries(DASHBOARD_PATHS)
     .find(([, path]) => path === window.location.pathname)?.[0]
 
@@ -1404,10 +1408,9 @@ function App() {
     setMessage(null)
   }
 
-  function selectRole(role) {
-    if (isRegistering) setRegisterRole(role)
-    else setLoginRole(role)
-    setMessage(null)
+  function completeRegistration(text) {
+    setMode('login')
+    setMessage({ text, type: 'success' })
   }
 
   if (dashboardRole) {
@@ -1500,51 +1503,16 @@ function App() {
         <span className="welcome-orbit orbit-two" aria-hidden="true" />
       </section>
 
-      <section className="form-panel" aria-label="Account access">
+      <section className={`form-panel${isRegistering ? '' : ' form-panel--login'}`} aria-label="Account access">
         <div className="mobile-brand"><BrandMark /></div>
-        <div className={isRegistering && selectedRole === 'Instructor' ? 'auth-shell auth-shell--instructor' : 'auth-shell'}>
-          <div className="mode-switch" aria-label="Choose account action">
-            <button
-              type="button"
-              className={!isRegistering ? 'mode-button active' : 'mode-button'}
-              aria-pressed={!isRegistering}
-              onClick={() => switchMode('login')}
-            >
-              Login
-            </button>
-            <button
-              type="button"
-              className={isRegistering ? 'mode-button active' : 'mode-button'}
-              aria-pressed={isRegistering}
-              onClick={() => switchMode('register')}
-            >
-              Create account
-            </button>
-          </div>
-
-          <div className="role-section">
-            <p className="role-label">{isRegistering ? 'I WANT TO JOIN AS A' : 'SIGN IN TO YOUR ACCOUNT AS'}</p>
-            <RoleTabs
-              roles={isRegistering ? registerRoles : loginRoles}
-              selectedRole={selectedRole}
-              onSelect={selectRole}
-              label={isRegistering ? 'Registration role' : 'Login role'}
-            />
-          </div>
-
-          {isRegistering && selectedRole === 'Instructor' ? (
-            <InstructorRegistrationForm
-              key="instructor-registration"
-              onMessage={(text, type = 'success') => setMessage(text ? { text, type } : null)}
-            />
-          ) : (
-            <AuthForm
-              key={`${mode}-${selectedRole}`}
-              mode={mode}
-              role={selectedRole}
-              onMessage={(text, type = 'success') => setMessage(text ? { text, type } : null)}
-            />
-          )}
+        <div className="auth-shell">
+          <AuthForm
+            key={`${mode}-${selectedRole}`}
+            mode={mode}
+            role={selectedRole}
+            onMessage={(text, type = 'success') => setMessage(text ? { text, type } : null)}
+            onRegistrationSuccess={completeRegistration}
+          />
           <div
             className="form-message"
             data-status={message?.type || 'success'}
@@ -1553,6 +1521,16 @@ function App() {
           >
             {message?.text || ''}
           </div>
+
+          <p className="auth-mode-prompt">
+            {isRegistering ? 'Already have an account?' : "Don't have an account?"}
+            <button
+              type="button"
+              onClick={() => switchMode(isRegistering ? 'login' : 'register')}
+            >
+              {isRegistering ? 'Log in' : 'Sign up'}
+            </button>
+          </p>
 
           <p className="terms-note">
             By continuing, you agree to our <a href="#terms">Terms</a> and <a href="#privacy">Privacy Policy</a>.

@@ -313,9 +313,20 @@
   background: #fffefa;
 }
 
+.form-panel--login {
+  position: relative;
+  padding-right: clamp(24px, 4vw, 56px);
+  padding-left: clamp(24px, 4vw, 56px);
+}
+
 .auth-shell {
   width: min(100%, 430px);
   margin: auto;
+}
+
+.form-panel--login .auth-shell {
+  width: min(100%, 650px);
+  margin: 0 auto;
 }
 
 .auth-shell--instructor {
@@ -766,38 +777,6 @@
   color: #347466;
 }
 
-.mode-switch {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 4px;
-  margin-bottom: 30px;
-  padding: 4px;
-  border: 1px solid #eeece4;
-  border-radius: 11px;
-  background: #eee9dd;
-}
-
-.mode-button {
-  min-height: 39px;
-  border: 0;
-  border-radius: 8px;
-  background: transparent;
-  color: #81837b;
-  font-size: 12px;
-  font-weight: 600;
-  transition: background 160ms ease, color 160ms ease, box-shadow 160ms ease;
-}
-
-.mode-button:hover {
-  color: #343a36;
-}
-
-.mode-button.active {
-  background: #fffefa;
-  color: #303633;
-  box-shadow: 0 1px 5px rgba(47, 53, 43, 0.09);
-}
-
 .role-section {
   margin-bottom: 23px;
 }
@@ -853,6 +832,11 @@
   font-weight: 640;
   letter-spacing: -0.045em;
   line-height: 1.2;
+}
+
+.login-form .form-heading h1 {
+  font-size: clamp(42px, 4.1vw, 56px);
+  font-weight: 700;
 }
 
 .form-subtitle {
@@ -1150,6 +1134,36 @@
   color: #934e3d;
 }
 
+.auth-mode-prompt {
+  display: flex;
+  justify-content: center;
+  gap: 4px;
+  margin: 18px 0 0;
+  color: #72766f;
+  font-size: 11px;
+}
+
+.auth-mode-prompt button {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #347466;
+  font: inherit;
+  font-weight: 650;
+}
+
+.auth-mode-prompt button:hover {
+  color: #245c51;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.auth-mode-prompt button:focus-visible {
+  border-radius: 2px;
+  outline: 2px solid #55998a;
+  outline-offset: 3px;
+}
+
 .terms-note {
   margin: 21px 0 0;
   color: #9a9a91;
@@ -1175,6 +1189,14 @@
   margin-top: 28px;
   color: #a1a198;
   font-size: 9px;
+}
+
+.form-panel--login .form-bottom {
+  position: absolute;
+  right: clamp(24px, 4vw, 56px);
+  bottom: 22px;
+  left: clamp(24px, 4vw, 56px);
+  margin: 0 auto;
 }
 
 .mobile-brand {
@@ -1245,25 +1267,6 @@
 .auth-page[data-theme='dark'] .form-bottom,
 .auth-page[data-theme='dark'] .terms-note {
   color: #a4aca4;
-}
-
-.auth-page[data-theme='dark'] .mode-switch {
-  border-color: #343c39;
-  background: #222927;
-}
-
-.auth-page[data-theme='dark'] .mode-button {
-  color: #b1b8b0;
-}
-
-.auth-page[data-theme='dark'] .mode-button:hover {
-  color: #f0f1eb;
-}
-
-.auth-page[data-theme='dark'] .mode-button.active {
-  background: #343d39;
-  color: #f0f1eb;
-  box-shadow: none;
 }
 
 .auth-page[data-theme='dark'] .role-tab {
@@ -1338,6 +1341,18 @@
   border-color: #72483f;
   background: #382723;
   color: #f0b5a4;
+}
+
+.auth-page[data-theme='dark'] .auth-mode-prompt {
+  color: #a4aca4;
+}
+
+.auth-page[data-theme='dark'] .auth-mode-prompt button {
+  color: #a9ccb7;
+}
+
+.auth-page[data-theme='dark'] .auth-mode-prompt button:hover {
+  color: #d7e5d9;
 }
 
 .auth-page[data-theme='dark'] .terms-note a {
@@ -1514,6 +1529,11 @@
     padding-right: 48px;
     padding-left: 48px;
   }
+
+  .form-panel--login {
+    padding-right: 30px;
+    padding-left: 30px;
+  }
 }
 
 @media (max-width: 760px) {
@@ -1531,6 +1551,24 @@
     padding: 25px 24px 18px;
   }
 
+  .form-panel--login {
+    justify-content: center;
+  }
+
+  .form-panel--login .mobile-brand {
+    position: absolute;
+    top: 25px;
+    left: 24px;
+    width: min(calc(100% - 110px), 430px);
+    min-height: 35px;
+    margin: 0;
+  }
+
+  .form-panel--login .form-bottom {
+    right: 24px;
+    left: 24px;
+  }
+
   .theme-toggle {
     top: 25px;
     right: 24px;
@@ -1541,6 +1579,10 @@
     width: min(100%, 430px);
     margin-bottom: 28px;
     min-height: 35px;
+  }
+
+  .form-panel--login .auth-shell {
+    margin: auto;
   }
 
   .auth-shell {
@@ -1563,6 +1605,24 @@
     padding-left: 19px;
   }
 
+  .form-panel--login {
+    padding-right: 19px;
+    padding-left: 19px;
+  }
+
+  .form-panel--login .mobile-brand {
+    left: 19px;
+  }
+
+  .form-panel--login .form-bottom {
+    right: 19px;
+    left: 19px;
+  }
+
+  .login-form .form-heading h1 {
+    font-size: 40px;
+  }
+
   .theme-toggle {
     top: 25px;
     right: 19px;
@@ -1572,10 +1632,6 @@
 
   .mobile-brand {
     margin-bottom: 23px;
-  }
-
-  .mode-switch {
-    margin-bottom: 25px;
   }
 
   .registration-progress {
