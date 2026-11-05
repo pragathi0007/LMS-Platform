@@ -1,11 +1,11 @@
 import mongoose from 'mongoose'
+import { config } from './env.js'
 
 export async function connectToDatabase() {
-  const uri = process.env.MONGO_URI
-  if (!uri) {
+  if (!config.mongoUri) {
     throw new Error('MONGO_URI is not set.')
   }
 
-  await mongoose.connect(uri)
+  await mongoose.connect(config.mongoUri)
   console.log('Connected to MongoDB Atlas.')
 }

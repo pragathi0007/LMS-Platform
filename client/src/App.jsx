@@ -53,6 +53,32 @@ function getPasswordStrength(password) {
     /[^a-zA-Z0-9]/.test(password),
   ].filter(Boolean).length
 }
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000/api'
+const DASHBOARD_PATHS = {
+  student: '/user/dashboard',
+  instructor: '/instructor/dashboard',
+  admin: '/admin/dashboard',
+}
+const DASHBOARD_API_ROLES = {
+  student: 'user',
+  instructor: 'instructor',
+  admin: 'admin',
+}
+
+async function readApiResponse(response) {
+  const responseText = await response.text()
+  let result
+
+  try {
+    result = JSON.parse(responseText)
+  } catch {
+    throw new Error('The server returned an invalid response. Please try again later.')
+  }
+  if (!result || typeof result !== 'object') {
+    throw new Error('The server returned an invalid response. Please try again later.')
+  }
+  return result
+}
 
 function BrandMark() {
   return (
@@ -669,10 +695,11 @@ function InstructorRegistrationForm({ onMessage }) {
 function AuthForm({ mode, role, onMessage }) {
   const [password, setPassword] = useState('')
   const [confirmPassword, setConfirmPassword] = useState('')
+  const [isSubmitting, setIsSubmitting] = useState(false)
   const isRegistering = mode === 'register'
   const isInstructor = role === 'Instructor'
 
-  function handleSubmit(event) {
+  async function handleSubmit(event) {
     event.preventDefault()
     const form = event.currentTarget
     const identifier = form.elements.identifier
@@ -703,13 +730,79 @@ function AuthForm({ mode, role, onMessage }) {
     if (!form.reportValidity()) return
 
     if (isRegistering && password !== confirmPassword) {
-      onMessage('Your passwords don’t match. Please check and try again.')
+      onMessage('Your passwords don’t match. Please check and try again.', 'error')
       return
     }
 
-    onMessage(
-      'Your details look good. Account access will be available when Morrow is connected to its authentication service.',
-    )
+    setIsSubmitting(true)
+    onMessage('')
+    try {
+      const response = await fetch(`${API_BASE_URL}/auth/${isRegistering ? 'register' : 'login'}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(isRegistering
+          ? {
+              fullName: form.elements.fullName.value,
+              email: form.elements.email.value,
+              username: form.elements.username.value,
+              password,
+              confirmPassword,
+              professionalDetails: isInstructor ? form.elements.professionalDetails.value : undefined,
+              role: isInstructor ? 'instructor' : 'user',
+            }
+          : {
+              identifier: identifier.value,
+              password,
+              role: role.toLowerCase(),
+            }),
+      })
+      const result = await readApiResponse(response)
+
+      if (!response.ok) {
+        throw new Error(
+          typeof result.message === 'string'
+            ? result.message
+            : `${isRegistering ? 'Registration' : 'Login'} failed. Please try again.`,
+        )
+      }
+
+      if (isRegistering) {
+        if (response.status !== 201 || typeof result.user?.id !== 'string') {
+          throw new Error('The server could not confirm account creation. Please try again.')
+        }
+
+        onMessage(
+          isInstructor
+            ? 'Your instructor application was submitted and is awaiting admin approval.'
+            : 'Your account was created successfully. You can now log in.',
+          'success',
+        )
+        return
+      }
+
+      const expectedRole = role === 'User' ? 'student' : role.toLowerCase()
+      if (
+        typeof result.token !== 'string' ||
+        typeof result.user?.id !== 'string' ||
+        result.user.role !== expectedRole
+      ) {
+        throw new Error('The server returned incomplete or mismatched login details.')
+      }
+
+      sessionStorage.setItem('lms.auth', JSON.stringify({ token: result.token, user: result.user }))
+      window.location.assign(DASHBOARD_PATHS[result.user.role])
+    } catch (error) {
+      onMessage(
+        error instanceof TypeError
+          ? 'Could not connect to the server. Check that the backend is running and try again.'
+          : error instanceof Error
+            ? error.message
+            : `${isRegistering ? 'Registration' : 'Login'} failed. Please try again.`,
+        'error',
+      )
+    } finally {
+      setIsSubmitting(false)
+    }
   }
 
   const title = isRegistering
@@ -842,9 +935,11 @@ function AuthForm({ mode, role, onMessage }) {
         </div>
       )}
 
-      <button className="primary-button" type="submit">
-        {isRegistering ? 'Create account' : `Log in as ${role.toLowerCase()}`}
-        <span aria-hidden="true">→</span>
+      <button className="primary-button" type="submit" disabled={isSubmitting} aria-busy={isSubmitting}>
+        {isSubmitting
+          ? isRegistering ? 'Creating account...' : 'Logging in...'
+          : isRegistering ? 'Create account' : `Log in as ${role.toLowerCase()}`}
+        {!isSubmitting && <span aria-hidden="true">→</span>}
       </button>
 
       {!isRegistering && (
@@ -853,7 +948,7 @@ function AuthForm({ mode, role, onMessage }) {
           <button
             className="google-button"
             type="button"
-            onClick={() => onMessage('Google sign-in will be available when account services are connected.')}
+            onClick={() => onMessage('Google login is not configured yet.', 'error')}
           >
             <svg viewBox="0 0 20 20" aria-hidden="true">
               <path fill="#4285F4" d="M19.6 10.23c0-.68-.06-1.36-.18-2H10v3.78h5.39a4.62 4.62 0 0 1-2 3.03v2.52h3.23c1.89-1.74 2.98-4.3 2.98-7.33Z" />
@@ -869,24 +964,107 @@ function AuthForm({ mode, role, onMessage }) {
   )
 }
 
+function DashboardPage({ role }) {
+  const [user, setUser] = useState(null)
+  const [error, setError] = useState('')
+  const roleLabels = { student: 'User', instructor: 'Instructor', admin: 'Admin' }
+
+  useEffect(() => {
+    const controller = new AbortController()
+
+    async function verifyDashboardAccess() {
+      try {
+        const storedAuth = sessionStorage.getItem('lms.auth')
+        const auth = storedAuth ? JSON.parse(storedAuth) : null
+        if (typeof auth?.token !== 'string') {
+          window.location.replace('/')
+          return
+        }
+
+        const response = await fetch(`${API_BASE_URL}/auth/dashboard/${DASHBOARD_API_ROLES[role]}`, {
+          headers: { Authorization: `Bearer ${auth.token}` },
+          signal: controller.signal,
+        })
+        const result = await readApiResponse(response)
+        if (!response.ok || result.user?.role !== role) {
+          sessionStorage.removeItem('lms.auth')
+          window.location.replace('/')
+          return
+        }
+
+        setUser(result.user)
+      } catch (requestError) {
+        if (requestError.name !== 'AbortError') {
+          setError('We couldn’t verify your session. Check the connection and try again.')
+        }
+      }
+    }
+
+    verifyDashboardAccess()
+    return () => controller.abort()
+  }, [role])
+
+  function signOut() {
+    sessionStorage.removeItem('lms.auth')
+    window.location.replace('/')
+  }
+
+  return (
+    <main className="dashboard-landing">
+      <section className="dashboard-card" aria-live="polite">
+        <BrandMark />
+        {error ? (
+          <>
+            <h1>Session verification failed</h1>
+            <p>{error}</p>
+            <button className="dashboard-button" type="button" onClick={() => window.location.reload()}>
+              Try again
+            </button>
+            <button className="dashboard-signout" type="button" onClick={signOut}>
+              Return to login
+            </button>
+          </>
+        ) : user ? (
+          <>
+            <p className="dashboard-eyebrow">{roleLabels[role]} ACCOUNT</p>
+            <h1>Welcome{user.fullName ? `, ${user.fullName}` : ''}.</h1>
+            <p>You’re signed in to your {roleLabels[role].toLowerCase()} learning space.</p>
+            <button className="dashboard-button" type="button" onClick={signOut}>
+              Log out
+            </button>
+          </>
+        ) : (
+          <p>Verifying your account…</p>
+        )}
+      </section>
+    </main>
+  )
+}
+
 function App() {
   const [mode, setMode] = useState('login')
   const [loginRole, setLoginRole] = useState('User')
   const [registerRole, setRegisterRole] = useState('User')
-  const [message, setMessage] = useState('')
+  const [message, setMessage] = useState(null)
   const [isDark, setIsDark] = useState(false)
   const isRegistering = mode === 'register'
   const selectedRole = isRegistering ? registerRole : loginRole
+  const dashboardRole = Object.entries(DASHBOARD_PATHS)
+    .find(([, path]) => path === window.location.pathname)?.[0]
 
   function switchMode(nextMode) {
     setMode(nextMode)
-    setMessage('')
+    setMessage(null)
   }
 
   function selectRole(role) {
     if (isRegistering) setRegisterRole(role)
     else setLoginRole(role)
-    setMessage('')
+    setMessage(null)
+  }
+
+  if (dashboardRole) {
+    return <DashboardPage role={dashboardRole} />
   }
 
   return (
@@ -971,12 +1149,6 @@ function App() {
           </div>
         </div>
 
-        <div className="welcome-footer">
-          <div className="avatar-stack" aria-hidden="true">
-            <span>M</span><span>A</span><span>J</span><span>+</span>
-          </div>
-          <span>A community that learns together</span>
-        </div>
         <span className="welcome-orbit orbit-one" aria-hidden="true" />
         <span className="welcome-orbit orbit-two" aria-hidden="true" />
       </section>
@@ -1014,17 +1186,25 @@ function App() {
           </div>
 
           {isRegistering && selectedRole === 'Instructor' ? (
-            <InstructorRegistrationForm key="instructor-registration" onMessage={setMessage} />
+            <InstructorRegistrationForm
+              key="instructor-registration"
+              onMessage={(text) => setMessage(text ? { text, type: 'success' } : null)}
+            />
           ) : (
             <AuthForm
               key={`${mode}-${selectedRole}`}
               mode={mode}
               role={selectedRole}
-              onMessage={setMessage}
+              onMessage={(text, type = 'success') => setMessage(text ? { text, type } : null)}
             />
           )}
-          <div className="form-message" role="status" aria-live="polite">
-            {message}
+          <div
+            className="form-message"
+            data-status={message?.type || 'success'}
+            role={message?.type === 'error' ? 'alert' : 'status'}
+            aria-live={message?.type === 'error' ? 'assertive' : 'polite'}
+          >
+            {message?.text || ''}
           </div>
 
           <p className="terms-note">

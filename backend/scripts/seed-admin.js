@@ -1,17 +1,12 @@
 import bcrypt from 'bcryptjs'
-import dotenv from 'dotenv'
 import mongoose from 'mongoose'
-import path from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { config } from '../config/env.js'
 import { connectToDatabase } from '../config/db.js'
 import User from '../models/User.js'
 
-const backendDirectory = path.dirname(path.dirname(fileURLToPath(import.meta.url)))
-dotenv.config({ path: path.join(backendDirectory, '.env'), quiet: true })
-
 async function seedAdmin() {
-  const email = process.env.ADMIN_EMAIL?.trim().toLowerCase()
-  const password = process.env.ADMIN_PASSWORD
+  const email = config.adminEmail?.trim().toLowerCase()
+  const password = config.adminPassword
   if (!email || !password) {
     throw new Error('Set ADMIN_EMAIL and ADMIN_PASSWORD in backend/.env before seeding.')
   }
