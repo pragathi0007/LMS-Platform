@@ -271,7 +271,7 @@ router.post('/login', async (req, res, next) => {
     }
 
     const status = String(user.status || user.approvalStatus || '').toLowerCase()
-    if (user.role === 'instructor' && status !== 'approved') {
+    if (user.role === 'instructor' && !['active', 'approved'].includes(status)) {
       const message = status === 'rejected'
         ? 'Your instructor account was not approved.'
         : status === 'pending'
@@ -279,7 +279,11 @@ router.post('/login', async (req, res, next) => {
           : 'Your instructor account is not active.'
       return res.status(403).json({ message })
     }
-    if (user.isActive === false || !['active', 'approved'].includes(status)) {
+    if (
+      (user.role === 'instructor' && user.isActive !== true) ||
+      user.isActive === false ||
+      !['active', 'approved'].includes(status)
+    ) {
       return res.status(403).json({ message: 'Your account is not active.' })
     }
 

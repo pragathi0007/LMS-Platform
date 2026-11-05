@@ -31,10 +31,17 @@ export async function authenticate(req, res, next) {
     }
 
     const status = String(user.status || user.approvalStatus || '').toLowerCase()
-    if (user.role === 'instructor' && status !== 'approved') {
-      return res.status(403).json({ message: 'Your instructor account is awaiting admin approval.' })
+    if (user.role === 'instructor' && !['active', 'approved'].includes(status)) {
+      const message = status === 'rejected'
+        ? 'Your instructor account was not approved.'
+        : 'Your instructor account is awaiting admin approval.'
+      return res.status(403).json({ message })
     }
-    if (user.isActive === false || !['active', 'approved'].includes(status)) {
+    if (
+      (user.role === 'instructor' && user.isActive !== true) ||
+      user.isActive === false ||
+      !['active', 'approved'].includes(status)
+    ) {
       return res.status(403).json({ message: 'Your account is not active.' })
     }
 
@@ -48,6 +55,7 @@ export async function authenticate(req, res, next) {
         email: user.email,
         role: user.role,
         status: user.status,
+        isActive: user.isActive,
       },
     }
     return next()

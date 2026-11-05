@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react'
 import AdminDashboard from './AdminDashboard.jsx'
+import InstructorDashboard from './InstructorDashboard.jsx'
 import './App.css'
 
 const loginRoles = ['User', 'Instructor', 'Admin']
@@ -1052,7 +1053,14 @@ function DashboardPage({ role }) {
           signal: controller.signal,
         })
         const result = await readApiResponse(response)
-        if (!response.ok || result.user?.role !== role) {
+        const userIsActive =
+          result.user?.isActive === true &&
+          ['active', 'approved'].includes(String(result.user?.status || '').toLowerCase())
+        if (
+          !response.ok ||
+          result.user?.role !== role ||
+          (role === 'instructor' && !userIsActive)
+        ) {
           sessionStorage.removeItem('lms.auth')
           window.location.replace('/')
           return
@@ -1077,6 +1085,15 @@ function DashboardPage({ role }) {
 
   if (role === 'admin' && user) {
     return <AdminDashboard email={user.email} onLogout={signOut} />
+  }
+  if (role === 'instructor' && user) {
+    return (
+      <InstructorDashboard
+        fullName={user.fullName}
+        email={user.email}
+        onLogout={signOut}
+      />
+    )
   }
 
   return (
