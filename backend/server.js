@@ -19,8 +19,11 @@ app.use(
     },
   }),
 )
-app.use(express.json())
+app.use(express.json({ limit: '8mb' }))
 app.use('/api/auth', authRouter)
+app.use('/api', (req, res) => {
+  res.status(404).json({ message: 'API route not found.' })
+})
 
 app.use((error, req, res, next) => {
   console.error(`Request failed (${error instanceof Error ? error.name : 'Unknown error'}).`)

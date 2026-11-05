@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react'
+import AdminDashboard from './AdminDashboard.jsx'
 import './App.css'
 
 const loginRoles = ['User', 'Instructor', 'Admin']
@@ -45,6 +46,18 @@ const countryCodes = [
   { country: 'Other', code: '+' },
 ]
 
+function readFileAsDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => {
+      if (typeof reader.result === 'string') resolve(reader.result)
+      else reject(new Error('Unable to read the profile picture.'))
+    }
+    reader.onerror = () => reject(new Error('Unable to read the profile picture.'))
+    reader.readAsDataURL(file)
+  })
+}
+
 function getPasswordStrength(password) {
   return [
     password.length >= 8,
@@ -77,6 +90,23 @@ async function readApiResponse(response) {
   if (!result || typeof result !== 'object') {
     throw new Error('The server returned an invalid response. Please try again later.')
   }
+  return result
+}
+
+async function registerAccount(payload) {
+  const response = await fetch(`${API_BASE_URL}/auth/register`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+  const result = await readApiResponse(response)
+
+  if (!response.ok) {
+    throw new Error(
+      typeof result.message === 'string' ? result.message : 'Registration failed. Please try again.',
+    )
+  }
+
   return result
 }
 
@@ -179,6 +209,7 @@ function InstructorRegistrationForm({ onMessage }) {
   const [photoPreview, setPhotoPreview] = useState('')
   const [expertiseSearch, setExpertiseSearch] = useState('')
   const [selectionErrors, setSelectionErrors] = useState({})
+  const [isSubmitting, setIsSubmitting] = useState(false)
   const passwordStrength = getPasswordStrength(values.password)
 
   useEffect(() => {
@@ -291,7 +322,7 @@ function InstructorRegistrationForm({ onMessage }) {
     setProfilePicture(file)
   }
 
-  function handleSubmit(event) {
+  async function handleSubmit(event) {
     event.preventDefault()
     const form = event.currentTarget
 
@@ -356,9 +387,44 @@ function InstructorRegistrationForm({ onMessage }) {
       nextSelectionErrors.languages
     ) return
 
-    onMessage(
-      'Your instructor application is ready. Account access will be available when Morrow is connected to its authentication service.',
-    )
+    setIsSubmitting(true)
+    onMessage('')
+    try {
+      const profilePictureData = profilePicture
+        ? await readFileAsDataUrl(profilePicture)
+        : undefined
+      const result = await registerAccount({
+        role: 'instructor',
+        fullName: values.fullName,
+        email: values.email,
+        username: values.username,
+        password: values.password,
+        confirmPassword: values.confirmPassword,
+        termsAccepted: values.termsAccepted,
+        instructorDetails: {
+          countryCode: values.countryCode,
+          phone: values.phone,
+          professionalTitle: values.professionalTitle,
+          expertise: values.expertise,
+          subjects: values.subjects,
+          customSubjects: values.customSubjects,
+          experience: values.experience,
+          languages: values.languages,
+          customLanguage: values.customLanguage,
+          profilePicture: profilePictureData
+            ? {
+                dataUrl: profilePictureData,
+                contentType: profilePicture.type,
+              }
+            : undefined,
+        },
+      })
+      onMessage(result.message)
+    } catch (error) {
+      onMessage(error instanceof Error ? error.message : 'Unable to submit your application.')
+    } finally {
+      setIsSubmitting(false)
+    }
   }
 
   const filteredExpertise = expertiseAreas.filter((area) =>
@@ -681,9 +747,9 @@ function InstructorRegistrationForm({ onMessage }) {
             Instructor accounts are reviewed and require admin approval.
           </p>
           <div className="wizard-actions">
-            <button className="back-button" type="button" onClick={() => setStep(1)}>Back</button>
-            <button className="primary-button" type="submit">
-              Submit instructor application <span aria-hidden="true">→</span>
+            <button className="back-button" type="button" onClick={() => setStep(1)} disabled={isSubmitting}>Back</button>
+            <button className="primary-button" type="submit" disabled={isSubmitting}>
+              {isSubmitting ? 'Submitting application…' : 'Submit instructor application'} <span aria-hidden="true">→</span>
             </button>
           </div>
         </>
@@ -1007,6 +1073,10 @@ function DashboardPage({ role }) {
   function signOut() {
     sessionStorage.removeItem('lms.auth')
     window.location.replace('/')
+  }
+
+  if (role === 'admin' && user) {
+    return <AdminDashboard email={user.email} onLogout={signOut} />
   }
 
   return (

@@ -7,6 +7,90 @@ import { authenticate, requireRoles } from '../middleware/auth.js'
 
 const router = Router()
 const allowedRoles = new Set(['student', 'instructor', 'admin'])
+const registrationRoles = new Set(['student', 'instructor'])
+const usernamePattern = /^[a-zA-Z0-9._-]{3,30}$/
+const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+const instructorExperiences = new Set(['fresher', 'less-than-1', '1-3', '3-5', '5-10', '10+'])
+
+function isStringArray(value, { minLength = 1, maxItems = 30 } = {}) {
+  return (
+    Array.isArray(value) &&
+    value.length >= minLength &&
+    value.length <= maxItems &&
+    value.every((item) => typeof item === 'string' && item.trim().length > 0 && item.length <= 80)
+  )
+}
+
+function validateInstructorDetails(details) {
+  if (!details || typeof details !== 'object' || Array.isArray(details)) {
+    return 'Complete the instructor profile details.'
+  }
+
+  const phoneDigits = typeof details.phone === 'string' ? details.phone.replace(/\D/g, '') : ''
+  if (
+    typeof details.countryCode !== 'string' ||
+    !/^\+\d{1,4}$/.test(details.countryCode.trim()) ||
+    phoneDigits.length < 7 ||
+    phoneDigits.length > 15 ||
+    !/^[0-9\s().-]+$/.test(details.phone.trim())
+  ) {
+    return 'Enter a valid phone country code and phone number.'
+  }
+  if (
+    typeof details.professionalTitle !== 'string' ||
+    details.professionalTitle.trim().length < 2 ||
+    details.professionalTitle.trim().length > 100
+  ) {
+    return 'Enter a professional title between 2 and 100 characters.'
+  }
+  if (
+    !isStringArray(details.expertise) ||
+    !isStringArray(details.subjects) ||
+    !isStringArray(details.languages, { maxItems: 8 })
+  ) {
+    return 'Select at least one expertise area, subject, and teaching language.'
+  }
+  if (!instructorExperiences.has(details.experience)) {
+    return 'Select a valid teaching experience level.'
+  }
+  if (
+    details.languages.includes('Other') &&
+    (typeof details.customLanguage !== 'string' || !details.customLanguage.trim())
+  ) {
+    return 'Enter the other teaching language.'
+  }
+  if (
+    !Array.isArray(details.customSubjects) ||
+    details.customSubjects.length > 30 ||
+    details.customSubjects.some(
+      (subject) => typeof subject !== 'string' || !subject.trim() || subject.length > 80,
+    )
+  ) {
+    return 'Check the custom subjects in your instructor profile.'
+  }
+  if (details.profilePicture !== undefined) {
+    const picture = details.profilePicture
+    if (
+      !picture ||
+      typeof picture !== 'object' ||
+      !['image/jpeg', 'image/png'].includes(picture.contentType) ||
+      typeof picture.dataUrl !== 'string' ||
+      picture.dataUrl.length > 7_000_000
+    ) {
+      return 'Use a JPG or PNG profile picture no larger than 5 MB.'
+    }
+
+    const match = picture.dataUrl.match(/^data:(image\/(?:jpeg|png));base64,([A-Za-z0-9+/]+={0,2})$/)
+    if (!match || match[1] !== picture.contentType) {
+      return 'The profile picture is not a valid JPG or PNG image.'
+    }
+    if (Buffer.from(match[2], 'base64').length > 5 * 1024 * 1024) {
+      return 'The profile picture must be 5 MB or smaller.'
+    }
+  }
+
+  return ''
+}
 
 router.post('/register', async (req, res, next) => {
   try {
@@ -16,106 +100,138 @@ router.post('/register', async (req, res, next) => {
       username,
       password,
       confirmPassword,
-      professionalDetails,
       role,
+      instructorDetails,
+      professionalDetails,
+      termsAccepted,
     } = req.body ?? {}
+    const submittedRole = typeof role === 'string' ? role.trim().toLowerCase() : ''
+    const normalizedRole = submittedRole === 'user' ? 'student' : submittedRole
 
+    if (!registrationRoles.has(normalizedRole)) {
+      return res.status(400).json({ message: 'Choose student or instructor registration.' })
+    }
     if (
       typeof fullName !== 'string' ||
-      typeof email !== 'string' ||
-      typeof username !== 'string' ||
-      typeof password !== 'string' ||
-      typeof confirmPassword !== 'string' ||
-      typeof role !== 'string'
+      fullName.trim().length < 1 ||
+      fullName.trim().length > 120
     ) {
-      return res.status(400).json({ message: 'Complete all required registration fields.' })
-    }
-
-    const normalizedName = fullName.trim()
-    const normalizedEmail = email.trim().toLowerCase()
-    const normalizedUsername = username.trim().toLowerCase()
-    const normalizedRole = role.trim().toLowerCase()
-
-    if (!normalizedName || normalizedName.length > 120) {
-      return res.status(400).json({ message: 'Enter a name between 1 and 120 characters.' })
+      return res.status(400).json({ message: 'Enter a full name between 1 and 120 characters.' })
     }
     if (
-      normalizedEmail.length > 254 ||
-      !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail)
+      typeof email !== 'string' ||
+      email.trim().length > 254 ||
+      !emailPattern.test(email.trim())
     ) {
       return res.status(400).json({ message: 'Enter a valid email address.' })
     }
-    if (!/^[a-zA-Z0-9._-]{3,30}$/.test(normalizedUsername)) {
+    if (typeof username !== 'string' || !usernamePattern.test(username.trim())) {
       return res.status(400).json({
         message: 'Use a username with 3–30 letters, numbers, dots, underscores, or hyphens.',
       })
     }
-    if (normalizedRole !== 'user' && normalizedRole !== 'instructor') {
-      return res.status(400).json({ message: 'Public registration is available for users and instructors only.' })
+    if (
+      typeof password !== 'string' ||
+      password.length < 8 ||
+      Buffer.byteLength(password, 'utf8') > 72
+    ) {
+      return res.status(400).json({ message: 'Use a password of at least 8 characters.' })
     }
-    if (password.length < 8 || Buffer.byteLength(password, 'utf8') > 72) {
-      return res.status(400).json({ message: 'Password must be at least 8 characters and no more than 72 bytes.' })
-    }
-    if (password !== confirmPassword) {
+    if (typeof confirmPassword !== 'string' || password !== confirmPassword) {
       return res.status(400).json({ message: 'Your passwords do not match.' })
     }
-
-    let normalizedProfessionalDetails
     if (normalizedRole === 'instructor') {
-      if (typeof professionalDetails !== 'string') {
-        return res.status(400).json({ message: 'Enter your professional details.' })
-      }
-      normalizedProfessionalDetails = professionalDetails.trim()
-      if (!normalizedProfessionalDetails || normalizedProfessionalDetails.length > 2000) {
-        return res.status(400).json({ message: 'Professional details must be between 1 and 2000 characters.' })
+      if (instructorDetails) {
+        if (termsAccepted !== true) {
+          return res.status(400).json({ message: 'Accept the instructor terms to continue.' })
+        }
+        const detailsError = validateInstructorDetails(instructorDetails)
+        if (detailsError) return res.status(400).json({ message: detailsError })
+      } else {
+        if (typeof professionalDetails !== 'string') {
+          return res.status(400).json({ message: 'Enter your professional details.' })
+        }
+        if (!professionalDetails.trim() || professionalDetails.trim().length > 2000) {
+          return res.status(400).json({
+            message: 'Professional details must be between 1 and 2000 characters.',
+          })
+        }
       }
     }
 
-    const duplicateEmail = await User.exists({ email: normalizedEmail })
-    if (duplicateEmail) {
-      return res.status(409).json({ message: 'An account with this email already exists.' })
+    const normalizedEmail = email.trim().toLowerCase()
+    const normalizedUsername = username.trim().toLowerCase()
+    const existing = await User.findOne({
+      $or: [{ email: normalizedEmail }, { username: normalizedUsername }],
+    }).select('email username')
+    if (existing?.email === normalizedEmail) {
+      return res.status(409).json({ message: 'That email address is already registered.' })
     }
-    const duplicateUsername = await User.exists({ username: normalizedUsername })
-    if (duplicateUsername) {
-      return res.status(409).json({ message: 'This username is already taken.' })
+    if (existing?.username === normalizedUsername) {
+      return res.status(409).json({ message: 'That username is already taken.' })
     }
+
+    const instructorProfile = normalizedRole === 'instructor' && instructorDetails
+      ? {
+          ...instructorDetails,
+          countryCode: instructorDetails.countryCode.trim(),
+          phone: instructorDetails.phone.trim(),
+          professionalTitle: instructorDetails.professionalTitle.trim(),
+          expertise: instructorDetails.expertise.map((item) => item.trim()),
+          subjects: instructorDetails.subjects.map((item) => item.trim()),
+          customSubjects: instructorDetails.customSubjects.map((item) => item.trim()),
+          languages: instructorDetails.languages.map((item) => item.trim()),
+          customLanguage: instructorDetails.customLanguage?.trim() || '',
+          profilePicture: instructorDetails.profilePicture
+            ? {
+                data: Buffer.from(instructorDetails.profilePicture.dataUrl.split(',')[1], 'base64'),
+                contentType: instructorDetails.profilePicture.contentType,
+              }
+            : undefined,
+        }
+      : undefined
 
     const passwordHash = await bcrypt.hash(password, 12)
-    const user = await User.create({
-      fullName: normalizedName,
-      email: normalizedEmail,
-      username: normalizedUsername,
-      passwordHash,
-      role: normalizedRole === 'user' ? 'student' : 'instructor',
-      status: normalizedRole === 'instructor' ? 'pending' : 'active',
-      ...(normalizedProfessionalDetails && { professionalDetails: normalizedProfessionalDetails }),
-    })
+    try {
+      const user = await User.create({
+        fullName: fullName.trim(),
+        email: normalizedEmail,
+        username: normalizedUsername,
+        passwordHash,
+        role: normalizedRole,
+        status: normalizedRole === 'instructor' ? 'pending' : 'active',
+        ...(instructorProfile ? { instructorDetails: instructorProfile } : {}),
+        ...(typeof professionalDetails === 'string'
+          ? { professionalDetails: professionalDetails.trim() }
+          : {}),
+      })
 
-    return res.status(201).json({
-      message: normalizedRole === 'instructor'
-        ? 'Instructor application submitted and pending admin approval.'
-        : 'Account created successfully.',
-      user: {
-        id: String(user._id),
-        fullName: user.fullName,
-        email: user.email,
-        username: user.username,
-        role: user.role,
-        status: user.status,
-      },
-    })
+      return res.status(201).json({
+        message: normalizedRole === 'instructor'
+          ? 'Your instructor application was submitted and is pending admin approval.'
+          : 'Your account was created successfully. You can now sign in.',
+        user: {
+          id: String(user._id),
+          fullName: user.fullName,
+          email: user.email,
+          username: user.username,
+          role: user.role,
+          status: user.status,
+        },
+      })
+    } catch (error) {
+      if (error?.code === 11000) {
+        const duplicateField = error.keyPattern?.email ? 'email' : error.keyPattern?.username ? 'username' : ''
+        if (duplicateField === 'email') {
+          return res.status(409).json({ message: 'That email address is already registered.' })
+        }
+        if (duplicateField === 'username') {
+          return res.status(409).json({ message: 'That username is already taken.' })
+        }
+      }
+      throw error
+    }
   } catch (error) {
-    if (error?.code === 11000) {
-      if (error.keyPattern?.email || error.keyValue?.email) {
-        return res.status(409).json({ message: 'An account with this email already exists.' })
-      }
-      if (error.keyPattern?.username || error.keyValue?.username) {
-        return res.status(409).json({ message: 'This username is already taken.' })
-      }
-    }
-    if (error?.name === 'ValidationError') {
-      return res.status(400).json({ message: 'Some registration details are invalid.' })
-    }
     return next(error)
   }
 })

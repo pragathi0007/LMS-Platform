@@ -1427,6 +1427,36 @@
   text-underline-offset: 3px;
 }
 
+.admin-dashboard__success {
+  margin-top: 14px !important;
+  padding: 11px 14px;
+  border: 1px solid #d6e6db;
+  border-radius: 7px;
+  background: #f1f7f1;
+  color: #527a6a !important;
+  font-weight: 600;
+}
+
+.admin-dashboard__account {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin-top: 20px;
+  color: #777a70;
+  font-size: 12px;
+}
+
+.admin-dashboard__account strong {
+  overflow-wrap: anywhere;
+  color: #303632;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.admin-dashboard__logout {
+  margin-top: 24px;
+}
+
 @media (max-width: 1000px) {
   .auth-page {
     grid-template-columns: minmax(310px, 0.78fr) minmax(490px, 1.22fr);
@@ -1525,6 +1555,10 @@
 
   .wizard-actions {
     align-items: stretch;
+  }
+
+  .admin-dashboard__card {
+    padding: 32px 22px;
   }
 
   .wizard-actions .primary-button {
