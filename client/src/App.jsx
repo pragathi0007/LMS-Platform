@@ -1,10 +1,10 @@
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import AdminDashboard from './AdminDashboard.jsx'
 import InstructorDashboard from './InstructorDashboard.jsx'
 import './App.css'
 
-const loginRoles = ['User', 'Instructor', 'Admin']
-const registerRoles = ['User', 'Instructor']
+const loginRoles = ['Student', 'Instructor', 'Admin']
+const registerRoles = ['Student', 'Instructor']
 const expertiseAreas = [
   'Business & Management',
   'Computer Science',
@@ -67,7 +67,9 @@ function getPasswordStrength(password) {
     /[^a-zA-Z0-9]/.test(password),
   ].filter(Boolean).length
 }
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000/api'
+const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000/api').replace(/\/+$/, '')
+const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID
+let googleIdentityServicesPromise
 const DASHBOARD_PATHS = {
   student: '/user/dashboard',
   instructor: '/instructor/dashboard',
@@ -79,6 +81,34 @@ const DASHBOARD_API_ROLES = {
   admin: 'admin',
 }
 
+function loadGoogleIdentityServices() {
+  if (window.google?.accounts?.oauth2) {
+    return Promise.resolve(window.google.accounts.oauth2)
+  }
+  if (!googleIdentityServicesPromise) {
+    googleIdentityServicesPromise = new Promise((resolve, reject) => {
+      const script = document.createElement('script')
+      script.src = 'https://accounts.google.com/gsi/client'
+      script.async = true
+      script.defer = true
+      script.onload = () => {
+        if (window.google?.accounts?.oauth2) {
+          resolve(window.google.accounts.oauth2)
+        } else {
+          googleIdentityServicesPromise = undefined
+          reject(new Error('Google Sign-In could not be loaded. Please try again.'))
+        }
+      }
+      script.onerror = () => {
+        googleIdentityServicesPromise = undefined
+        reject(new Error('Google Sign-In could not be loaded. Check your connection and try again.'))
+      }
+      document.head.appendChild(script)
+    })
+  }
+  return googleIdentityServicesPromise
+}
+
 async function readApiResponse(response) {
   const responseText = await response.text()
   let result
@@ -86,7 +116,15 @@ async function readApiResponse(response) {
   try {
     result = JSON.parse(responseText)
   } catch {
-    throw new Error('The server returned an invalid response. Please try again later.')
+    const isGoogleEndpoint = new URL(response.url).pathname.endsWith('/auth/google')
+    if (isGoogleEndpoint && response.status === 404) {
+      throw new Error(
+        'The backend does not recognize Google sign-in (HTTP 404). Restart the backend from the backend folder and try again.',
+      )
+    }
+    throw new Error(
+      `The server returned a non-JSON response (HTTP ${response.status}). Check the API URL and backend version.`,
+    )
   }
   if (!result || typeof result !== 'object') {
     throw new Error('The server returned an invalid response. Please try again later.')
@@ -103,9 +141,11 @@ async function registerAccount(payload) {
   const result = await readApiResponse(response)
 
   if (!response.ok) {
-    throw new Error(
+    const error = new Error(
       typeof result.message === 'string' ? result.message : 'Registration failed. Please try again.',
     )
+    error.fieldErrors = result.fieldErrors
+    throw error
   }
 
   return result
@@ -187,6 +227,7 @@ function RoleTabs({ roles, selectedRole, onSelect, label }) {
 
 function InstructorRegistrationForm({ onMessage }) {
   const [step, setStep] = useState(1)
+  const [isSubmitting, setIsSubmitting] = useState(false)
   const [values, setValues] = useState({
     fullName: '',
     email: '',
@@ -210,7 +251,7 @@ function InstructorRegistrationForm({ onMessage }) {
   const [photoPreview, setPhotoPreview] = useState('')
   const [expertiseSearch, setExpertiseSearch] = useState('')
   const [selectionErrors, setSelectionErrors] = useState({})
-  const [isSubmitting, setIsSubmitting] = useState(false)
+  const [fieldErrors, setFieldErrors] = useState({})
   const passwordStrength = getPasswordStrength(values.password)
 
   useEffect(() => {
@@ -228,6 +269,7 @@ function InstructorRegistrationForm({ onMessage }) {
     const { name, value, type, checked } = event.currentTarget
     event.currentTarget.setCustomValidity('')
     setValues((current) => ({ ...current, [name]: type === 'checkbox' ? checked : value }))
+    setFieldErrors((current) => ({ ...current, [name]: '' }))
   }
 
   function toggleSelection(name, option) {
@@ -248,6 +290,7 @@ function InstructorRegistrationForm({ onMessage }) {
         }
       })
       setSelectionErrors((current) => ({ ...current, expertise: '', subjects: '' }))
+      setFieldErrors((current) => ({ ...current, expertise: '', subjects: '' }))
       return
     }
 
@@ -261,6 +304,7 @@ function InstructorRegistrationForm({ onMessage }) {
         : {}),
     }))
     setSelectionErrors((current) => ({ ...current, [name]: '' }))
+    setFieldErrors((current) => ({ ...current, [name]: '' }))
   }
 
   function addCustomSubject(event) {
@@ -287,6 +331,7 @@ function InstructorRegistrationForm({ onMessage }) {
       customSubject: '',
     }))
     setSelectionErrors((current) => ({ ...current, subjects: '' }))
+    setFieldErrors((current) => ({ ...current, subjects: '' }))
   }
 
   function removeCustomSubject(subject) {
@@ -365,6 +410,18 @@ function InstructorRegistrationForm({ onMessage }) {
     }
     const phone = form.elements.phone
     const phoneDigits = values.phone.replace(/\D/g, '')
+    const nextFieldErrors = {
+      professionalTitle: values.professionalTitle.trim() ? '' : 'Enter your professional title.',
+      phone:
+        phoneDigits.length >= 7 && phoneDigits.length <= 15 && /^[0-9\s().-]+$/.test(values.phone.trim())
+          ? ''
+          : 'Enter a phone number containing 7–15 digits.',
+      experience: values.experience ? '' : 'Select your teaching experience.',
+      customLanguage:
+        values.languages.includes('Other') && !values.customLanguage.trim()
+          ? 'Enter the other language you teach.'
+          : '',
+    }
     phone.setCustomValidity(
       phoneDigits.length >= 7 && phoneDigits.length <= 15 && /^[0-9\s().-]+$/.test(values.phone.trim())
         ? ''
@@ -380,12 +437,14 @@ function InstructorRegistrationForm({ onMessage }) {
       )
     }
     setSelectionErrors(nextSelectionErrors)
+    setFieldErrors(nextFieldErrors)
 
     if (
       !form.reportValidity() ||
       nextSelectionErrors.expertise ||
       nextSelectionErrors.subjects ||
-      nextSelectionErrors.languages
+      nextSelectionErrors.languages ||
+      Object.values(nextFieldErrors).some(Boolean)
     ) return
 
     setIsSubmitting(true)
@@ -420,9 +479,25 @@ function InstructorRegistrationForm({ onMessage }) {
             : undefined,
         },
       })
-      onMessage(result.message)
+      onMessage(result.message || 'Your instructor application is awaiting admin approval.')
     } catch (error) {
-      onMessage(error instanceof Error ? error.message : 'Unable to submit your application.')
+      if (error?.fieldErrors && typeof error.fieldErrors === 'object' && !Array.isArray(error.fieldErrors)) {
+        setFieldErrors((current) => ({ ...current, ...error.fieldErrors }))
+        setSelectionErrors((current) => ({
+          ...current,
+          expertise: error.fieldErrors.expertise || current.expertise,
+          subjects: error.fieldErrors.subjects || current.subjects,
+          languages: error.fieldErrors.languages || current.languages,
+        }))
+      }
+      onMessage(
+        error instanceof TypeError
+          ? 'Could not connect to the server. Check that the backend is running and try again.'
+          : error instanceof Error
+            ? error.message
+            : 'Instructor registration failed. Please try again.',
+        'error',
+      )
     } finally {
       setIsSubmitting(false)
     }
@@ -444,6 +519,9 @@ function InstructorRegistrationForm({ onMessage }) {
             ? 'Start with your account details. You can add your teaching profile next.'
             : 'Tell us about your experience and how you’ll help learners grow.'}
         </p>
+        {fieldErrors.professionalDetails && (
+          <span className="field-error" role="alert">{fieldErrors.professionalDetails}</span>
+        )}
       </div>
 
       <ol className="registration-progress" aria-label="Registration progress">
@@ -564,6 +642,7 @@ function InstructorRegistrationForm({ onMessage }) {
                   aria-label="Phone country code"
                   value={values.countryCode}
                   onChange={updateValue}
+                  aria-describedby={fieldErrors.countryCode ? 'country-code-error' : undefined}
                 >
                   {countryCodes.map(({ country, code }) => (
                     <option key={`${country}-${code}`} value={code}>{code} — {country}</option>
@@ -580,8 +659,11 @@ function InstructorRegistrationForm({ onMessage }) {
                   value={values.phone}
                   onChange={updateValue}
                   required
+                  aria-describedby={fieldErrors.phone ? 'instructor-phone-error' : undefined}
                 />
               </div>
+              {fieldErrors.countryCode && <span id="country-code-error" className="field-error" role="alert">{fieldErrors.countryCode}</span>}
+              {fieldErrors.phone && <span id="instructor-phone-error" className="field-error" role="alert">{fieldErrors.phone}</span>}
             </div>
             <div className="field">
               <label htmlFor="professional-title">Professional title</label>
@@ -594,7 +676,9 @@ function InstructorRegistrationForm({ onMessage }) {
                 value={values.professionalTitle}
                 onChange={updateValue}
                 required
+                aria-describedby={fieldErrors.professionalTitle ? 'professional-title-error' : undefined}
               />
+              {fieldErrors.professionalTitle && <span id="professional-title-error" className="field-error" role="alert">{fieldErrors.professionalTitle}</span>}
             </div>
             <fieldset className="field selection-field full-span">
               <legend>Area of expertise <span className="required-mark">*</span></legend>
@@ -619,7 +703,7 @@ function InstructorRegistrationForm({ onMessage }) {
                   </label>
                 )) : <span className="field-hint">No matching areas. Try another search.</span>}
               </div>
-              {selectionErrors.expertise && <span className="field-error" role="alert">{selectionErrors.expertise}</span>}
+              {(selectionErrors.expertise || fieldErrors.expertise) && <span className="field-error" role="alert">{selectionErrors.expertise || fieldErrors.expertise}</span>}
             </fieldset>
             <fieldset className="field selection-field full-span">
               <legend>Specific subjects / skills <span className="required-mark">*</span></legend>
@@ -681,7 +765,7 @@ function InstructorRegistrationForm({ onMessage }) {
                   ))}
                 </div>
               )}
-              {selectionErrors.subjects && <span className="field-error" role="alert">{selectionErrors.subjects}</span>}
+              {(selectionErrors.subjects || fieldErrors.subjects) && <span className="field-error" role="alert">{selectionErrors.subjects || fieldErrors.subjects}</span>}
             </fieldset>
             <div className="field">
               <label htmlFor="teaching-experience">Teaching experience</label>
@@ -691,6 +775,7 @@ function InstructorRegistrationForm({ onMessage }) {
                 value={values.experience}
                 onChange={updateValue}
                 required
+                aria-describedby={fieldErrors.experience ? 'teaching-experience-error' : undefined}
               >
                 <option value="">Select experience</option>
                 <option value="fresher">Fresher / No Experience</option>
@@ -700,6 +785,7 @@ function InstructorRegistrationForm({ onMessage }) {
                 <option value="5-10">5–10 years</option>
                 <option value="10+">10+ years</option>
               </select>
+              {fieldErrors.experience && <span id="teaching-experience-error" className="field-error" role="alert">{fieldErrors.experience}</span>}
             </div>
             <fieldset className="field selection-field full-span">
               <legend>Teaching languages <span className="required-mark">*</span></legend>
@@ -727,10 +813,12 @@ function InstructorRegistrationForm({ onMessage }) {
                     value={values.customLanguage}
                     onChange={updateValue}
                     required
+                    aria-describedby={fieldErrors.customLanguage ? 'custom-language-error' : undefined}
                   />
+                  {fieldErrors.customLanguage && <span id="custom-language-error" className="field-error" role="alert">{fieldErrors.customLanguage}</span>}
                 </div>
               )}
-              {selectionErrors.languages && <span className="field-error" role="alert">{selectionErrors.languages}</span>}
+              {(selectionErrors.languages || fieldErrors.languages) && <span className="field-error" role="alert">{selectionErrors.languages || fieldErrors.languages}</span>}
             </fieldset>
             <label className="terms-checkbox full-span">
               <input
@@ -763,8 +851,59 @@ function AuthForm({ mode, role, onMessage }) {
   const [password, setPassword] = useState('')
   const [confirmPassword, setConfirmPassword] = useState('')
   const [isSubmitting, setIsSubmitting] = useState(false)
+  const [isGoogleSubmitting, setIsGoogleSubmitting] = useState(false)
+  const [googleClientLoadError, setGoogleClientLoadError] = useState('')
+  const googleAttempt = useRef(null)
+  const googleCodeHandler = useRef(null)
+  const googleCodeClient = useRef(null)
+  const onMessageRef = useRef(onMessage)
   const isRegistering = mode === 'register'
   const isInstructor = role === 'Instructor'
+
+  onMessageRef.current = onMessage
+
+  useEffect(() => {
+    if (isRegistering || role === 'Admin' || !GOOGLE_CLIENT_ID) return undefined
+
+    let cancelled = false
+    loadGoogleIdentityServices()
+      .then((googleOAuth) => {
+        if (cancelled) return
+        googleCodeClient.current = googleOAuth.initCodeClient({
+          client_id: GOOGLE_CLIENT_ID,
+          scope: 'openid email profile',
+          ux_mode: 'popup',
+          select_account: true,
+          callback: (codeResponse) => googleCodeHandler.current?.(codeResponse),
+          error_callback: (error) => {
+            const attempt = googleAttempt.current
+            if (!attempt?.active) return
+            attempt.active = false
+            window.clearTimeout(attempt.timeoutId)
+            setIsGoogleSubmitting(false)
+            onMessageRef.current(
+              error.type === 'popup_closed'
+                ? 'Google sign-in was cancelled.'
+                : error.type === 'popup_failed_to_open'
+                  ? 'The Google sign-in popup could not be opened. Allow popups and try again.'
+                  : 'Google sign-in could not be started. Please try again.',
+              'error',
+            )
+          },
+        })
+        setGoogleClientLoadError('')
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setGoogleClientLoadError('Google Sign-In could not be loaded. Check your connection and refresh the page.')
+        }
+      })
+
+    return () => {
+      cancelled = true
+      googleCodeClient.current = null
+    }
+  }, [isRegistering, role])
 
   async function handleSubmit(event) {
     event.preventDefault()
@@ -815,7 +954,7 @@ function AuthForm({ mode, role, onMessage }) {
               password,
               confirmPassword,
               professionalDetails: isInstructor ? form.elements.professionalDetails.value : undefined,
-              role: isInstructor ? 'instructor' : 'user',
+              role: role.toLowerCase() === 'student' ? 'user' : role.toLowerCase(),
             }
           : {
               identifier: identifier.value,
@@ -847,7 +986,7 @@ function AuthForm({ mode, role, onMessage }) {
         return
       }
 
-      const expectedRole = role === 'User' ? 'student' : role.toLowerCase()
+      const expectedRole = role.toLowerCase()
       if (
         typeof result.token !== 'string' ||
         typeof result.user?.id !== 'string' ||
@@ -869,6 +1008,120 @@ function AuthForm({ mode, role, onMessage }) {
       )
     } finally {
       setIsSubmitting(false)
+    }
+  }
+
+  useEffect(() => {
+    googleCodeHandler.current = async (codeResponse) => {
+      const attempt = googleAttempt.current
+      if (!attempt?.active) return
+      attempt.codeReceived = true
+      window.clearTimeout(attempt.timeoutId)
+      if (typeof codeResponse?.error === 'string') {
+        attempt.active = false
+        setIsGoogleSubmitting(false)
+        onMessage(
+          codeResponse.error === 'access_denied'
+            ? 'Google sign-in was cancelled.'
+            : 'Google authorization failed. Please try again.',
+          'error',
+        )
+        return
+      }
+      console.info('Google OAuth callback received', {
+        hasAuthorizationCode: typeof codeResponse?.code === 'string' && Boolean(codeResponse.code),
+      })
+      if (typeof codeResponse?.code !== 'string' || !codeResponse.code) {
+        attempt.active = false
+        setIsGoogleSubmitting(false)
+        onMessage('Google did not return an authorization code. Please try again.', 'error')
+        return
+      }
+
+      try {
+        const response = await fetch(`${API_BASE_URL}/auth/google`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Requested-With': 'XmlHttpRequest',
+          },
+          body: JSON.stringify({
+            code: codeResponse.code,
+            role: attempt.role,
+          }),
+        })
+        const result = await readApiResponse(response)
+        if (!response.ok) {
+          if (result.message === 'A valid Google credential is required.') {
+            throw new Error(
+              'The backend is running an outdated Google sign-in route. Stop the LMS backend and restart it from the project backend folder.',
+            )
+          }
+          throw new Error(
+            typeof result.message === 'string'
+              ? result.message
+              : 'Google sign-in failed. Please try again.',
+          )
+        }
+
+        if (
+          typeof result.token !== 'string' ||
+          typeof result.user?.id !== 'string' ||
+          result.user.role !== attempt.role
+        ) {
+          throw new Error('The server returned incomplete or mismatched login details.')
+        }
+
+        attempt.active = false
+        sessionStorage.setItem('lms.auth', JSON.stringify({ token: result.token, user: result.user }))
+        window.location.assign(DASHBOARD_PATHS[result.user.role])
+      } catch (error) {
+        attempt.active = false
+        onMessage(
+          error instanceof TypeError
+            ? 'Could not connect to the server. Check that the backend is running and try again.'
+            : error instanceof Error
+              ? error.message
+              : 'Google sign-in failed. Please try again.',
+          'error',
+        )
+      } finally {
+        setIsGoogleSubmitting(false)
+      }
+    }
+  }, [onMessage])
+
+  function handleGoogleSignIn() {
+    if (!GOOGLE_CLIENT_ID) {
+      onMessage('Google sign-in is not configured for this frontend.', 'error')
+      return
+    }
+    if (!googleCodeClient.current) {
+      onMessage(googleClientLoadError || 'Google Sign-In is still loading. Please try again in a moment.', 'error')
+      return
+    }
+
+    setIsGoogleSubmitting(true)
+    onMessage('')
+    googleAttempt.current = {
+      role: role.toLowerCase(),
+      active: true,
+      codeReceived: false,
+      timeoutId: window.setTimeout(() => {
+        const attempt = googleAttempt.current
+        if (!attempt?.active || attempt.codeReceived) return
+        attempt.active = false
+        setIsGoogleSubmitting(false)
+        onMessage('Google sign-in timed out. Please try again.', 'error')
+      }, 120000),
+    }
+    try {
+      googleCodeClient.current.requestCode()
+    } catch {
+      window.clearTimeout(googleAttempt.current.timeoutId)
+      googleAttempt.current.active = false
+      setIsGoogleSubmitting(false)
+      onMessage('Google sign-in could not be started. Please try again.', 'error')
     }
   }
 
@@ -1002,20 +1255,27 @@ function AuthForm({ mode, role, onMessage }) {
         </div>
       )}
 
-      <button className="primary-button" type="submit" disabled={isSubmitting} aria-busy={isSubmitting}>
+      <button
+        className="primary-button"
+        type="submit"
+        disabled={isSubmitting || isGoogleSubmitting}
+        aria-busy={isSubmitting || isGoogleSubmitting}
+      >
         {isSubmitting
           ? isRegistering ? 'Creating account...' : 'Logging in...'
           : isRegistering ? 'Create account' : `Log in as ${role.toLowerCase()}`}
         {!isSubmitting && <span aria-hidden="true">→</span>}
       </button>
 
-      {!isRegistering && (
+      {!isRegistering && role !== 'Admin' && (
         <>
           <div className="separator"><span>or</span></div>
           <button
             className="google-button"
             type="button"
-            onClick={() => onMessage('Google login is not configured yet.', 'error')}
+            onClick={handleGoogleSignIn}
+            disabled={isSubmitting || isGoogleSubmitting}
+            aria-busy={isGoogleSubmitting}
           >
             <svg viewBox="0 0 20 20" aria-hidden="true">
               <path fill="#4285F4" d="M19.6 10.23c0-.68-.06-1.36-.18-2H10v3.78h5.39a4.62 4.62 0 0 1-2 3.03v2.52h3.23c1.89-1.74 2.98-4.3 2.98-7.33Z" />
@@ -1023,7 +1283,7 @@ function AuthForm({ mode, role, onMessage }) {
               <path fill="#FBBC05" d="M4.38 11.86a6 6 0 0 1 0-3.72v-2.6H1.04a10 10 0 0 0 0 8.92l3.34-2.6Z" />
               <path fill="#EA4335" d="M10 3.96c1.47 0 2.78.5 3.82 1.5l2.86-2.86C14.96.99 12.7 0 10 0a10 10 0 0 0-8.96 5.54l3.34 2.6C5.17 5.72 7.39 3.96 10 3.96Z" />
             </svg>
-            Continue with Google
+            {isGoogleSubmitting ? 'Connecting to Google...' : 'Continue with Google'}
           </button>
         </>
       )}
@@ -1034,7 +1294,7 @@ function AuthForm({ mode, role, onMessage }) {
 function DashboardPage({ role }) {
   const [user, setUser] = useState(null)
   const [error, setError] = useState('')
-  const roleLabels = { student: 'User', instructor: 'Instructor', admin: 'Admin' }
+  const roleLabels = { student: 'Student', instructor: 'Instructor', admin: 'Admin' }
 
   useEffect(() => {
     const controller = new AbortController()
@@ -1130,8 +1390,8 @@ function DashboardPage({ role }) {
 
 function App() {
   const [mode, setMode] = useState('login')
-  const [loginRole, setLoginRole] = useState('User')
-  const [registerRole, setRegisterRole] = useState('User')
+  const [loginRole, setLoginRole] = useState('Student')
+  const [registerRole, setRegisterRole] = useState('Student')
   const [message, setMessage] = useState(null)
   const [isDark, setIsDark] = useState(false)
   const isRegistering = mode === 'register'
@@ -1275,7 +1535,7 @@ function App() {
           {isRegistering && selectedRole === 'Instructor' ? (
             <InstructorRegistrationForm
               key="instructor-registration"
-              onMessage={(text) => setMessage(text ? { text, type: 'success' } : null)}
+              onMessage={(text, type = 'success') => setMessage(text ? { text, type } : null)}
             />
           ) : (
             <AuthForm

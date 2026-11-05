@@ -2,6 +2,7 @@ import { config, requireJwtSecret } from './config/env.js'
 import cors from 'cors'
 import express from 'express'
 import { connectToDatabase } from './config/db.js'
+import { assertLegacyAccountsMigrated } from './config/legacy-migration.js'
 import authRouter from './routes/auth.js'
 
 const app = express()
@@ -25,6 +26,10 @@ app.use('/api', (req, res) => {
   res.status(404).json({ message: 'API route not found.' })
 })
 
+app.use('/api', (req, res) => {
+  res.status(404).json({ message: 'The requested API endpoint was not found.' })
+})
+
 app.use((error, req, res, next) => {
   console.error(`Request failed (${error instanceof Error ? error.name : 'Unknown error'}).`)
   res.status(500).json({ message: 'Something went wrong. Please try again.' })
@@ -34,12 +39,15 @@ async function startServer() {
   try {
     requireJwtSecret()
     await connectToDatabase()
+    await assertLegacyAccountsMigrated()
     app.listen(config.port, () => {
       console.log(`LMS backend listening on port ${config.port}.`)
     })
   } catch (error) {
     if (error instanceof Error && error.message.startsWith('JWT_SECRET is not configured')) {
       console.error('JWT_SECRET is not configured; the backend was not started.')
+    } else if (error?.code === 'LEGACY_MIGRATION_REQUIRED') {
+      console.error(error.message)
     } else {
       const errorName = error instanceof Error ? error.name : 'Unknown error'
       console.error(

@@ -22,25 +22,11 @@ const userSchema = new mongoose.Schema(
     approvalStatus: { type: String, lowercase: true },
     isActive: { type: Boolean, default: true },
     permissions: { type: [String], default: [] },
-    instructorDetails: {
-      countryCode: { type: String, trim: true },
-      phone: { type: String, trim: true },
-      professionalTitle: { type: String, trim: true, maxlength: 100 },
-      expertise: [{ type: String, trim: true }],
-      subjects: [{ type: String, trim: true }],
-      customSubjects: [{ type: String, trim: true }],
-      experience: { type: String, trim: true },
-      languages: [{ type: String, trim: true }],
-      customLanguage: { type: String, trim: true, maxlength: 60 },
-      profilePicture: {
-        data: Buffer,
-        contentType: { type: String, trim: true },
-      },
-    },
   },
   { timestamps: true },
 )
 
-const User = mongoose.models.User || mongoose.model('User', userSchema)
+const LegacyUser =
+  mongoose.models.LegacyUser || mongoose.model('LegacyUser', userSchema, 'users')
 
-export default User
+export default LegacyUser

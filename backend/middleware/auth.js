@@ -1,8 +1,8 @@
 import jwt from 'jsonwebtoken'
 import { config } from '../config/env.js'
-import User from '../models/User.js'
+import { accountModelsByRole } from '../models/account-models.js'
 
-const allowedRoles = new Set(['student', 'instructor', 'admin'])
+const allowedRoles = new Set(Object.keys(accountModelsByRole))
 
 export async function authenticate(req, res, next) {
   const authorization = req.get('authorization')
@@ -25,7 +25,8 @@ export async function authenticate(req, res, next) {
       return res.status(401).json({ message: 'The access token is invalid.' })
     }
 
-    const user = await User.findById(payload.sub)
+    const AccountModel = accountModelsByRole[payload.role]
+    const user = await AccountModel.findById(payload.sub)
     if (!user || user.role !== payload.role) {
       return res.status(401).json({ message: 'The access token is invalid.' })
     }

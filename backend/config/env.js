@@ -12,6 +12,8 @@ export const config = Object.freeze({
   envFilePath,
   mongoUri: process.env.MONGO_URI,
   jwtSecret: process.env.JWT_SECRET,
+  googleClientId: process.env.GOOGLE_CLIENT_ID,
+  googleClientSecret: process.env.GOOGLE_CLIENT_SECRET,
   adminEmail: process.env.ADMIN_EMAIL,
   adminPassword: process.env.ADMIN_PASSWORD,
   clientOrigin: process.env.CLIENT_ORIGIN,

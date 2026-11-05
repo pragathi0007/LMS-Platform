@@ -1118,6 +1118,11 @@
   box-shadow: 0 3px 10px rgba(44, 58, 47, 0.06);
 }
 
+.google-button:disabled {
+  cursor: wait;
+  opacity: 0.72;
+}
+
 .google-button svg {
   width: 16px;
   height: 16px;
