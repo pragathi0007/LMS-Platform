@@ -426,6 +426,230 @@
   margin-right: 8px;
 }
 
+.student-categories {
+  margin: 22px 0 5px;
+}
+
+.student-categories h2 {
+  margin: 0 0 13px;
+  color: #292f2c;
+  font-size: 19px;
+  font-weight: 650;
+  letter-spacing: -0.025em;
+}
+
+.student-categories__list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 9px;
+}
+
+.student-category {
+  display: inline-flex;
+  min-height: 42px;
+  align-items: center;
+  gap: 9px;
+  padding: 0 15px;
+  border: 1px solid #e1e7e5;
+  border-radius: 24px;
+  background: #edf3f1;
+  color: #343c39;
+  font-size: 12px;
+  font-weight: 560;
+  white-space: nowrap;
+}
+
+.student-category-link {
+  color: #343c39;
+  text-decoration: none;
+  transition: border-color 150ms ease, background 150ms ease, transform 150ms ease;
+}
+
+.student-category-link:hover {
+  transform: translateY(-1px);
+  border-color: #c9d8d1;
+  background: #e5eeea;
+}
+
+.student-category-link:focus-visible {
+  outline: 3px solid rgba(52, 121, 110, 0.35);
+  outline-offset: 3px;
+}
+
+.student-category svg {
+  flex: 0 0 auto;
+  color: #3e6e62;
+}
+
+.student-category-intro {
+  margin: 0 0 17px;
+  color: var(--student-muted);
+  font-size: 13px;
+  line-height: 1.65;
+}
+
+.student-recommendations {
+  margin: 24px 0 21px;
+}
+
+.student-recommendations > .student-section-heading {
+  margin: 0 1px 13px;
+}
+
+.student-recommendations .student-section-heading h2 {
+  margin-top: 6px;
+  color: #292f2c;
+  font-size: 19px;
+  font-weight: 650;
+  letter-spacing: -0.035em;
+}
+
+.student-recommendations__note {
+  color: #626960;
+  font-size: 9px;
+  text-align: right;
+}
+
+.student-recommendations__grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 13px;
+}
+
+.student-recommendation-card {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid #dedace;
+  border-radius: 12px;
+  background: var(--student-paper);
+  box-shadow: 0 5px 17px rgba(53, 65, 53, 0.035);
+}
+
+.student-recommendation-card__thumbnail {
+  position: relative;
+  display: grid;
+  aspect-ratio: 16 / 9;
+  overflow: hidden;
+  place-items: center;
+  color: #34423a;
+}
+
+.student-recommendation-card__thumbnail.is-gold {
+  background: linear-gradient(135deg, #f8edcc, #edcf79);
+}
+
+.student-recommendation-card__thumbnail.is-teal {
+  background: linear-gradient(135deg, #dcece7, #a9d2c4);
+}
+
+.student-recommendation-card__thumbnail.is-mint {
+  background: linear-gradient(135deg, #e8f0df, #b8d8c0);
+}
+
+.student-recommendation-card__thumbnail.is-cyan {
+  background: linear-gradient(135deg, #e3f0ef, #afd9d7);
+}
+
+.student-recommendation-card__thumbnail.is-peach {
+  background: linear-gradient(135deg, #f8e9dc, #eac4a9);
+}
+
+.student-recommendation-card__thumbnail.is-lavender {
+  background: linear-gradient(135deg, #eeebdf, #d2d7c1);
+}
+
+.student-recommendation-card__thumbnail-orbit {
+  position: absolute;
+  width: 118px;
+  height: 118px;
+  border: 1px solid rgba(255, 253, 247, 0.62);
+  border-radius: 50%;
+  box-shadow: 0 0 0 16px rgba(255, 253, 247, 0.16), 0 0 0 32px rgba(255, 253, 247, 0.1);
+}
+
+.student-recommendation-card__thumbnail-icon {
+  position: relative;
+  display: grid;
+  width: 65px;
+  height: 65px;
+  place-items: center;
+  border: 1px solid rgba(255, 253, 247, 0.8);
+  border-radius: 20px;
+  background: rgba(255, 253, 247, 0.62);
+  color: #3e6e62;
+}
+
+.student-recommendation-card__placeholder {
+  position: absolute;
+  right: 9px;
+  bottom: 8px;
+  padding: 4px 7px;
+  border: 1px solid rgba(255, 255, 255, 0.66);
+  border-radius: 10px;
+  background: rgba(255, 253, 247, 0.78);
+  color: #586159;
+  font-size: 8px;
+  font-weight: 650;
+  letter-spacing: 0.03em;
+}
+
+.student-recommendation-card__body {
+  display: flex;
+  min-height: 175px;
+  flex: 1;
+  flex-direction: column;
+  align-items: flex-start;
+  padding: 13px 14px 14px;
+}
+
+.student-recommendation-card__meta {
+  display: flex;
+  width: 100%;
+  justify-content: space-between;
+  gap: 8px;
+  color: #5d675e;
+  font-size: 8px;
+}
+
+.student-recommendation-card__meta span:last-child {
+  color: #866c30;
+  white-space: nowrap;
+}
+
+.student-recommendation-card h3 {
+  margin: 9px 0 5px;
+  color: #292f2c;
+  font-size: 13px;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+}
+
+.student-recommendation-card p {
+  margin: 0;
+  color: #5d645b;
+  font-size: 9px;
+  line-height: 1.55;
+}
+
+.student-recommendation-card__button {
+  display: inline-flex;
+  min-height: 31px;
+  align-items: center;
+  gap: 7px;
+  margin-top: auto;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #34796e;
+  font: inherit;
+  font-size: 9px;
+  font-weight: 650;
+  opacity: 0.72;
+  cursor: not-allowed;
+}
+
 .student-stats {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -511,6 +735,43 @@
   min-width: 0;
   padding: 19px 20px;
   scroll-margin-top: 90px;
+}
+
+.student-route-page {
+  min-height: 300px;
+}
+
+.student-route-page > .student-empty {
+  min-height: 205px;
+}
+
+.student-profile-details {
+  display: grid;
+  max-width: 640px;
+  gap: 0;
+  margin: 20px 0 0;
+}
+
+.student-profile-details > div {
+  display: grid;
+  grid-template-columns: minmax(110px, 0.35fr) minmax(0, 1fr);
+  gap: 16px;
+  padding: 13px 0;
+  border-bottom: 1px solid #e8e5db;
+}
+
+.student-profile-details dt {
+  color: #626960;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.student-profile-details dd {
+  min-width: 0;
+  margin: 0;
+  color: #303832;
+  font-size: 11px;
+  overflow-wrap: anywhere;
 }
 
 .student-section-heading {
@@ -1036,6 +1297,29 @@
     margin-right: -6px;
   }
 
+  .student-category {
+    min-height: 39px;
+    padding: 0 12px;
+    font-size: 11px;
+  }
+
+  .student-resources__grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .student-recommendations__grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .student-learning-filters {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .student-learning-difficulty {
+    justify-content: space-between;
+  }
+
   .student-two-column {
     grid-template-columns: 1fr;
   }
@@ -1108,6 +1392,131 @@
     width: 118px;
     height: 108px;
     opacity: 0.75;
+  }
+
+  .student-categories {
+    margin: 17px 0 4px;
+  }
+
+  .student-categories h2 {
+    margin-bottom: 10px;
+    font-size: 16px;
+  }
+
+  .student-categories__list {
+    gap: 7px;
+  }
+
+  .student-category {
+    min-height: 36px;
+    gap: 7px;
+    padding: 0 10px;
+    font-size: 10px;
+  }
+
+  .student-category svg {
+    width: 16px;
+    height: 16px;
+  }
+
+  .student-resources {
+    margin: 20px 0 16px;
+  }
+
+  .student-recommendations {
+    margin: 20px 0 16px;
+  }
+
+  .student-recommendations > .student-section-heading {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 6px;
+  }
+
+  .student-recommendations .student-section-heading h2 {
+    font-size: 16px;
+  }
+
+  .student-recommendations__note {
+    text-align: left;
+  }
+
+  .student-recommendations__grid {
+    grid-template-columns: 1fr;
+    gap: 10px;
+  }
+
+  .student-recommendation-card {
+    display: grid;
+    grid-template-columns: minmax(105px, 36%) minmax(0, 1fr);
+  }
+
+  .student-recommendation-card__body {
+    min-height: 0;
+    padding: 10px 11px;
+  }
+
+  .student-resources .student-section-heading {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 6px;
+  }
+
+  .student-resources .student-section-heading h2 {
+    font-size: 16px;
+  }
+
+  .student-resource-notice {
+    text-align: left;
+  }
+
+  .student-learning-filters {
+    gap: 8px;
+  }
+
+  .student-learning-search,
+  .student-learning-difficulty {
+    min-height: 39px;
+  }
+
+  .student-resources__grid {
+    grid-template-columns: 1fr;
+    gap: 10px;
+  }
+
+  .student-resource-card {
+    display: grid;
+    grid-template-columns: minmax(105px, 36%) minmax(0, 1fr);
+  }
+
+  .student-resource-card__body {
+    min-height: 0;
+    padding: 10px 11px;
+  }
+
+  .student-resource-card__thumbnail-icon {
+    width: 42px;
+    height: 42px;
+    border-radius: 13px;
+  }
+
+  .student-resource-card__thumbnail-icon svg {
+    width: 27px;
+    height: 27px;
+  }
+
+  .student-resource-card h3 {
+    margin-top: 7px;
+    font-size: 11px;
+  }
+
+  .student-resource-card p {
+    font-size: 8px;
+  }
+
+  .student-resource-card__button {
+    min-height: 25px;
+    font-size: 8px;
   }
 
   .student-stats {

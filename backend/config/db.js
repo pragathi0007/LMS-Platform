@@ -1,17 +1,17 @@
 import mongoose from 'mongoose'
 import { config } from './env.js'
-import { Admin, Instructor, Student } from '../models/account-models.js'
+import { Admin, Student } from '../models/account-models.js'
 import AccountIdentity from '../models/AccountIdentity.js'
 import Course from '../models/Course.js'
 
-const requiredModels = [Student, Instructor, Admin, AccountIdentity, Course]
+const requiredModels = [Student, Admin, AccountIdentity, Course]
 
 export async function connectToDatabase() {
   if (!config.mongoUri) {
     throw new Error('MONGO_URI is not set.')
   }
 
-  await mongoose.connect(config.mongoUri, { dbName: 'lms' })
+  await mongoose.connect(config.mongoUri, { dbName: 'LMS' })
   const database = mongoose.connection.db
   for (const model of requiredModels) {
     const collectionExists = await database.listCollections({ name: model.collection.name }).hasNext()

@@ -54,9 +54,9 @@ const studentFields = {
   },
 }
 
-export const Student = createAccountModel('Student', 'students', 'student', studentFields)
+export const Student = createAccountModel('Student', 'users', 'student', studentFields)
 export const Instructor = createAccountModel('Instructor', 'instructors', 'instructor', instructorFields)
-export const Admin = createAccountModel('Admin', 'admins', 'admin')
+export const Admin = createAccountModel('Admin', 'admin', 'admin')
 
 export const accountModelsByRole = Object.freeze({
   student: Student,

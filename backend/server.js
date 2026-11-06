@@ -2,7 +2,6 @@ import { config, requireJwtSecret } from './config/env.js'
 import cors from 'cors'
 import express from 'express'
 import { connectToDatabase } from './config/db.js'
-import { assertLegacyAccountsMigrated } from './config/legacy-migration.js'
 import authRouter from './routes/auth.js'
 
 const app = express()
@@ -31,7 +30,25 @@ app.use('/api', (req, res) => {
 })
 
 app.use((error, req, res, next) => {
-  console.error(`Request failed (${error instanceof Error ? error.name : 'Unknown error'}).`)
+  const diagnostic = {
+    event: 'http.request.failed',
+    method: req.method,
+    path: req.path,
+    errorName: error instanceof Error ? error.name : 'UnknownError',
+  }
+  if (typeof error?.code === 'string' || typeof error?.code === 'number') {
+    diagnostic.errorCode = error.code
+  }
+  if (typeof error?.codeName === 'string') {
+    diagnostic.errorCodeName = error.codeName
+  }
+  if (error?.keyPattern && typeof error.keyPattern === 'object') {
+    diagnostic.mongoKeyFields = Object.keys(error.keyPattern)
+  }
+  console.error(JSON.stringify(diagnostic))
+  if (error?.code === 11000) {
+    return res.status(409).json({ message: 'An account with these details already exists.' })
+  }
   res.status(500).json({ message: 'Something went wrong. Please try again.' })
 })
 
@@ -39,7 +56,6 @@ async function startServer() {
   try {
     requireJwtSecret()
     await connectToDatabase()
-    await assertLegacyAccountsMigrated()
     app.listen(config.port, () => {
       console.log(`LMS backend listening on port ${config.port}.`)
     })

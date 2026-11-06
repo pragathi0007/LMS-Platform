@@ -57,7 +57,7 @@ async function findConflictingTargetAccount(database, account, expectedCollectio
 
 async function migrateUsers() {
   if (!config.mongoUri) throw new Error('MONGO_URI is not configured.')
-  await mongoose.connect(config.mongoUri, { dbName: 'lms' })
+  await mongoose.connect(config.mongoUri, { dbName: 'LMS' })
   const database = mongoose.connection.db
   const hasUsers = await database.listCollections({ name: 'users' }).hasNext()
   if (!hasUsers) {

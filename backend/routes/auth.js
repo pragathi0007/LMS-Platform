@@ -13,6 +13,9 @@ const registrationRoles = new Set(['student'])
 const usernamePattern = /^[a-zA-Z0-9._-]{3,30}$/
 const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 const instructorExperiences = new Set(['fresher', 'less-than-1', '1-3', '3-5', '5-10', '10+'])
+const usernameCheckRateLimits = new Map()
+const usernameCheckWindowMs = 60 * 1000
+const usernameCheckMaxRequests = 30
 
 function isStringArray(value, { minLength = 1, maxItems = 30 } = {}) {
   return (
@@ -132,6 +135,68 @@ function getDuplicateField(error) {
   return null
 }
 
+function escapeRegex(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+function limitUsernameChecks(req, res, next) {
+  const now = Date.now()
+  for (const [ip, limit] of usernameCheckRateLimits) {
+    if (limit.resetAt <= now) usernameCheckRateLimits.delete(ip)
+  }
+
+  const key = req.ip || req.socket.remoteAddress || 'unknown'
+  let limit = usernameCheckRateLimits.get(key)
+  if (!limit || limit.resetAt <= now) {
+    limit = { count: 0, resetAt: now + usernameCheckWindowMs }
+    usernameCheckRateLimits.set(key, limit)
+  }
+  if (limit.count >= usernameCheckMaxRequests) {
+    res.set('Retry-After', String(Math.ceil((limit.resetAt - now) / 1000)))
+    return res.status(429).json({ message: 'Too many username checks. Please wait a moment and try again.' })
+  }
+
+  limit.count += 1
+  return next()
+}
+
+function createUsernameSuggestions(username) {
+  const stem = username.replace(/[._-]/g, '') || 'learner'
+  const suffixes = ['07', '_25', '.ds', '_26', '2026']
+  return [...new Set(suffixes.map((suffix) => {
+    const availableStemLength = 30 - suffix.length
+    return `${stem.slice(0, availableStemLength)}${suffix}`
+  }))]
+    .filter((suggestion) => usernamePattern.test(suggestion))
+}
+
+async function findTakenUsernames(usernames) {
+  const candidates = [...new Set(usernames.map((username) => username.trim().toLowerCase()))]
+  if (!candidates.length) return new Set()
+
+  const patterns = candidates.map((username) => new RegExp(`^${escapeRegex(username)}$`, 'i'))
+  const query = { username: { $in: patterns } }
+  const collectionNames = new Set([
+    ...Object.values(accountModelsByRole).map((AccountModel) => AccountModel.collection.name),
+    'students',
+    'admins',
+  ])
+  const database = mongoose.connection.db
+  const resultSets = await Promise.all([
+    AccountIdentity.find(query).select('username').lean(),
+    ...[...collectionNames].map((collectionName) =>
+      database.collection(collectionName).find(query, { projection: { username: 1, _id: 0 } }).toArray(),
+    ),
+  ])
+
+  return new Set(
+    resultSets
+      .flat()
+      .map((account) => typeof account.username === 'string' ? account.username.trim().toLowerCase() : '')
+      .filter(Boolean),
+  )
+}
+
 export function normalizeProfessionalDetails(details) {
   if (!details || typeof details !== 'object' || Array.isArray(details)) {
     return {
@@ -235,6 +300,36 @@ export function normalizeProfessionalDetails(details) {
   }
 }
 
+router.get('/check-username', limitUsernameChecks, async (req, res, next) => {
+  try {
+    const { username } = req.query
+    if (typeof username !== 'string') {
+      return res.status(400).json({ message: 'Enter a username to check.' })
+    }
+    if (username.length > 256) {
+      return res.status(400).json({ message: 'Usernames must be 30 characters or fewer.' })
+    }
+
+    const normalizedUsername = username.trim().toLowerCase()
+    if (!usernamePattern.test(normalizedUsername)) {
+      return res.status(400).json({
+        message: 'Use a username with 3–30 letters, numbers, dots, underscores, or hyphens.',
+      })
+    }
+
+    const suggestions = createUsernameSuggestions(normalizedUsername)
+    const takenUsernames = await findTakenUsernames([normalizedUsername, ...suggestions])
+    const available = !takenUsernames.has(normalizedUsername)
+    const availableSuggestions = available
+      ? []
+      : suggestions.filter((suggestion) => !takenUsernames.has(suggestion)).slice(0, 5)
+
+    return res.json({ available, suggestions: availableSuggestions })
+  } catch (error) {
+    return next(error)
+  }
+})
+
 router.post('/register', async (req, res, next) => {
   try {
     const {
@@ -295,6 +390,18 @@ router.post('/register', async (req, res, next) => {
     const normalizedName = fullName.trim()
     const normalizedEmail = email.trim().toLowerCase()
     const normalizedUsername = username.trim().toLowerCase()
+    const AccountModel = accountModelsByRole[normalizedRole]
+    const [existingAccount, takenUsernames] = await Promise.all([
+      AccountModel.findOne({ email: normalizedEmail }).select('_id').lean(),
+      findTakenUsernames([normalizedUsername]),
+    ])
+    if (existingAccount) {
+      return res.status(409).json({ message: 'An account with this email already exists.' })
+    }
+    if (takenUsernames.has(normalizedUsername)) {
+      return res.status(409).json({ message: 'This username is already taken.' })
+    }
+
     let normalizedProfessionalDetails
     if (normalizedRole === 'instructor') {
       if (termsAccepted !== true) {
@@ -309,9 +416,7 @@ router.post('/register', async (req, res, next) => {
         })
       }
     }
-
     const passwordHash = await bcrypt.hash(password, 12)
-    const AccountModel = accountModelsByRole[normalizedRole]
     const accountId = new mongoose.Types.ObjectId()
     const session = await mongoose.startSession()
     let account
@@ -378,6 +483,7 @@ router.post('/register', async (req, res, next) => {
       if (duplicateField === 'username') {
         return res.status(409).json({ message: 'This username is already taken.' })
       }
+      return res.status(409).json({ message: 'An account with these details already exists.' })
     }
     if (error?.statusCode === 409) {
       return res.status(409).json({ message: error.message })

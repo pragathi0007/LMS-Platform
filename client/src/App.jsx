@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react'
 import AdminDashboard from './AdminDashboard.jsx'
 import InstructorDashboard from './InstructorDashboard.jsx'
 import StudentDashboard from './StudentDashboard.jsx'
+import { useLocation } from 'react-router-dom'
 import './App.css'
 
 const expertiseAreas = [
@@ -145,6 +146,25 @@ async function registerAccount(payload) {
     )
     error.fieldErrors = result.fieldErrors
     throw error
+  }
+
+  return result
+}
+
+async function checkUsernameAvailability(username, signal) {
+  const query = new URLSearchParams({ username })
+  const response = await fetch(`${API_BASE_URL}/auth/check-username?${query}`, { signal })
+  const result = await readApiResponse(response)
+
+  if (!response.ok) {
+    throw new Error(
+      typeof result.message === 'string'
+        ? result.message
+        : 'Username availability could not be checked. Please try again.',
+    )
+  }
+  if (typeof result.available !== 'boolean' || !Array.isArray(result.suggestions)) {
+    throw new Error('The server returned an invalid username availability response.')
   }
 
   return result
@@ -849,6 +869,9 @@ function InstructorRegistrationForm({ onMessage }) {
 function AuthForm({ mode, role, onMessage, onRegistrationSuccess }) {
   const [password, setPassword] = useState('')
   const [confirmPassword, setConfirmPassword] = useState('')
+  const [username, setUsername] = useState('')
+  const [usernameStatus, setUsernameStatus] = useState('idle')
+  const [usernameSuggestions, setUsernameSuggestions] = useState([])
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [isGoogleSubmitting, setIsGoogleSubmitting] = useState(false)
   const [googleClientLoadError, setGoogleClientLoadError] = useState('')
@@ -860,6 +883,47 @@ function AuthForm({ mode, role, onMessage, onRegistrationSuccess }) {
   const isInstructor = role === 'Instructor'
 
   onMessageRef.current = onMessage
+
+  useEffect(() => {
+    if (!isRegistering) {
+      setUsernameStatus('idle')
+      setUsernameSuggestions([])
+      return undefined
+    }
+
+    const normalizedUsername = username.trim().toLowerCase()
+    if (!normalizedUsername) {
+      setUsernameStatus('idle')
+      setUsernameSuggestions([])
+      return undefined
+    }
+    if (!/^[a-zA-Z0-9._-]{3,30}$/.test(normalizedUsername)) {
+      setUsernameStatus('invalid')
+      setUsernameSuggestions([])
+      return undefined
+    }
+
+    const controller = new AbortController()
+    const timeoutId = window.setTimeout(async () => {
+      setUsernameStatus('checking')
+      try {
+        const result = await checkUsernameAvailability(normalizedUsername, controller.signal)
+        if (controller.signal.aborted) return
+        setUsernameStatus(result.available ? 'available' : 'taken')
+        setUsernameSuggestions(result.available ? [] : result.suggestions)
+      } catch {
+        if (!controller.signal.aborted) {
+          setUsernameStatus('error')
+          setUsernameSuggestions([])
+        }
+      }
+    }, 450)
+
+    return () => {
+      window.clearTimeout(timeoutId)
+      controller.abort()
+    }
+  }, [isRegistering, username])
 
   useEffect(() => {
     if (isRegistering || role === 'Admin' || !GOOGLE_CLIENT_ID) return undefined
@@ -924,11 +988,16 @@ function AuthForm({ mode, role, onMessage, onRegistrationSuccess }) {
     }
 
     if (isRegistering) {
-      const username = form.elements.username
-      username.setCustomValidity(
-        /^[a-zA-Z0-9._-]{3,30}$/.test(username.value)
-          ? ''
-          : 'Use 3–30 letters, numbers, dots, underscores, or hyphens.',
+      const usernameInput = form.elements.username
+      const normalizedUsername = usernameInput.value.trim().toLowerCase()
+      const usernameIsValid = /^[a-zA-Z0-9._-]{3,30}$/.test(normalizedUsername)
+      usernameInput.setCustomValidity(
+        !usernameIsValid
+          ? 'Use 3–30 letters, numbers, dots, underscores, or hyphens.'
+          : usernameStatus !== 'available' ||
+              normalizedUsername !== username.trim().toLowerCase()
+            ? 'Wait until this username is confirmed as available.'
+            : '',
       )
     }
 
@@ -1185,11 +1254,56 @@ function AuthForm({ mode, role, onMessage, onRegistrationSuccess }) {
               minLength={3}
               maxLength={30}
               title="Use 3–30 letters, numbers, dots, underscores, or hyphens."
+              value={username}
+              aria-describedby="username-availability"
               required
               onChange={(event) => {
                 event.currentTarget.setCustomValidity('')
+                setUsername(event.currentTarget.value)
+                setUsernameSuggestions([])
+                setUsernameStatus(
+                  /^[a-zA-Z0-9._-]{3,30}$/.test(event.currentTarget.value.trim())
+                    ? 'checking'
+                    : event.currentTarget.value.trim()
+                      ? 'invalid'
+                      : 'idle',
+                )
               }}
             />
+            <div
+              id="username-availability"
+              className={`username-availability is-${usernameStatus}`}
+              role="status"
+              aria-live="polite"
+            >
+              {usernameStatus === 'checking' && (
+                <><span className="username-availability__spinner" aria-hidden="true" />Checking username...</>
+              )}
+              {usernameStatus === 'available' && 'Username available'}
+              {usernameStatus === 'taken' && 'Username already taken'}
+              {usernameStatus === 'invalid' && 'Use 3–30 letters, numbers, dots, underscores, or hyphens.'}
+              {usernameStatus === 'error' && 'Could not check availability. Please try again.'}
+            </div>
+            {usernameStatus === 'taken' && usernameSuggestions.length > 0 && (
+              <div className="username-suggestions" aria-label="Available username suggestions">
+                <span>Try one of these:</span>
+                <div>
+                  {usernameSuggestions.map((suggestion) => (
+                    <button
+                      key={suggestion}
+                      type="button"
+                      onClick={() => {
+                        setUsername(suggestion)
+                        setUsernameStatus('checking')
+                        setUsernameSuggestions([])
+                      }}
+                    >
+                      {suggestion}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         )}
 
@@ -1252,7 +1366,11 @@ function AuthForm({ mode, role, onMessage, onRegistrationSuccess }) {
       <button
         className="primary-button"
         type="submit"
-        disabled={isSubmitting || isGoogleSubmitting}
+        disabled={
+          isSubmitting ||
+          isGoogleSubmitting ||
+          (isRegistering && usernameStatus !== 'available')
+        }
         aria-busy={isSubmitting || isGoogleSubmitting}
       >
         {isSubmitting
@@ -1395,13 +1513,16 @@ function DashboardPage({ role }) {
 }
 
 function App() {
+  const location = useLocation()
   const [mode, setMode] = useState('login')
   const [message, setMessage] = useState(null)
   const [isDark, setIsDark] = useState(false)
   const isRegistering = mode === 'register'
   const selectedRole = 'Student'
-  const dashboardRole = Object.entries(DASHBOARD_PATHS)
-    .find(([, path]) => path === window.location.pathname)?.[0]
+  const dashboardRole = location.pathname.startsWith('/user/')
+    ? 'student'
+    : Object.entries(DASHBOARD_PATHS)
+      .find(([, path]) => path === location.pathname)?.[0]
 
   function switchMode(nextMode) {
     setMode(nextMode)

@@ -2,7 +2,6 @@ import bcrypt from 'bcryptjs'
 import mongoose from 'mongoose'
 import { config } from '../config/env.js'
 import { connectToDatabase } from '../config/db.js'
-import { assertLegacyAccountsMigrated } from '../config/legacy-migration.js'
 import AccountIdentity from '../models/AccountIdentity.js'
 import { Admin } from '../models/account-models.js'
 
@@ -18,9 +17,7 @@ async function seedAdmin() {
   if (password.length < 12) {
     throw new Error('ADMIN_PASSWORD must be at least 12 characters.')
   }
-
   await connectToDatabase()
-  await assertLegacyAccountsMigrated()
 
   const existingAdmin = await Admin.findOne({ username: 'admin' })
   if (existingAdmin) {

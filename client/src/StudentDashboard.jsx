@@ -1,16 +1,17 @@
 import React, { useEffect, useState } from 'react'
+import { Link, Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
 import './StudentDashboard.css'
 
 const navigation = [
-  { label: 'Dashboard', icon: 'grid', target: 'student-overview' },
-  { label: 'My Courses', icon: 'book', target: 'student-courses' },
-  { label: 'Assignments', icon: 'check', target: 'student-assignments' },
-  { label: 'Grades & Results', icon: 'chart', target: 'student-grades' },
-  { label: 'Learning Resources', icon: 'folder', target: 'student-resources' },
-  { label: 'Messages', icon: 'message', target: 'student-messages' },
-  { label: 'Certificates', icon: 'award', target: 'student-certificates' },
-  { label: 'My Profile', icon: 'user', target: 'student-profile' },
-  { label: 'Settings', icon: 'settings', target: 'student-settings' },
+  { label: 'Dashboard', icon: 'grid', path: '/user/dashboard' },
+  { label: 'My Courses', icon: 'book', path: '/user/courses' },
+  { label: 'Assignments', icon: 'check', path: '/user/assignments' },
+  { label: 'Grades & Results', icon: 'chart', path: '/user/results' },
+  { label: 'Learning Resources', icon: 'folder', path: '/user/resources' },
+  { label: 'Messages', icon: 'message', path: '/user/messages' },
+  { label: 'Certificates', icon: 'award', path: '/user/certificates' },
+  { label: 'My Profile', icon: 'user', path: '/user/profile' },
+  { label: 'Settings', icon: 'settings', path: '/user/settings' },
 ]
 
 const stats = [
@@ -18,6 +19,72 @@ const stats = [
   { label: 'Pending assignments', icon: 'check', tone: 'peach' },
   { label: 'Completed courses', icon: 'award', tone: 'mint' },
   { label: 'Learning streak', icon: 'spark', tone: 'blue' },
+]
+
+const categories = [
+  { label: 'Business', icon: 'briefcase' },
+  { label: 'Artificial Intelligence', icon: 'spark' },
+  { label: 'Data Science', icon: 'chart' },
+  { label: 'Computer Science', icon: 'code' },
+  { label: 'Information Technology', icon: 'laptop' },
+  { label: 'Personal Development', icon: 'rocket' },
+  { label: 'Healthcare', icon: 'health' },
+  { label: 'Language Learning', icon: 'globe' },
+  { label: 'Social Sciences', icon: 'users' },
+  { label: 'Arts and Humanities', icon: 'pen' },
+  { label: 'Physical Science and Engineering', icon: 'flask' },
+  { label: 'Math and Logic', icon: 'calculator' },
+]
+
+const recommendedResources = [
+  {
+    title: 'Python Fundamentals',
+    description: 'Get comfortable with core Python concepts, syntax, and simple programs.',
+    category: 'Computer Science',
+    difficulty: 'Beginner',
+    icon: 'code',
+    tone: 'gold',
+  },
+  {
+    title: 'Web Development Basics',
+    description: 'Explore how HTML, CSS, and JavaScript work together to build websites.',
+    category: 'Information Technology',
+    difficulty: 'Beginner',
+    icon: 'laptop',
+    tone: 'teal',
+  },
+  {
+    title: 'Introduction to Data Science',
+    description: 'See how data is collected, explored, and used to answer real questions.',
+    category: 'Data Science',
+    difficulty: 'Beginner',
+    icon: 'chart',
+    tone: 'mint',
+  },
+  {
+    title: 'SQL for Beginners',
+    description: 'Learn the basics of querying tables and working with structured data.',
+    category: 'Information Technology',
+    difficulty: 'Beginner',
+    icon: 'database',
+    tone: 'cyan',
+  },
+  {
+    title: 'JavaScript Essentials',
+    description: 'Start writing interactive code with variables, functions, and events.',
+    category: 'Computer Science',
+    difficulty: 'Beginner',
+    icon: 'code',
+    tone: 'peach',
+  },
+  {
+    title: 'Database Management',
+    description: 'Understand how databases organize, store, and retrieve information.',
+    category: 'Information Technology',
+    difficulty: 'Intermediate',
+    icon: 'database',
+    tone: 'lavender',
+  },
 ]
 
 const tools = [
@@ -49,6 +116,17 @@ function Icon({ name, size = 19 }) {
     arrow: <><path d="M5 12h14m-6-6 6 6-6 6" /></>,
     clock: <><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" /></>,
     lock: <><rect x="4" y="10" width="16" height="11" rx="2" /><path d="M8 10V7a4 4 0 0 1 8 0v3" /></>,
+    briefcase: <><rect x="3" y="7" width="18" height="14" rx="2" /><path d="M8 7V4h8v3m-13 5h18m-11 0v2h4v-2" /></>,
+    code: <><path d="m8 7-5 5 5 5m8-10 5 5-5 5m-3-12-2 14" /></>,
+    laptop: <><rect x="4" y="4" width="16" height="12" rx="1.5" /><path d="M2 20h20l-2-4H4z" /></>,
+    rocket: <><path d="M12 15 9 12c.5-4 3.5-7 10-9-.5 6.5-3.5 9.5-7 10Z" /><path d="m9 12-4 1-2 4 5-1m4-1 1 4 4 2-1-5" /><circle cx="15" cy="8" r="1" /></>,
+    health: <><path d="M12 22s8-4 8-11V5l-8-3-8 3v6c0 7 8 11 8 11Z" /><path d="M12 8v7m-3.5-3.5h7" /></>,
+    globe: <><circle cx="12" cy="12" r="9" /><path d="M3 12h18M12 3a15 15 0 0 1 0 18M12 3a15 15 0 0 0 0 18" /></>,
+    users: <><circle cx="9" cy="8" r="3" /><path d="M3 20v-1a6 6 0 0 1 12 0v1Zm12-9a3 3 0 1 0-1-5.8M17 14a5 5 0 0 1 4 5v1h-3" /></>,
+    pen: <><path d="m4 20 4.5-1 10-10a2.1 2.1 0 0 0-3-3l-10 10L4 20Z" /><path d="m14 7 3 3" /></>,
+    flask: <><path d="M9 3h6m-5 0v7l-6 10a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1l-6-10V3m-8 12h12" /></>,
+    calculator: <><rect x="4" y="3" width="16" height="18" rx="2" /><path d="M8 7h8v3H8zm0 7h.01M12 14h.01M16 14h.01M8 17h.01M12 17h.01M16 17h.01" /></>,
+    database: <><ellipse cx="12" cy="5" rx="8" ry="3" /><path d="M4 5v14c0 1.7 3.6 3 8 3s8-1.3 8-3V5M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3" /></>,
   }
 
   return (
@@ -96,39 +174,82 @@ function EmptyState({ icon, title, description }) {
   )
 }
 
+function RecommendedResourceCard({ resource }) {
+  return (
+    <article className="student-recommendation-card">
+      <div
+        className={`student-recommendation-card__thumbnail is-${resource.tone}`}
+        aria-hidden="true"
+      >
+        <span className="student-recommendation-card__thumbnail-orbit" />
+        <span className="student-recommendation-card__thumbnail-icon">
+          <Icon name={resource.icon} size={34} />
+        </span>
+        <span className="student-recommendation-card__placeholder">Sample resource</span>
+      </div>
+      <div className="student-recommendation-card__body">
+        <div className="student-recommendation-card__meta">
+          <span>{resource.category}</span>
+          <span>{resource.difficulty}</span>
+        </div>
+        <h3>{resource.title}</h3>
+        <p>{resource.description}</p>
+        <button
+          className="student-recommendation-card__button"
+          type="button"
+          disabled
+          title="This sample resource does not have a YouTube link yet."
+        >
+          Watch on YouTube
+          <Icon name="arrow" size={15} />
+        </button>
+      </div>
+    </article>
+  )
+}
+
+function StudentRoutePage({ eyebrow, title, children }) {
+  return (
+    <section className="student-panel student-route-page">
+      <div className="student-section-heading">
+        <div>
+          <span className="student-eyebrow">{eyebrow}</span>
+          <h2>{title}</h2>
+        </div>
+      </div>
+      {children}
+    </section>
+  )
+}
+
 function StudentDashboard({ user, loading, error, onRetry, onLogout }) {
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [profileOpen, setProfileOpen] = useState(false)
-  const [activeTarget, setActiveTarget] = useState(() => {
-    const target = window.location.hash.slice(1)
-    return navigation.some((item) => item.target === target) ? target : 'student-overview'
-  })
+  const location = useLocation()
+  const navigate = useNavigate()
+  const currentPage = navigation.find((item) => item.path === location.pathname)
+  const pageTitle = currentPage?.label || (
+    location.pathname === '/user/announcements'
+      ? 'Announcements'
+      : location.pathname === '/user/study-companion'
+        ? 'AI Study Companion'
+        : 'Dashboard'
+  )
   const firstName = user?.fullName?.trim().split(/\s+/)[0] || 'Student'
   const initials = user?.fullName
     ? user.fullName.trim().split(/\s+/).slice(0, 2).map((part) => part[0]).join('').toUpperCase()
     : 'S'
 
   useEffect(() => {
-    function syncActiveTarget() {
-      const target = window.location.hash.slice(1)
-      setActiveTarget(navigation.some((item) => item.target === target) ? target : 'student-overview')
-    }
-
-    window.addEventListener('hashchange', syncActiveTarget)
-    window.addEventListener('popstate', syncActiveTarget)
-    return () => {
-      window.removeEventListener('hashchange', syncActiveTarget)
-      window.removeEventListener('popstate', syncActiveTarget)
-    }
-  }, [])
-
-  function navigateTo(target) {
     setSidebarOpen(false)
-    setActiveTarget(target)
-    if (window.location.hash !== `#${target}`) {
-      window.history.pushState(null, '', `#${target}`)
-    }
-    document.getElementById(target)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    setProfileOpen(false)
+    window.scrollTo(0, 0)
+    document.querySelector('.student-main')?.scrollTo(0, 0)
+  }, [location.pathname])
+
+  function navigateTo(path) {
+    setSidebarOpen(false)
+    navigate(path)
   }
 
   return (
@@ -149,20 +270,16 @@ function StudentDashboard({ user, loading, error, onRetry, onLogout }) {
         <p className="student-sidebar__label">LEARNING SPACE</p>
         <nav className="student-sidebar__nav">
           {navigation.map((item) => (
-            <a
+            <Link
               key={item.label}
-              href={`#${item.target}`}
-              className={`student-sidebar__link${item.target === activeTarget ? ' is-active' : ''}`}
-              aria-current={item.target === activeTarget ? 'page' : undefined}
-              onClick={(event) => {
-                event.preventDefault()
-                navigateTo(item.target)
-              }}
+              to={item.path}
+              className={`student-sidebar__link${item.path === location.pathname ? ' is-active' : ''}`}
+              aria-current={item.path === location.pathname ? 'page' : undefined}
             >
               <Icon name={item.icon} size={18} />
               <span>{item.label}</span>
               {item.label === 'Messages' && <span className="student-sidebar__soon">Soon</span>}
-            </a>
+            </Link>
           ))}
         </nav>
         <div className="student-sidebar__bottom">
@@ -190,7 +307,7 @@ function StudentDashboard({ user, loading, error, onRetry, onLogout }) {
           >
             <Icon name="menu" />
           </button>
-          <div className="student-breadcrumb"><span>Morrow Learning</span><b>/</b><strong>Dashboard</strong></div>
+          <div className="student-breadcrumb"><span>Morrow Learning</span><b>/</b><strong>{pageTitle}</strong></div>
           <label className="student-search">
             <Icon name="search" size={18} />
             <input type="search" placeholder="Search courses, lessons, resources..." aria-label="Search courses, lessons, resources" />
@@ -201,7 +318,7 @@ function StudentDashboard({ user, loading, error, onRetry, onLogout }) {
               className="student-icon-button"
               type="button"
               aria-label="Announcements"
-              onClick={() => navigateTo('student-announcements')}
+              onClick={() => navigateTo('/user/announcements')}
             >
               <Icon name="bell" />
             </button>
@@ -209,7 +326,7 @@ function StudentDashboard({ user, loading, error, onRetry, onLogout }) {
               className="student-icon-button"
               type="button"
               aria-label="Help and study companion"
-              onClick={() => navigateTo('student-ai')}
+              onClick={() => navigateTo('/user/study-companion')}
             >
               <Icon name="help" />
             </button>
@@ -252,7 +369,9 @@ function StudentDashboard({ user, loading, error, onRetry, onLogout }) {
                 <button className="student-button student-button--quiet" type="button" onClick={onLogout}>Return to login</button></div>
             </section>
           ) : (
-            <>
+            <Routes>
+              <Route path="/user/dashboard" element={
+                <>
               <section className="student-welcome">
                 <div className="student-welcome__copy">
                   <span className="student-eyebrow"><span /> YOUR LEARNING SPACE</span>
@@ -300,7 +419,34 @@ function StudentDashboard({ user, loading, error, onRetry, onLogout }) {
                 </div>
               </section>
 
-              <section className="student-panel" id="student-courses" aria-labelledby="student-courses-title">
+              <section className="student-categories" aria-labelledby="student-categories-title">
+                <h2 id="student-categories-title">Explore categories</h2>
+                <div className="student-categories__list">
+                  {categories.map((category) => (
+                    <div className="student-category" key={category.label}>
+                      <Icon name={category.icon} size={19} />
+                      {category.label}
+                    </div>
+                  ))}
+                </div>
+              </section>
+
+              <section className="student-recommendations" aria-labelledby="student-recommendations-title">
+                <div className="student-section-heading">
+                  <div>
+                    <span className="student-eyebrow">PLACEHOLDER SAMPLES</span>
+                    <h2 id="student-recommendations-title">Recommended Learning Resources</h2>
+                  </div>
+                  <span className="student-recommendations__note">Sample content only</span>
+                </div>
+                <div className="student-recommendations__grid">
+                  {recommendedResources.map((resource) => (
+                    <RecommendedResourceCard key={resource.title} resource={resource} />
+                  ))}
+                </div>
+              </section>
+
+              <section className="student-panel" aria-labelledby="student-courses-title">
                 <div className="student-section-heading">
                   <div><span className="student-eyebrow">PICK UP WHERE YOU LEFT OFF</span><h2 id="student-courses-title">Continue learning</h2></div>
                   <span className="student-section-link student-section-link--muted">Courses unavailable</span>
@@ -309,14 +455,14 @@ function StudentDashboard({ user, loading, error, onRetry, onLogout }) {
               </section>
 
               <div className="student-two-column">
-                <section className="student-panel" id="student-assignments" aria-labelledby="student-assignments-title">
+                <section className="student-panel" aria-labelledby="student-assignments-title">
                   <div className="student-section-heading">
                     <div><span className="student-eyebrow">STAY ON TRACK</span><h2 id="student-assignments-title">Upcoming assignments</h2></div>
-                    <a className="student-section-link student-section-link--muted" href="#student-assignments">View all</a>
+                    <Link className="student-section-link student-section-link--muted" to="/user/assignments">View all</Link>
                   </div>
                   <EmptyState icon="check" title="No assignment data available" description="Assignments and due dates aren’t connected to this account yet." />
                 </section>
-                <section className="student-panel student-announcements" id="student-announcements" aria-labelledby="student-announcements-title">
+                <section className="student-panel student-announcements" aria-labelledby="student-announcements-title">
                   <div className="student-section-heading">
                     <div><span className="student-eyebrow">FROM YOUR LEARNING COMMUNITY</span><h2 id="student-announcements-title">Announcements</h2></div>
                     <span className="student-section-link student-section-link--muted">Updates</span>
@@ -333,7 +479,7 @@ function StudentDashboard({ user, loading, error, onRetry, onLogout }) {
                   <div className="student-progress-track"><span /></div>
                   <p>Learning time and weekly goal tracking aren’t connected yet.</p>
                 </section>
-                <section className="student-panel student-ai-card" id="student-ai" aria-labelledby="student-ai-title">
+                <section className="student-panel student-ai-card" aria-labelledby="student-ai-title">
                   <span className="student-ai-card__icon"><Icon name="spark" size={20} /></span>
                   <span className="student-eyebrow">A HELPFUL STUDY SPACE</span>
                   <h2 id="student-ai-title">AI Study Companion</h2>
@@ -358,7 +504,65 @@ function StudentDashboard({ user, loading, error, onRetry, onLogout }) {
                 </div>
               </section>
               <footer className="student-footer"><span>Made for curious minds</span><span>Keep going, one lesson at a time.</span></footer>
-            </>
+                </>
+              } />
+              <Route path="/user/courses" element={
+                <StudentRoutePage eyebrow="YOUR LEARNING SPACE" title="My Courses">
+                  <EmptyState icon="book" title="Your courses will appear here" description="Course enrollment and lesson progress aren’t available from the current LMS API yet." />
+                </StudentRoutePage>
+              } />
+              <Route path="/user/assignments" element={
+                <StudentRoutePage eyebrow="STAY ON TRACK" title="Assignments">
+                  <EmptyState icon="check" title="No assignment data available" description="Assignments and due dates aren’t connected to this account yet." />
+                </StudentRoutePage>
+              } />
+              <Route path="/user/results" element={
+                <StudentRoutePage eyebrow="YOUR ACHIEVEMENTS" title="Grades &amp; Results">
+                  <EmptyState icon="chart" title="Results are not available yet" description="Grades and assessment results will appear here when the LMS results API is connected." />
+                </StudentRoutePage>
+              } />
+              <Route path="/user/resources" element={
+                <StudentRoutePage eyebrow="KEEP EXPLORING" title="Learning Resources">
+                  <EmptyState icon="folder" title="Learning resources are not connected yet" description="Curated learning resources will appear here when the LMS content catalog is connected." />
+                </StudentRoutePage>
+              } />
+              <Route path="/user/messages" element={
+                <StudentRoutePage eyebrow="YOUR LEARNING COMMUNITY" title="Messages">
+                  <EmptyState icon="message" title="Messages are not connected yet" description="Course conversations and messages will appear here when messaging is available." />
+                </StudentRoutePage>
+              } />
+              <Route path="/user/certificates" element={
+                <StudentRoutePage eyebrow="YOUR ACHIEVEMENTS" title="Certificates">
+                  <EmptyState icon="award" title="No certificates to show yet" description="Certificates you earn will appear here." />
+                </StudentRoutePage>
+              } />
+              <Route path="/user/profile" element={
+                <StudentRoutePage eyebrow="YOUR ACCOUNT" title="My Profile">
+                  <dl className="student-profile-details">
+                    <div><dt>Full name</dt><dd>{user?.fullName || 'Not provided'}</dd></div>
+                    <div><dt>Email</dt><dd>{user?.email || 'Not provided'}</dd></div>
+                    <div><dt>Username</dt><dd>{user?.username || 'Not provided'}</dd></div>
+                    <div><dt>Account type</dt><dd>Student</dd></div>
+                  </dl>
+                </StudentRoutePage>
+              } />
+              <Route path="/user/settings" element={
+                <StudentRoutePage eyebrow="PREFERENCES" title="Settings">
+                  <EmptyState icon="settings" title="Settings are not available yet" description="Account preferences will be available here in a future LMS update." />
+                </StudentRoutePage>
+              } />
+              <Route path="/user/announcements" element={
+                <StudentRoutePage eyebrow="FROM YOUR LEARNING COMMUNITY" title="Announcements">
+                  <EmptyState icon="bell" title="Announcement data isn’t connected yet" description="Instructor and administrator announcements will appear here once the LMS provides them." />
+                </StudentRoutePage>
+              } />
+              <Route path="/user/study-companion" element={
+                <StudentRoutePage eyebrow="A HELPFUL STUDY SPACE" title="AI Study Companion">
+                  <EmptyState icon="spark" title="Study Companion is not connected" description="Topic explanations, lesson summaries and practice questions are planned for a future release." />
+                </StudentRoutePage>
+              } />
+              <Route path="*" element={<Navigate to="/user/dashboard" replace />} />
+            </Routes>
           )}
         </div>
       </main>
