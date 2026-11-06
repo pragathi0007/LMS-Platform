@@ -6,7 +6,12 @@
   "scripts": {
     "start": "node server.js",
     "dev": "node --watch server.js",
-    "seed:admin": "node scripts/seed-admin.js"
+    "seed:admin": "node scripts/seed-admin.js",
+    "test": "node --test",
+    "backup:database": "node scripts/backup-database.js",
+    "test:database": "node scripts/database-integration.js",
+    "reset:database": "node scripts/reset-lms-database.js --plan",
+    "reset:database:execute": "node scripts/reset-lms-database.js --execute --confirm=RESET-LMS-AFTER-BACKUP"
   },
   "dependencies": {
     "bcryptjs": "^3.0.3",
@@ -15,6 +20,7 @@
     "express": "^5.3.0",
     "google-auth-library": "^11.3.3",
     "jsonwebtoken": "^9.0.3",
-    "mongoose": "^9.11.4"
+    "mongoose": "^9.11.4",
+    "nodemailer": "^10.3.1"
   }
 }

@@ -1,5 +1,5 @@
 # LMS-Platform
-Learning Management System with Learner, Instructor and Admin portals.
+AIHustle Learning Management System with Main Admin, College Sub-Admin, and Student portals.
 
 ## Client
 

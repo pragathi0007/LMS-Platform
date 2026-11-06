@@ -1641,3 +1641,95 @@
     transition: none;
   }
 }
+
+.student-courses__heading {
+  margin: 20px 0 11px;
+  color: var(--student-ink);
+  font-size: 15px;
+}
+
+.student-courses__list {
+  display: grid;
+  gap: 10px;
+}
+
+.student-courses__card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 15px;
+  padding: 14px;
+  border: 1px solid var(--student-line);
+  border-radius: 9px;
+  background: var(--student-paper);
+}
+
+.student-courses__card h3 {
+  margin: 0;
+  font-size: 13px;
+}
+
+.student-courses__card p {
+  margin: 6px 0;
+  color: var(--student-muted);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.student-courses__card small,
+.student-courses__enrolled {
+  color: var(--student-soft);
+  font-size: 10px;
+}
+
+.student-courses__card button {
+  min-height: 34px;
+  flex: 0 0 auto;
+  padding: 0 13px;
+  border: 1px solid var(--student-gold-border);
+  border-radius: 7px;
+  background: var(--student-gold);
+  color: #303328;
+  font-size: 10px;
+  font-weight: 650;
+}
+
+.student-courses__enrollments {
+  display: grid;
+  gap: 8px;
+  padding: 0;
+  list-style: none;
+}
+
+.student-courses__enrollments li {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 11px;
+  border: 1px solid var(--student-line);
+  border-radius: 7px;
+  background: var(--student-paper);
+  font-size: 11px;
+}
+
+.student-courses__enrollments span {
+  color: var(--student-teal);
+  text-transform: capitalize;
+}
+
+.student-courses__message {
+  margin: 8px 0;
+  color: var(--student-teal);
+  font-size: 11px;
+}
+
+.student-courses__message.is-error {
+  color: #a05f50;
+}
+
+@media (max-width: 520px) {
+  .student-courses__card {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}

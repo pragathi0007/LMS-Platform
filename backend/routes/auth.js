@@ -1,102 +1,29 @@
 import bcrypt from 'bcryptjs'
 import mongoose from 'mongoose'
+import { createHash, randomBytes } from 'node:crypto'
 import { Router } from 'express'
 import jwt from 'jsonwebtoken'
 import { OAuth2Client } from 'google-auth-library'
 import { config } from '../config/env.js'
 import AccountIdentity from '../models/AccountIdentity.js'
-import { accountModelsByRole } from '../models/account-models.js'
+import {
+  accountModelsByCollection,
+  accountModelsByRole,
+  CollegeAdmin,
+  matchesStoredAccountRole,
+  roleForAccountCollection,
+} from '../models/account-models.js'
 import { authenticate, requireRoles } from '../middleware/auth.js'
 
 const router = Router()
 const registrationRoles = new Set(['student'])
 const usernamePattern = /^[a-zA-Z0-9._-]{3,30}$/
 const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
-const instructorExperiences = new Set(['fresher', 'less-than-1', '1-3', '3-5', '5-10', '10+'])
 const usernameCheckRateLimits = new Map()
 const usernameCheckWindowMs = 60 * 1000
 const usernameCheckMaxRequests = 30
 
-function isStringArray(value, { minLength = 1, maxItems = 30 } = {}) {
-  return (
-    Array.isArray(value) &&
-    value.length >= minLength &&
-    value.length <= maxItems &&
-    value.every((item) => typeof item === 'string' && item.trim().length > 0 && item.length <= 80)
-  )
-}
-
-function validateInstructorDetails(details) {
-  if (!details || typeof details !== 'object' || Array.isArray(details)) {
-    return 'Complete the instructor profile details.'
-  }
-
-  const phoneDigits = typeof details.phone === 'string' ? details.phone.replace(/\D/g, '') : ''
-  if (
-    typeof details.countryCode !== 'string' ||
-    !/^\+\d{1,4}$/.test(details.countryCode.trim()) ||
-    phoneDigits.length < 7 ||
-    phoneDigits.length > 15 ||
-    !/^[0-9\s().-]+$/.test(details.phone.trim())
-  ) {
-    return 'Enter a valid phone country code and phone number.'
-  }
-  if (
-    typeof details.professionalTitle !== 'string' ||
-    details.professionalTitle.trim().length < 2 ||
-    details.professionalTitle.trim().length > 100
-  ) {
-    return 'Enter a professional title between 2 and 100 characters.'
-  }
-  if (
-    !isStringArray(details.expertise) ||
-    !isStringArray(details.subjects) ||
-    !isStringArray(details.languages, { maxItems: 8 })
-  ) {
-    return 'Select at least one expertise area, subject, and teaching language.'
-  }
-  if (!instructorExperiences.has(details.experience)) {
-    return 'Select a valid teaching experience level.'
-  }
-  if (
-    details.languages.includes('Other') &&
-    (typeof details.customLanguage !== 'string' || !details.customLanguage.trim())
-  ) {
-    return 'Enter the other teaching language.'
-  }
-  if (
-    !Array.isArray(details.customSubjects) ||
-    details.customSubjects.length > 30 ||
-    details.customSubjects.some(
-      (subject) => typeof subject !== 'string' || !subject.trim() || subject.length > 80,
-    )
-  ) {
-    return 'Check the custom subjects in your instructor profile.'
-  }
-  if (details.profilePicture !== undefined) {
-    const picture = details.profilePicture
-    if (
-      !picture ||
-      typeof picture !== 'object' ||
-      !['image/jpeg', 'image/png'].includes(picture.contentType) ||
-      typeof picture.dataUrl !== 'string' ||
-      picture.dataUrl.length > 7_000_000
-    ) {
-      return 'Use a JPG or PNG profile picture no larger than 5 MB.'
-    }
-
-    const match = picture.dataUrl.match(/^data:(image\/(?:jpeg|png));base64,([A-Za-z0-9+/]+={0,2})$/)
-    if (!match || match[1] !== picture.contentType) {
-      return 'The profile picture is not a valid JPG or PNG image.'
-    }
-    if (Buffer.from(match[2], 'base64').length > 5 * 1024 * 1024) {
-      return 'The profile picture must be 5 MB or smaller.'
-    }
-  }
-  return ''
-}
-
-const allowedRoles = new Set(Object.keys(accountModelsByRole))
+const allowedRoles = new Set(['main_admin', 'college_admin', 'student'])
 
 function isAllowedGoogleOrigin(origin) {
   if (!origin) return false
@@ -104,22 +31,26 @@ function isAllowedGoogleOrigin(origin) {
   return config.nodeEnv !== 'production' && /^http:\/\/(localhost|127\.0\.0\.1):\d+$/.test(origin)
 }
 
-function createAuthToken(user) {
+function createAuthToken(user, accountCollection) {
+  const role = roleForAccountCollection(accountCollection)
+  if (!role) throw new Error('Cannot issue a token for an unsupported account collection.')
   return jwt.sign(
-    { role: user.role, permissions: user.permissions },
+    { role, accountCollection, permissions: user.permissions },
     config.jwtSecret,
     { subject: String(user._id), expiresIn: '1h' },
   )
 }
 
-function serializeAccount(user) {
+function serializeAccount(user, role = user.role) {
   return {
     id: String(user._id),
     fullName: user.fullName,
     username: user.username,
     email: user.email,
-    role: user.role,
+    role,
     status: user.status,
+    collegeId: user.collegeId ? String(user.collegeId) : undefined,
+    studentType: user.studentType,
   }
 }
 
@@ -177,9 +108,7 @@ async function findTakenUsernames(usernames) {
   const patterns = candidates.map((username) => new RegExp(`^${escapeRegex(username)}$`, 'i'))
   const query = { username: { $in: patterns } }
   const collectionNames = new Set([
-    ...Object.values(accountModelsByRole).map((AccountModel) => AccountModel.collection.name),
-    'students',
-    'admins',
+    ...Object.values(accountModelsByCollection).map((AccountModel) => AccountModel.collection.name),
   ])
   const database = mongoose.connection.db
   const resultSets = await Promise.all([
@@ -197,107 +126,12 @@ async function findTakenUsernames(usernames) {
   )
 }
 
-export function normalizeProfessionalDetails(details) {
-  if (!details || typeof details !== 'object' || Array.isArray(details)) {
-    return {
-      details: null,
-      fieldErrors: { professionalDetails: 'Enter the required professional details.' },
-    }
+async function findExistingAccount(field, value) {
+  for (const AccountModel of Object.values(accountModelsByCollection)) {
+    const account = await AccountModel.findOne({ [field]: value }).select('_id').lean()
+    if (account) return account
   }
-
-  const { professionalTitle, countryCode, phone, expertise, subjects, experience, languages, customLanguage } = details
-  const fieldErrors = {}
-  const stringArray = (value) => Array.isArray(value) && value.every((item) => typeof item === 'string')
-
-  if (
-    typeof professionalTitle !== 'string' ||
-    professionalTitle.trim().length < 2 ||
-    professionalTitle.trim().length > 100
-  ) {
-    fieldErrors.professionalTitle = 'Enter a professional title between 2 and 100 characters.'
-  }
-  if (typeof countryCode !== 'string' || !/^\+\d{1,4}$/.test(countryCode.trim())) {
-    fieldErrors.countryCode = 'Select a valid country calling code.'
-  }
-  if (
-    typeof phone !== 'string' ||
-    !/^[0-9\s().-]+$/.test(phone.trim()) ||
-    phone.replace(/\D/g, '').length < 7 ||
-    phone.replace(/\D/g, '').length > 15
-  ) {
-    fieldErrors.phone = 'Enter a phone number containing 7–15 digits.'
-  }
-  if (!stringArray(expertise) || expertise.length === 0 || expertise.some((item) => !item.trim() || item.length > 100)) {
-    fieldErrors.expertise = 'Select at least one valid area of expertise.'
-  }
-  if (!stringArray(subjects) || subjects.length === 0 || subjects.some((item) => !item.trim() || item.length > 80)) {
-    fieldErrors.subjects = 'Select or add at least one valid subject or skill.'
-  }
-  if (typeof experience !== 'string' || !instructorExperiences.has(experience)) {
-    fieldErrors.experience = 'Select a valid teaching experience level.'
-  }
-  if (!stringArray(languages) || languages.length === 0 || languages.some((item) => !item.trim() || item.length > 60)) {
-    fieldErrors.languages = 'Select at least one teaching language.'
-  }
-  if (
-    Array.isArray(languages) &&
-    languages.includes('Other') &&
-    (typeof customLanguage !== 'string' || !customLanguage.trim() || customLanguage.trim().length > 60)
-  ) {
-    fieldErrors.customLanguage = 'Enter the other language you teach (up to 60 characters).'
-  }
-  const customSubjects = details.customSubjects ?? []
-  if (
-    !Array.isArray(customSubjects) ||
-    customSubjects.length > 30 ||
-    customSubjects.some((subject) => typeof subject !== 'string' || !subject.trim() || subject.length > 80)
-  ) {
-    fieldErrors.customSubjects = 'Check the custom subjects in your instructor profile.'
-  }
-
-  let profilePicture
-  if (details.profilePicture !== undefined) {
-    const picture = details.profilePicture
-    const match =
-      picture && typeof picture.dataUrl === 'string'
-        ? picture.dataUrl.match(/^data:(image\/(?:jpeg|png));base64,([A-Za-z0-9+/]+={0,2})$/)
-        : null
-    if (
-      !picture ||
-      typeof picture !== 'object' ||
-      !['image/jpeg', 'image/png'].includes(picture.contentType) ||
-      !match ||
-      match[1] !== picture.contentType ||
-      Buffer.from(match[2], 'base64').length > 5 * 1024 * 1024
-    ) {
-      fieldErrors.profilePicture = 'Use a valid JPG or PNG profile picture no larger than 5 MB.'
-    } else {
-      profilePicture = {
-        data: Buffer.from(match[2], 'base64'),
-        contentType: picture.contentType,
-      }
-    }
-  }
-
-  if (Object.keys(fieldErrors).length > 0) {
-    return { details: null, fieldErrors }
-  }
-
-  return {
-    fieldErrors,
-    details: {
-      professionalTitle: professionalTitle.trim(),
-      countryCode: countryCode.trim(),
-      phone: phone.trim(),
-      expertise: [...new Set(expertise.map((item) => item.trim()))],
-      subjects: [...new Set(subjects.map((item) => item.trim()))],
-      customSubjects: customSubjects.map((item) => item.trim()),
-      experience: experience.trim(),
-      languages: [...new Set(languages.map((item) => item.trim()))],
-      customLanguage: typeof customLanguage === 'string' ? customLanguage.trim() : '',
-      ...(profilePicture && { profilePicture }),
-    },
-  }
+  return null
 }
 
 router.get('/check-username', limitUsernameChecks, async (req, res, next) => {
@@ -341,12 +175,8 @@ router.post('/register', async (req, res, next) => {
       role,
       accountType,
       collegeId,
-      instructorDetails,
-      professionalDetails,
-      termsAccepted,
     } = req.body ?? {}
-    const submittedRole = typeof role === 'string' ? role.trim().toLowerCase() : ''
-    const normalizedRole = submittedRole === 'user' ? 'student' : submittedRole
+    const normalizedRole = typeof role === 'string' ? role.trim().toLowerCase() : ''
 
     if (!registrationRoles.has(normalizedRole)) {
       return res.status(400).json({ message: 'Public registration is available for independent students only.' })
@@ -392,7 +222,7 @@ router.post('/register', async (req, res, next) => {
     const normalizedUsername = username.trim().toLowerCase()
     const AccountModel = accountModelsByRole[normalizedRole]
     const [existingAccount, takenUsernames] = await Promise.all([
-      AccountModel.findOne({ email: normalizedEmail }).select('_id').lean(),
+      findExistingAccount('email', normalizedEmail),
       findTakenUsernames([normalizedUsername]),
     ])
     if (existingAccount) {
@@ -402,20 +232,6 @@ router.post('/register', async (req, res, next) => {
       return res.status(409).json({ message: 'This username is already taken.' })
     }
 
-    let normalizedProfessionalDetails
-    if (normalizedRole === 'instructor') {
-      if (termsAccepted !== true) {
-        return res.status(400).json({ message: 'Accept the instructor terms to continue.' })
-      }
-      const professionalDetailsResult = normalizeProfessionalDetails(instructorDetails ?? professionalDetails)
-      normalizedProfessionalDetails = professionalDetailsResult.details
-      if (!normalizedProfessionalDetails) {
-        return res.status(400).json({
-          message: 'Complete the highlighted professional details.',
-          fieldErrors: professionalDetailsResult.fieldErrors,
-        })
-      }
-    }
     const passwordHash = await bcrypt.hash(password, 12)
     const accountId = new mongoose.Types.ObjectId()
     const session = await mongoose.startSession()
@@ -436,7 +252,6 @@ router.post('/register', async (req, res, next) => {
           error.statusCode = 409
           throw error
         }
-
         await AccountIdentity.create(
           [{
             email: normalizedEmail,
@@ -453,7 +268,8 @@ router.post('/register', async (req, res, next) => {
             email: normalizedEmail,
             username: normalizedUsername,
             passwordHash,
-            accountType: 'independent',
+            role: normalizedRole,
+            studentType: 'independent',
             status: 'active',
           }],
           { session },
@@ -470,7 +286,7 @@ router.post('/register', async (req, res, next) => {
         fullName: account.fullName,
         email: account.email,
         username: account.username,
-        role: account.role,
+        role: 'student',
         status: account.status,
       },
     })
@@ -516,8 +332,7 @@ router.post('/google', async (req, res, next) => {
       return res.status(403).json({ message: 'The Google sign-in request could not be verified.' })
     }
 
-    const submittedRole = role.trim().toLowerCase()
-    const requestedRole = submittedRole === 'user' ? 'student' : submittedRole
+    const requestedRole = role.trim().toLowerCase()
     if (!allowedRoles.has(requestedRole)) {
       return res.status(400).json({ message: 'Choose a valid account type.' })
     }
@@ -585,10 +400,10 @@ router.post('/google', async (req, res, next) => {
     }
 
     const email = payload.email.trim().toLowerCase()
-    const AccountModel = accountModelsByRole[requestedRole]
     failureStage = 'lookup_account'
     const session = await mongoose.startSession()
     let account
+    let accountCollection
 
     try {
       failureStage = 'lookup_email_identity'
@@ -607,12 +422,18 @@ router.post('/google', async (req, res, next) => {
 
         const identity = emailIdentity || subjectIdentity
         if (identity) {
-          if (identity.accountCollection !== AccountModel.collection.name) {
+          const AccountModel = accountModelsByCollection[identity.accountCollection]
+          if (!AccountModel || roleForAccountCollection(identity.accountCollection) !== requestedRole) {
             throw createGoogleAuthError(403, 'This Google account is not associated with the selected role.')
           }
+          accountCollection = identity.accountCollection
           failureStage = 'lookup_linked_account'
           account = await AccountModel.findById(identity.accountId).session(session)
-          if (!account || account.email !== email || account.role !== requestedRole) {
+          if (
+            !account ||
+            account.email !== email ||
+            !matchesStoredAccountRole(identity.accountCollection, account.role)
+          ) {
             throw createGoogleAuthError(401, 'The linked account could not be verified.')
           }
           if (identity.googleSub && identity.googleSub !== payload.sub) {
@@ -636,30 +457,31 @@ router.post('/google', async (req, res, next) => {
         }
 
         const matchingAccounts = []
-        for (const [accountRole, Model] of Object.entries(accountModelsByRole)) {
-          failureStage = `lookup_${accountRole}_account`
-          matchingAccounts.push({
-            role: accountRole,
-            account: await Model.findOne({ email }).session(session),
-          })
+        for (const [collectionName, Model] of Object.entries(accountModelsByCollection)) {
+          failureStage = `lookup_${collectionName}_account`
+          const match = await Model.findOne({ email }).session(session)
+          if (match) matchingAccounts.push({ account: match, collectionName })
         }
-        const existingAccounts = matchingAccounts.filter((result) => result.account)
-        if (existingAccounts.length > 1) {
+        if (matchingAccounts.length > 1) {
           throw createGoogleAuthError(409, 'Conflicting accounts use this Google email. Contact an administrator.')
         }
-        if (existingAccounts.length === 1) {
-          const [existing] = existingAccounts
-          if (existing.role !== requestedRole) {
+        if (matchingAccounts.length === 1) {
+          const [existing] = matchingAccounts
+          if (
+            roleForAccountCollection(existing.collectionName) !== requestedRole ||
+            !matchesStoredAccountRole(existing.collectionName, existing.account.role)
+          ) {
             throw createGoogleAuthError(403, 'This Google account is not associated with the selected role.')
           }
           account = existing.account
+          accountCollection = existing.collectionName
           failureStage = 'link_google_identity'
           await AccountIdentity.create(
             [{
               email,
               username: account.username,
               googleSub: payload.sub,
-              accountCollection: AccountModel.collection.name,
+              accountCollection,
               accountId: account._id,
             }],
             { session },
@@ -674,22 +496,14 @@ router.post('/google', async (req, res, next) => {
     }
 
     const status = String(account.status || account.approvalStatus || '').toLowerCase()
-    if (account.role === 'instructor' && status !== 'approved') {
-      const message = status === 'rejected'
-        ? 'Your instructor account was not approved.'
-        : status === 'pending'
-          ? 'Your instructor account is awaiting admin approval.'
-          : 'Your instructor account is not active.'
-      return res.status(403).json({ message })
-    }
-    if (account.isActive === false || !['active', 'approved'].includes(status)) {
+    if (account.isActive === false || status !== 'active') {
       return res.status(403).json({ message: 'Your account is not active.' })
     }
 
     failureStage = 'issue_lms_token'
     return res.json({
-      token: createAuthToken(account),
-      user: serializeAccount(account),
+      token: createAuthToken(account, accountCollection),
+      user: serializeAccount(account, requestedRole),
     })
   } catch (error) {
     if (error?.statusCode) {
@@ -726,8 +540,7 @@ router.post('/login', async (req, res, next) => {
       return res.status(400).json({ message: 'Enter your username or email and password.' })
     }
 
-    const selectedRole = role.trim().toLowerCase()
-    const requestedRole = selectedRole === 'user' ? 'student' : selectedRole
+    const requestedRole = role.trim().toLowerCase()
     if (!allowedRoles.has(requestedRole)) {
       return res.status(400).json({ message: 'Choose a valid account type.' })
     }
@@ -736,41 +549,84 @@ router.post('/login', async (req, res, next) => {
     }
 
     const normalizedIdentifier = identifier.trim().toLowerCase()
-    const AccountModel = accountModelsByRole[requestedRole]
-    const user = await AccountModel.findOne({
+    const identity = await AccountIdentity.findOne({
       $or: [{ username: normalizedIdentifier }, { email: normalizedIdentifier }],
-    }).select('+passwordHash')
+    }).lean()
+    const accountCollection = identity?.accountCollection
+    const AccountModel = accountModelsByCollection[accountCollection]
+    if (!identity || !AccountModel || roleForAccountCollection(accountCollection) !== requestedRole) {
+      return res.status(401).json({ message: 'Invalid username/email or password.' })
+    }
+    const user = await AccountModel.findById(identity.accountId).select('+passwordHash')
+    if (
+      !user ||
+      user.email !== identity.email ||
+      user.username !== identity.username ||
+      !matchesStoredAccountRole(accountCollection, user.role)
+    ) {
+      return res.status(401).json({ message: 'Invalid username/email or password.' })
+    }
 
     const passwordMatches = user?.passwordHash
       ? await bcrypt.compare(password, user.passwordHash)
       : false
-    if (!user || !passwordMatches || user.role !== requestedRole) {
+    if (!passwordMatches) {
       return res.status(401).json({ message: 'Invalid username/email or password.' })
     }
 
     const status = String(user.status || user.approvalStatus || '').toLowerCase()
-    if (user.role === 'instructor' && !['active', 'approved'].includes(status)) {
-      const message = status === 'rejected'
-        ? 'Your instructor account was not approved.'
-        : status === 'pending'
-          ? 'Your instructor account is awaiting admin approval.'
-          : 'Your instructor account is not active.'
-      return res.status(403).json({ message })
-    }
-    if (
-      (user.role === 'instructor' && user.isActive !== true) ||
-      user.isActive === false ||
-      !['active', 'approved'].includes(status)
-    ) {
+    if (user.isActive === false || status !== 'active') {
       return res.status(403).json({ message: 'Your account is not active.' })
     }
 
-    const token = createAuthToken(user)
+    const token = createAuthToken(user, accountCollection)
 
     return res.json({
       token,
-      user: serializeAccount(user),
+      user: serializeAccount(user, requestedRole),
     })
+  } catch (error) {
+    return next(error)
+  }
+})
+
+router.post('/activate', async (req, res, next) => {
+  try {
+    const { token, password, confirmPassword } = req.body ?? {}
+    if (typeof token !== 'string' || token.length < 32 || token.length > 256) {
+      return res.status(400).json({ message: 'The activation link is invalid or expired.' })
+    }
+    if (
+      typeof password !== 'string' ||
+      password.length < 8 ||
+      Buffer.byteLength(password, 'utf8') > 72
+    ) {
+      return res.status(400).json({ message: 'Use a password of 8–72 bytes.' })
+    }
+    if (typeof confirmPassword !== 'string' || password !== confirmPassword) {
+      return res.status(400).json({ message: 'Your passwords do not match.' })
+    }
+
+    const passwordHash = await bcrypt.hash(password, 12)
+    const activationTokenHash = createHash('sha256').update(token).digest('hex')
+    const account = await CollegeAdmin.findOneAndUpdate(
+      {
+        role: 'college_admin',
+        status: 'invitation_pending',
+        activationTokenHash,
+        activationTokenExpiresAt: { $gt: new Date() },
+      },
+      {
+        $set: { passwordHash, status: 'active', isActive: true },
+        $unset: { activationTokenHash: '', activationTokenExpiresAt: '' },
+      },
+      { new: true, runValidators: true },
+    ).select('fullName email username role status collegeId')
+
+    if (!account) {
+      return res.status(400).json({ message: 'The activation link is invalid, expired, or already used.' })
+    }
+    return res.json({ message: 'Your account is active. You can now log in.' })
   } catch (error) {
     return next(error)
   }
@@ -780,15 +636,15 @@ router.get('/me', authenticate, (req, res) => {
   return res.json({ user: req.auth.user })
 })
 
-router.get('/dashboard/user', authenticate, requireRoles('student'), (req, res) => {
+router.get('/dashboard/student', authenticate, requireRoles('student'), (req, res) => {
   return res.json({ user: req.auth.user })
 })
 
-router.get('/dashboard/instructor', authenticate, requireRoles('instructor'), (req, res) => {
+router.get('/dashboard/main_admin', authenticate, requireRoles('main_admin'), (req, res) => {
   return res.json({ user: req.auth.user })
 })
 
-router.get('/dashboard/admin', authenticate, requireRoles('admin'), (req, res) => {
+router.get('/dashboard/college_admin', authenticate, requireRoles('college_admin'), (req, res) => {
   return res.json({ user: req.auth.user })
 })
 

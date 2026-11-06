@@ -3,6 +3,8 @@ import cors from 'cors'
 import express from 'express'
 import { connectToDatabase } from './config/db.js'
 import authRouter from './routes/auth.js'
+import adminRouter from './routes/admin.js'
+import learningRouter from './routes/learning.js'
 
 const app = express()
 app.use(
@@ -21,6 +23,8 @@ app.use(
 )
 app.use(express.json({ limit: '8mb' }))
 app.use('/api/auth', authRouter)
+app.use('/api/admin', adminRouter)
+app.use('/api', learningRouter)
 app.use('/api', (req, res) => {
   res.status(404).json({ message: 'API route not found.' })
 })
@@ -62,8 +66,6 @@ async function startServer() {
   } catch (error) {
     if (error instanceof Error && error.message.startsWith('JWT_SECRET is not configured')) {
       console.error('JWT_SECRET is not configured; the backend was not started.')
-    } else if (error?.code === 'LEGACY_MIGRATION_REQUIRED') {
-      console.error(error.message)
     } else {
       const errorName = error instanceof Error ? error.name : 'Unknown error'
       console.error(

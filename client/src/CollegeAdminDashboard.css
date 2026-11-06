@@ -1,0 +1,149 @@
+.college-admin {
+  min-height: 100vh;
+  padding: clamp(20px, 5vw, 56px);
+  background: #f5f6f1;
+  color: #414941;
+}
+
+.college-admin__header,
+.college-admin__panel {
+  width: min(100%, 1120px);
+  margin: 0 auto 18px;
+  padding: 22px;
+  border: 1px solid #e6e9df;
+  border-radius: 12px;
+  background: #fff;
+  box-shadow: 0 8px 26px rgba(48, 57, 48, 0.04);
+}
+
+.college-admin__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+}
+
+.college-admin__header p {
+  margin: 0 0 7px;
+  color: #7a8a74;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+}
+
+.college-admin__header h1,
+.college-admin__panel h2 {
+  margin: 0;
+  font-size: clamp(20px, 3vw, 28px);
+}
+
+.college-admin__header span,
+.college-admin__panel > p {
+  display: inline-block;
+  margin-top: 8px;
+  color: #778075;
+  font-size: 13px;
+}
+
+.college-admin button {
+  min-height: 38px;
+  padding: 0 14px;
+  border: 1px solid #d5decf;
+  border-radius: 7px;
+  background: #edf2e9;
+  color: #465744;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.college-admin button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.college-admin__form {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr)) auto;
+  align-items: end;
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.college-admin__form label {
+  display: grid;
+  gap: 6px;
+  color: #677164;
+  font-size: 12px;
+}
+
+.college-admin__form select {
+  min-height: 40px;
+  padding: 8px;
+  border: 1px solid #dfe4da;
+  border-radius: 7px;
+  background: #fff;
+  font: inherit;
+}
+
+.college-admin__panel h2 {
+  font-size: 17px;
+}
+
+.college-admin__panel h2 span {
+  margin-left: 6px;
+  color: #82927c;
+  font-size: 13px;
+}
+
+.college-admin__table-wrap {
+  overflow-x: auto;
+  margin-top: 15px;
+}
+
+.college-admin table {
+  width: 100%;
+  border-collapse: collapse;
+  text-align: left;
+  font-size: 12px;
+}
+
+.college-admin th,
+.college-admin td {
+  padding: 10px 12px;
+  border-bottom: 1px solid #edf0e9;
+  white-space: nowrap;
+}
+
+.college-admin th {
+  color: #798273;
+  font-weight: 650;
+}
+
+.college-admin__alert,
+.college-admin__success,
+.college-admin__loading {
+  width: min(100%, 1120px);
+  margin: 12px auto;
+  padding: 12px;
+  border-radius: 7px;
+  background: #fff4f0;
+  color: #a05f50;
+  font-size: 13px;
+}
+
+.college-admin__alert button {
+  margin-left: 10px;
+}
+
+.college-admin__success {
+  background: #f0f7ec;
+  color: #526e4a;
+}
+
+@media (max-width: 760px) {
+  .college-admin__form {
+    grid-template-columns: 1fr;
+  }
+}

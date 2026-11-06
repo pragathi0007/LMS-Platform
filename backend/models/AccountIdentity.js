@@ -8,7 +8,7 @@ const accountIdentitySchema = new mongoose.Schema(
     accountCollection: {
       type: String,
       required: true,
-      enum: ['users', 'students', 'instructors', 'admins', 'admin'],
+      enum: ['admin', 'sub_admins', 'students', 'clg_students'],
     },
     accountId: { type: mongoose.Schema.Types.ObjectId, required: true },
     migratedFromLegacy: { type: Boolean, default: false },

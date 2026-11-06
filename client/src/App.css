@@ -354,14 +354,6 @@
   margin-left: auto;
 }
 
-.auth-shell--instructor {
-  width: min(100%, 560px);
-}
-
-.instructor-form .form-heading {
-  margin-bottom: 17px;
-}
-
 .registration-progress {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -403,16 +395,6 @@
   border-color: #b9d8cd;
   background: #edf5f0;
   color: #347466;
-}
-
-.instructor-grid {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  align-items: start;
-  gap: 14px 13px;
-}
-
-.instructor-grid .full-span {
-  grid-column: 1 / -1;
 }
 
 .field label span {
@@ -741,10 +723,6 @@
   margin-top: 12px;
 }
 
-.instructor-form .field-hint {
-  display: block;
-}
-
 .terms-checkbox {
   display: flex;
   align-items: flex-start;
@@ -766,10 +744,6 @@
   color: #4a7669;
   text-decoration: underline;
   text-underline-offset: 2px;
-}
-
-.instructor-form .approval-note {
-  margin: 14px 0 0;
 }
 
 .wizard-actions {
@@ -1113,10 +1087,6 @@
   margin-top: 4px;
   border-radius: 50%;
   background: #d3a93f;
-}
-
-.instructor-form > .primary-button {
-  margin-top: 18px;
 }
 
 .primary-button,
@@ -1573,8 +1543,7 @@
   text-underline-offset: 3px;
 }
 
-.admin-dashboard__success,
-.instructor-dashboard__success {
+.admin-dashboard__success {
   margin-top: 14px !important;
   padding: 11px 14px;
   border: 1px solid #d6e6db;
@@ -1584,40 +1553,62 @@
   font-weight: 600;
 }
 
-.admin-dashboard__account,
-.instructor-dashboard__details {
+.activation-page {
+  display: grid;
+  min-height: 100vh;
+  padding: 24px;
+  place-items: center;
+  background:
+    radial-gradient(ellipse at 2% 92%, rgba(196, 230, 211, 0.7), transparent 40%),
+    radial-gradient(ellipse at 93% 14%, rgba(245, 220, 153, 0.28), transparent 34%),
+    #f6f3e8;
+}
+
+.activation-form {
+  display: grid;
+  width: 100%;
+  gap: 9px;
+  margin-top: 20px;
+  text-align: left;
+}
+
+.activation-form label {
+  color: #59645a;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.activation-form input {
+  min-height: 42px;
+  padding: 9px 11px;
+  border: 1px solid #dfe4da;
+  border-radius: 7px;
+  font: inherit;
+}
+
+.activation-form [role="alert"] {
+  color: #a05f50;
+  font-size: 12px;
+}
+
+.activation-form .dashboard-button {
+  justify-self: center;
+}
+
+.activation-page a.dashboard-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-decoration: none;
+}
+
+.admin-dashboard__account {
   display: flex;
   flex-direction: column;
   gap: 5px;
   margin-top: 20px;
   color: #777a70;
   font-size: 12px;
-}
-
-.instructor-dashboard__details {
-  width: 100%;
-  margin-bottom: 0;
-  text-align: left;
-}
-
-.instructor-dashboard__details > div {
-  display: flex;
-  justify-content: space-between;
-  gap: 16px;
-  padding: 11px 0;
-  border-bottom: 1px solid #eeede5;
-}
-
-.instructor-dashboard__details dt {
-  color: #777a70;
-}
-
-.instructor-dashboard__details dd {
-  margin: 0;
-  color: #303632;
-  font-weight: 600;
-  overflow-wrap: anywhere;
-  text-align: right;
 }
 
 .admin-dashboard__account strong {
@@ -1627,8 +1618,7 @@
   font-weight: 600;
 }
 
-.admin-dashboard__logout,
-.instructor-dashboard__logout {
+.admin-dashboard__logout {
   margin-top: 24px;
 }
 
@@ -1714,10 +1704,6 @@
 
   .auth-shell {
     margin: 0 auto;
-  }
-
-  .instructor-grid {
-    grid-template-columns: 1fr;
   }
 
   .form-bottom {

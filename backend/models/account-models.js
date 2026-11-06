@@ -7,11 +7,10 @@ const accountFields = {
   passwordHash: { type: String, select: false },
   status: {
     type: String,
-    enum: ['active', 'approved', 'pending', 'rejected', 'inactive', 'suspended'],
+    enum: ['active', 'pending', 'inactive', 'suspended', 'invitation_pending'],
     default: 'active',
     lowercase: true,
   },
-  approvalStatus: { type: String, lowercase: true },
   isActive: { type: Boolean, default: true },
   permissions: { type: [String], default: [] },
 }
@@ -29,37 +28,70 @@ function createAccountModel(modelName, collectionName, role, additionalFields = 
   return mongoose.models[modelName] || mongoose.model(modelName, schema, collectionName)
 }
 
-const instructorFields = {
-  professionalDetails: {
-    professionalTitle: { type: String, trim: true, maxlength: 100 },
-    countryCode: { type: String, trim: true, maxlength: 5 },
-    phone: { type: String, trim: true, maxlength: 30 },
-    expertise: { type: [String], default: [] },
-    subjects: { type: [String], default: [] },
-    customSubjects: { type: [String], default: [] },
-    experience: { type: String, trim: true, maxlength: 30 },
-    languages: { type: [String], default: [] },
-    customLanguage: { type: String, trim: true, maxlength: 60 },
-    profilePicture: {
-      data: Buffer,
-      contentType: { type: String, trim: true },
-    },
-  },
+const independentStudentFields = {
+  studentType: { type: String, enum: ['independent'], default: 'independent', required: true },
 }
 
-const studentFields = {
-  accountType: {
-    type: String,
-    enum: ['college', 'independent'],
-  },
+const collegeStudentFields = {
+  studentType: { type: String, enum: ['college'], default: 'college', required: true },
+  collegeId: { type: mongoose.Schema.Types.ObjectId, ref: 'College', required: true },
+  studentId: { type: String, trim: true, maxlength: 100 },
+  department: { type: String, trim: true, maxlength: 120 },
+  batch: { type: String, trim: true, maxlength: 80 },
 }
 
-export const Student = createAccountModel('Student', 'users', 'student', studentFields)
-export const Instructor = createAccountModel('Instructor', 'instructors', 'instructor', instructorFields)
-export const Admin = createAccountModel('Admin', 'admin', 'admin')
+const collegeAdminFields = {
+  collegeId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'College',
+    required: true,
+  },
+  activationTokenHash: { type: String, select: false },
+  activationTokenExpiresAt: { type: Date, select: false },
+}
+
+export const Admin = createAccountModel('Admin', 'admin', 'main_admin')
+export const CollegeAdmin = createAccountModel('CollegeAdmin', 'sub_admins', 'college_admin', collegeAdminFields)
+export const Student = createAccountModel('Student', 'students', 'student', independentStudentFields)
+export const CollegeStudent = createAccountModel('CollegeStudent', 'clg_students', 'student', collegeStudentFields)
+CollegeStudent.schema.index(
+  { collegeId: 1, studentId: 1 },
+  {
+    unique: true,
+    sparse: true,
+    collation: { locale: 'en', strength: 2 },
+    name: 'unique_college_student_id',
+  },
+)
 
 export const accountModelsByRole = Object.freeze({
+  main_admin: Admin,
+  college_admin: CollegeAdmin,
   student: Student,
-  instructor: Instructor,
-  admin: Admin,
 })
+
+export const accountModelsByCollection = Object.freeze({
+  admin: Admin,
+  sub_admins: CollegeAdmin,
+  students: Student,
+  clg_students: CollegeStudent,
+})
+
+export function roleForAccountCollection(collectionName) {
+  switch (collectionName) {
+    case 'admin':
+      return 'main_admin'
+    case 'sub_admins':
+      return 'college_admin'
+    case 'students':
+    case 'clg_students':
+      return 'student'
+    default:
+      return null
+  }
+}
+
+export function matchesStoredAccountRole(collectionName, storedRole) {
+  const expectedRole = roleForAccountCollection(collectionName)
+  return storedRole === expectedRole
+}

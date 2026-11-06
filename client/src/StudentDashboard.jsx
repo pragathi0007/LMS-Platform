@@ -2,16 +2,18 @@ import React, { useEffect, useState } from 'react'
 import { Link, Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
 import './StudentDashboard.css'
 
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000/api'
+
 const navigation = [
-  { label: 'Dashboard', icon: 'grid', path: '/user/dashboard' },
-  { label: 'My Courses', icon: 'book', path: '/user/courses' },
-  { label: 'Assignments', icon: 'check', path: '/user/assignments' },
-  { label: 'Grades & Results', icon: 'chart', path: '/user/results' },
-  { label: 'Learning Resources', icon: 'folder', path: '/user/resources' },
-  { label: 'Messages', icon: 'message', path: '/user/messages' },
-  { label: 'Certificates', icon: 'award', path: '/user/certificates' },
-  { label: 'My Profile', icon: 'user', path: '/user/profile' },
-  { label: 'Settings', icon: 'settings', path: '/user/settings' },
+  { label: 'Dashboard', icon: 'grid', path: '/student/dashboard' },
+  { label: 'My Courses', icon: 'book', path: '/student/courses' },
+  { label: 'Assignments', icon: 'check', path: '/student/assignments' },
+  { label: 'Grades & Results', icon: 'chart', path: '/student/results' },
+  { label: 'Learning Resources', icon: 'folder', path: '/student/resources' },
+  { label: 'Messages', icon: 'message', path: '/student/messages' },
+  { label: 'Certificates', icon: 'award', path: '/student/certificates' },
+  { label: 'My Profile', icon: 'user', path: '/student/profile' },
+  { label: 'Settings', icon: 'settings', path: '/student/settings' },
 ]
 
 const stats = [
@@ -222,6 +224,119 @@ function StudentRoutePage({ eyebrow, title, children }) {
   )
 }
 
+function StudentCourses({ user, onLogout }) {
+  const [courses, setCourses] = useState([])
+  const [enrollments, setEnrollments] = useState([])
+  const [error, setError] = useState('')
+  const [loading, setLoading] = useState(true)
+  const [enrollingId, setEnrollingId] = useState('')
+  const [message, setMessage] = useState('')
+  const isCollegeStudent = user?.studentType === 'college' || Boolean(user?.collegeId)
+
+  async function loadCourses() {
+    const savedAuth = sessionStorage.getItem('lms.auth')
+    const auth = savedAuth ? JSON.parse(savedAuth) : null
+    if (typeof auth?.token !== 'string') {
+      onLogout()
+      return
+    }
+    const headers = { Authorization: `Bearer ${auth.token}` }
+    const [courseResponse, enrollmentResponse] = await Promise.all([
+      fetch(`${API_BASE_URL}/courses`, { headers }),
+      fetch(`${API_BASE_URL}/enrollments/me`, { headers }),
+    ])
+    const [courseResult, enrollmentResult] = await Promise.all([
+      courseResponse.json(),
+      enrollmentResponse.json(),
+    ])
+    if (courseResponse.status === 401 || courseResponse.status === 403 ||
+      enrollmentResponse.status === 401 || enrollmentResponse.status === 403) {
+      onLogout()
+      return
+    }
+    if (!courseResponse.ok) throw new Error(courseResult.message || 'Unable to load courses.')
+    if (!enrollmentResponse.ok) throw new Error(enrollmentResult.message || 'Unable to load your enrollments.')
+    setCourses(courseResult.courses || [])
+    setEnrollments(enrollmentResult.enrollments || [])
+  }
+
+  useEffect(() => {
+    loadCourses()
+      .catch((loadError) => setError(loadError instanceof Error ? loadError.message : 'Unable to load course data.'))
+      .finally(() => setLoading(false))
+  }, [user?.id])
+
+  async function enroll(courseId) {
+    setEnrollingId(courseId)
+    setError('')
+    setMessage('')
+    try {
+      const savedAuth = sessionStorage.getItem('lms.auth')
+      const auth = savedAuth ? JSON.parse(savedAuth) : null
+      if (typeof auth?.token !== 'string') {
+        onLogout()
+        return
+      }
+      const response = await fetch(`${API_BASE_URL}/enrollments`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${auth.token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ courseId }),
+      })
+      const result = await response.json()
+      if (response.status === 401 || response.status === 403) {
+        onLogout()
+        return
+      }
+      if (!response.ok) throw new Error(result.message || 'Unable to enroll in this course.')
+      setMessage(result.message)
+      await loadCourses()
+    } catch (enrollError) {
+      setError(enrollError instanceof Error ? enrollError.message : 'Unable to enroll in this course.')
+    } finally {
+      setEnrollingId('')
+    }
+  }
+
+  const enrolledCourseIds = new Set(enrollments.map((entry) => String(entry.courseId?._id || entry.courseId)))
+
+  return (
+    <StudentRoutePage eyebrow="YOUR LEARNING SPACE" title="My Courses">
+      {error && <p className="student-courses__message is-error" role="alert">{error}</p>}
+      {message && <p className="student-courses__message" role="status">{message}</p>}
+      {loading ? <p>Loading courses…</p> : (
+        <>
+          <h3 className="student-courses__heading">Published courses</h3>
+          {courses.length === 0 ? <EmptyState icon="book" title="No published courses yet" description="Published courses will appear here when the administrator adds them." /> : (
+            <div className="student-courses__list">
+              {courses.map((course) => {
+                const isEnrolled = enrolledCourseIds.has(String(course._id))
+                return (
+                  <article className="student-courses__card" key={course._id}>
+                    <div><h3>{course.title}</h3><p>{course.description || 'No description provided.'}</p>
+                      <small>{course.modules?.length || 0} modules</small></div>
+                    {isEnrolled ? <span className="student-courses__enrolled">Enrolled</span> : isCollegeStudent
+                      ? <span className="student-courses__enrolled">Ask your college administrator to enroll you</span>
+                      : <button type="button" disabled={enrollingId === course._id} onClick={() => enroll(course._id)}>{enrollingId === course._id ? 'Enrolling…' : 'Enroll'}</button>}
+                  </article>
+                )
+              })}
+            </div>
+          )}
+          <h3 className="student-courses__heading">Current enrollments</h3>
+          {enrollments.length === 0 ? <p>You are not enrolled in any courses yet.</p> : (
+            <ul className="student-courses__enrollments">
+              {enrollments.map((entry) => <li key={entry._id}>{entry.courseId?.title || 'Course'} <span>{entry.status}</span></li>)}
+            </ul>
+          )}
+        </>
+      )}
+    </StudentRoutePage>
+  )
+}
+
 function StudentDashboard({ user, loading, error, onRetry, onLogout }) {
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [profileOpen, setProfileOpen] = useState(false)
@@ -229,9 +344,9 @@ function StudentDashboard({ user, loading, error, onRetry, onLogout }) {
   const navigate = useNavigate()
   const currentPage = navigation.find((item) => item.path === location.pathname)
   const pageTitle = currentPage?.label || (
-    location.pathname === '/user/announcements'
+    location.pathname === '/student/announcements'
       ? 'Announcements'
-      : location.pathname === '/user/study-companion'
+      : location.pathname === '/student/study-companion'
         ? 'AI Study Companion'
         : 'Dashboard'
   )
@@ -318,7 +433,7 @@ function StudentDashboard({ user, loading, error, onRetry, onLogout }) {
               className="student-icon-button"
               type="button"
               aria-label="Announcements"
-              onClick={() => navigateTo('/user/announcements')}
+              onClick={() => navigateTo('/student/announcements')}
             >
               <Icon name="bell" />
             </button>
@@ -326,7 +441,7 @@ function StudentDashboard({ user, loading, error, onRetry, onLogout }) {
               className="student-icon-button"
               type="button"
               aria-label="Help and study companion"
-              onClick={() => navigateTo('/user/study-companion')}
+              onClick={() => navigateTo('/student/study-companion')}
             >
               <Icon name="help" />
             </button>
@@ -370,7 +485,7 @@ function StudentDashboard({ user, loading, error, onRetry, onLogout }) {
             </section>
           ) : (
             <Routes>
-              <Route path="/user/dashboard" element={
+              <Route path="/student/dashboard" element={
                 <>
               <section className="student-welcome">
                 <div className="student-welcome__copy">
@@ -449,16 +564,16 @@ function StudentDashboard({ user, loading, error, onRetry, onLogout }) {
               <section className="student-panel" aria-labelledby="student-courses-title">
                 <div className="student-section-heading">
                   <div><span className="student-eyebrow">PICK UP WHERE YOU LEFT OFF</span><h2 id="student-courses-title">Continue learning</h2></div>
-                  <span className="student-section-link student-section-link--muted">Courses unavailable</span>
+                  <Link className="student-section-link" to="/student/courses">Browse courses</Link>
                 </div>
-                <EmptyState icon="book" title="Your courses will appear here" description="Course enrollment and lesson progress aren’t available from the current LMS API yet." />
+                <EmptyState icon="book" title="Explore the course catalog" description="Browse published courses and view your current enrollments." />
               </section>
 
               <div className="student-two-column">
                 <section className="student-panel" aria-labelledby="student-assignments-title">
                   <div className="student-section-heading">
                     <div><span className="student-eyebrow">STAY ON TRACK</span><h2 id="student-assignments-title">Upcoming assignments</h2></div>
-                    <Link className="student-section-link student-section-link--muted" to="/user/assignments">View all</Link>
+                    <Link className="student-section-link student-section-link--muted" to="/student/assignments">View all</Link>
                   </div>
                   <EmptyState icon="check" title="No assignment data available" description="Assignments and due dates aren’t connected to this account yet." />
                 </section>
@@ -467,7 +582,7 @@ function StudentDashboard({ user, loading, error, onRetry, onLogout }) {
                     <div><span className="student-eyebrow">FROM YOUR LEARNING COMMUNITY</span><h2 id="student-announcements-title">Announcements</h2></div>
                     <span className="student-section-link student-section-link--muted">Updates</span>
                   </div>
-                  <EmptyState icon="bell" title="Announcement data isn’t connected yet" description="Instructor and administrator announcements will appear here once the LMS provides them." />
+                  <EmptyState icon="bell" title="Announcement data isn’t connected yet" description="Main Admin and College Sub-Admin announcements will appear here once the LMS provides them." />
                 </section>
               </div>
 
@@ -506,37 +621,33 @@ function StudentDashboard({ user, loading, error, onRetry, onLogout }) {
               <footer className="student-footer"><span>Made for curious minds</span><span>Keep going, one lesson at a time.</span></footer>
                 </>
               } />
-              <Route path="/user/courses" element={
-                <StudentRoutePage eyebrow="YOUR LEARNING SPACE" title="My Courses">
-                  <EmptyState icon="book" title="Your courses will appear here" description="Course enrollment and lesson progress aren’t available from the current LMS API yet." />
-                </StudentRoutePage>
-              } />
-              <Route path="/user/assignments" element={
+              <Route path="/student/courses" element={<StudentCourses user={user} onLogout={onLogout} />} />
+              <Route path="/student/assignments" element={
                 <StudentRoutePage eyebrow="STAY ON TRACK" title="Assignments">
                   <EmptyState icon="check" title="No assignment data available" description="Assignments and due dates aren’t connected to this account yet." />
                 </StudentRoutePage>
               } />
-              <Route path="/user/results" element={
+              <Route path="/student/results" element={
                 <StudentRoutePage eyebrow="YOUR ACHIEVEMENTS" title="Grades &amp; Results">
                   <EmptyState icon="chart" title="Results are not available yet" description="Grades and assessment results will appear here when the LMS results API is connected." />
                 </StudentRoutePage>
               } />
-              <Route path="/user/resources" element={
+              <Route path="/student/resources" element={
                 <StudentRoutePage eyebrow="KEEP EXPLORING" title="Learning Resources">
                   <EmptyState icon="folder" title="Learning resources are not connected yet" description="Curated learning resources will appear here when the LMS content catalog is connected." />
                 </StudentRoutePage>
               } />
-              <Route path="/user/messages" element={
+              <Route path="/student/messages" element={
                 <StudentRoutePage eyebrow="YOUR LEARNING COMMUNITY" title="Messages">
                   <EmptyState icon="message" title="Messages are not connected yet" description="Course conversations and messages will appear here when messaging is available." />
                 </StudentRoutePage>
               } />
-              <Route path="/user/certificates" element={
+              <Route path="/student/certificates" element={
                 <StudentRoutePage eyebrow="YOUR ACHIEVEMENTS" title="Certificates">
                   <EmptyState icon="award" title="No certificates to show yet" description="Certificates you earn will appear here." />
                 </StudentRoutePage>
               } />
-              <Route path="/user/profile" element={
+              <Route path="/student/profile" element={
                 <StudentRoutePage eyebrow="YOUR ACCOUNT" title="My Profile">
                   <dl className="student-profile-details">
                     <div><dt>Full name</dt><dd>{user?.fullName || 'Not provided'}</dd></div>
@@ -546,22 +657,22 @@ function StudentDashboard({ user, loading, error, onRetry, onLogout }) {
                   </dl>
                 </StudentRoutePage>
               } />
-              <Route path="/user/settings" element={
+              <Route path="/student/settings" element={
                 <StudentRoutePage eyebrow="PREFERENCES" title="Settings">
                   <EmptyState icon="settings" title="Settings are not available yet" description="Account preferences will be available here in a future LMS update." />
                 </StudentRoutePage>
               } />
-              <Route path="/user/announcements" element={
+              <Route path="/student/announcements" element={
                 <StudentRoutePage eyebrow="FROM YOUR LEARNING COMMUNITY" title="Announcements">
-                  <EmptyState icon="bell" title="Announcement data isn’t connected yet" description="Instructor and administrator announcements will appear here once the LMS provides them." />
+                  <EmptyState icon="bell" title="Announcement data isn’t connected yet" description="Main Admin and College Sub-Admin announcements will appear here once the LMS provides them." />
                 </StudentRoutePage>
               } />
-              <Route path="/user/study-companion" element={
+              <Route path="/student/study-companion" element={
                 <StudentRoutePage eyebrow="A HELPFUL STUDY SPACE" title="AI Study Companion">
                   <EmptyState icon="spark" title="Study Companion is not connected" description="Topic explanations, lesson summaries and practice questions are planned for a future release." />
                 </StudentRoutePage>
               } />
-              <Route path="*" element={<Navigate to="/user/dashboard" replace />} />
+              <Route path="*" element={<Navigate to="/student/dashboard" replace />} />
             </Routes>
           )}
         </div>

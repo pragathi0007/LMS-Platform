@@ -1,8 +1,12 @@
 import jwt from 'jsonwebtoken'
 import { config } from '../config/env.js'
-import { accountModelsByRole } from '../models/account-models.js'
+import {
+  accountModelsByCollection,
+  matchesStoredAccountRole,
+  roleForAccountCollection,
+} from '../models/account-models.js'
 
-const allowedRoles = new Set(Object.keys(accountModelsByRole))
+const allowedRoles = new Set(['main_admin', 'college_admin', 'student'])
 
 export async function authenticate(req, res, next) {
   const authorization = req.get('authorization')
@@ -20,41 +24,35 @@ export async function authenticate(req, res, next) {
     if (
       typeof payload === 'string' ||
       typeof payload.sub !== 'string' ||
-      !allowedRoles.has(payload.role)
+      !allowedRoles.has(payload.role) ||
+      typeof payload.accountCollection !== 'string' ||
+      roleForAccountCollection(payload.accountCollection) !== payload.role
     ) {
       return res.status(401).json({ message: 'The access token is invalid.' })
     }
 
-    const AccountModel = accountModelsByRole[payload.role]
+    const AccountModel = accountModelsByCollection[payload.accountCollection]
     const user = await AccountModel.findById(payload.sub)
-    if (!user || user.role !== payload.role) {
+    if (!user || !matchesStoredAccountRole(payload.accountCollection, user.role)) {
       return res.status(401).json({ message: 'The access token is invalid.' })
     }
 
     const status = String(user.status || user.approvalStatus || '').toLowerCase()
-    if (user.role === 'instructor' && !['active', 'approved'].includes(status)) {
-      const message = status === 'rejected'
-        ? 'Your instructor account was not approved.'
-        : 'Your instructor account is awaiting admin approval.'
-      return res.status(403).json({ message })
-    }
-    if (
-      (user.role === 'instructor' && user.isActive !== true) ||
-      user.isActive === false ||
-      !['active', 'approved'].includes(status)
-    ) {
+    if (user.isActive === false || status !== 'active') {
       return res.status(403).json({ message: 'Your account is not active.' })
     }
 
     req.auth = {
       id: String(user._id),
-      role: user.role,
+      role: payload.role,
       user: {
         id: String(user._id),
         fullName: user.fullName,
         username: user.username,
         email: user.email,
-        role: user.role,
+        role: payload.role,
+        collegeId: user.collegeId ? String(user.collegeId) : undefined,
+        studentType: user.studentType,
         status: user.status,
         isActive: user.isActive,
       },

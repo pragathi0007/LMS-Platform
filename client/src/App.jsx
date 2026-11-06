@@ -1,63 +1,9 @@
 import React, { useEffect, useRef, useState } from 'react'
 import AdminDashboard from './AdminDashboard.jsx'
-import InstructorDashboard from './InstructorDashboard.jsx'
+import CollegeAdminDashboard from './CollegeAdminDashboard.jsx'
 import StudentDashboard from './StudentDashboard.jsx'
 import { useLocation } from 'react-router-dom'
 import './App.css'
-
-const expertiseAreas = [
-  'Business & Management',
-  'Computer Science',
-  'Data Science & Analytics',
-  'Design & Creative Arts',
-  'Education',
-  'Engineering',
-  'Finance & Accounting',
-  'Health & Wellness',
-  'Languages',
-  'Marketing & Communication',
-  'Mathematics',
-  'Personal Development',
-  'Science',
-]
-const subjectsByExpertise = {
-  'Business & Management': ['Entrepreneurship', 'Leadership', 'Project Management', 'Human Resources', 'Operations'],
-  'Computer Science': ['Web Development', 'Mobile Development', 'Programming', 'Cybersecurity', 'Cloud Computing'],
-  'Data Science & Analytics': ['Data Analysis', 'Machine Learning', 'Artificial Intelligence', 'Data Visualization', 'Statistics'],
-  'Design & Creative Arts': ['Graphic Design', 'UX/UI Design', 'Illustration', 'Photography', 'Video Editing'],
-  Education: ['Curriculum Design', 'Instructional Design', 'Early Childhood Education', 'Special Education'],
-  Engineering: ['Mechanical Engineering', 'Electrical Engineering', 'Civil Engineering', 'Robotics'],
-  'Finance & Accounting': ['Financial Planning', 'Bookkeeping', 'Investment Analysis', 'Tax Accounting'],
-  'Health & Wellness': ['Nutrition', 'Fitness', 'Mental Wellness', 'Public Health'],
-  Languages: ['English Language Learning', 'Spanish', 'French', 'Language Teaching'],
-  'Marketing & Communication': ['Digital Marketing', 'Content Marketing', 'Social Media', 'Public Relations'],
-  Mathematics: ['Algebra', 'Calculus', 'Geometry', 'Applied Mathematics'],
-  'Personal Development': ['Communication Skills', 'Career Development', 'Productivity', 'Public Speaking'],
-  Science: ['Biology', 'Chemistry', 'Physics', 'Environmental Science'],
-}
-const teachingLanguages = ['English', 'Spanish', 'French', 'German', 'Hindi', 'Mandarin', 'Portuguese', 'Other']
-const countryCodes = [
-  { country: 'United States / Canada', code: '+1' },
-  { country: 'United Kingdom', code: '+44' },
-  { country: 'India', code: '+91' },
-  { country: 'Australia', code: '+61' },
-  { country: 'New Zealand', code: '+64' },
-  { country: 'Germany', code: '+49' },
-  { country: 'France', code: '+33' },
-  { country: 'Other', code: '+' },
-]
-
-function readFileAsDataUrl(file) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader()
-    reader.onload = () => {
-      if (typeof reader.result === 'string') resolve(reader.result)
-      else reject(new Error('Unable to read the profile picture.'))
-    }
-    reader.onerror = () => reject(new Error('Unable to read the profile picture.'))
-    reader.readAsDataURL(file)
-  })
-}
 
 function getPasswordStrength(password) {
   return [
@@ -71,14 +17,19 @@ const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || 'http://localhost:500
 const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID
 let googleIdentityServicesPromise
 const DASHBOARD_PATHS = {
-  student: '/user/dashboard',
-  instructor: '/instructor/dashboard',
-  admin: '/admin/dashboard',
+  student: '/student/dashboard',
+  main_admin: '/admin/dashboard',
+  college_admin: '/college-admin/dashboard',
 }
 const DASHBOARD_API_ROLES = {
-  student: 'user',
-  instructor: 'instructor',
-  admin: 'admin',
+  student: 'student',
+  main_admin: 'main_admin',
+  college_admin: 'college_admin',
+}
+const AUTH_ROLE_KEYS = {
+  Student: 'student',
+  'Main Admin': 'main_admin',
+  'College Sub-Admin': 'college_admin',
 }
 
 function loadGoogleIdentityServices() {
@@ -172,8 +123,8 @@ async function checkUsernameAvailability(username, signal) {
 
 function BrandMark() {
   return (
-    <a className="brand" href="#" aria-label="aiHustle home">
-      <img src="/logo.png" alt="aiHustle" />
+    <a className="brand" href="#" aria-label="LMS home">
+      <img src="/logo.png" alt="LMS logo" />
     </a>
   )
 }
@@ -225,647 +176,6 @@ function PasswordField({ id, name = id, label, value, onChange, autoComplete, st
   )
 }
 
-function RoleTabs({ roles, selectedRole, onSelect, label }) {
-  return (
-    <div className="role-tabs" role="tablist" aria-label={label}>
-      {roles.map((role) => (
-        <button
-          key={role}
-          type="button"
-          role="tab"
-          aria-selected={selectedRole === role}
-          className={selectedRole === role ? 'role-tab is-selected' : 'role-tab'}
-          onClick={() => onSelect(role)}
-        >
-          {role}
-        </button>
-      ))}
-    </div>
-  )
-}
-
-function InstructorRegistrationForm({ onMessage }) {
-  const [step, setStep] = useState(1)
-  const [isSubmitting, setIsSubmitting] = useState(false)
-  const [values, setValues] = useState({
-    fullName: '',
-    email: '',
-    username: '',
-    password: '',
-    confirmPassword: '',
-    countryCode: '+1',
-    phone: '',
-    professionalTitle: '',
-    expertise: [],
-    subjects: [],
-    customSubjects: [],
-    customSubject: '',
-    experience: '',
-    languages: [],
-    customLanguage: '',
-    termsAccepted: false,
-  })
-  const [profilePicture, setProfilePicture] = useState(null)
-  const [photoError, setPhotoError] = useState('')
-  const [photoPreview, setPhotoPreview] = useState('')
-  const [expertiseSearch, setExpertiseSearch] = useState('')
-  const [selectionErrors, setSelectionErrors] = useState({})
-  const [fieldErrors, setFieldErrors] = useState({})
-  const passwordStrength = getPasswordStrength(values.password)
-
-  useEffect(() => {
-    if (!profilePicture) {
-      setPhotoPreview('')
-      return undefined
-    }
-
-    const previewUrl = URL.createObjectURL(profilePicture)
-    setPhotoPreview(previewUrl)
-    return () => URL.revokeObjectURL(previewUrl)
-  }, [profilePicture])
-
-  function updateValue(event) {
-    const { name, value, type, checked } = event.currentTarget
-    event.currentTarget.setCustomValidity('')
-    setValues((current) => ({ ...current, [name]: type === 'checkbox' ? checked : value }))
-    setFieldErrors((current) => ({ ...current, [name]: '' }))
-  }
-
-  function toggleSelection(name, option) {
-    if (name === 'expertise') {
-      setValues((current) => {
-        const expertise = current.expertise.includes(option)
-          ? current.expertise.filter((item) => item !== option)
-          : [...current.expertise, option]
-        const availableSubjects = expertise.flatMap((area) => subjectsByExpertise[area])
-
-        return {
-          ...current,
-          expertise,
-          subjects: [
-            ...current.subjects.filter((subject) => current.customSubjects.includes(subject)),
-            ...current.subjects.filter((subject) => availableSubjects.includes(subject)),
-          ],
-        }
-      })
-      setSelectionErrors((current) => ({ ...current, expertise: '', subjects: '' }))
-      setFieldErrors((current) => ({ ...current, expertise: '', subjects: '' }))
-      return
-    }
-
-    setValues((current) => ({
-      ...current,
-      [name]: current[name].includes(option)
-        ? current[name].filter((item) => item !== option)
-        : [...current[name], option],
-      ...(name === 'languages' && option === 'Other' && current.languages.includes(option)
-        ? { customLanguage: '' }
-        : {}),
-    }))
-    setSelectionErrors((current) => ({ ...current, [name]: '' }))
-    setFieldErrors((current) => ({ ...current, [name]: '' }))
-  }
-
-  function addCustomSubject(event) {
-    const subject = values.customSubject.trim()
-    const input = event.currentTarget.form.elements.customSubject
-    const isDuplicate = [...values.subjects, ...values.customSubjects].some(
-      (item) => item.toLowerCase() === subject.toLowerCase(),
-    )
-    if (!subject) {
-      input.setCustomValidity('')
-      return
-    }
-
-    input.setCustomValidity(
-      isDuplicate ? 'This subject or skill has already been added.' : '',
-    )
-
-    if (!input.reportValidity()) return
-
-    setValues((current) => ({
-      ...current,
-      subjects: [...current.subjects, subject],
-      customSubjects: [...current.customSubjects, subject],
-      customSubject: '',
-    }))
-    setSelectionErrors((current) => ({ ...current, subjects: '' }))
-    setFieldErrors((current) => ({ ...current, subjects: '' }))
-  }
-
-  function removeCustomSubject(subject) {
-    setValues((current) => ({
-      ...current,
-      subjects: current.subjects.filter((item) => item !== subject),
-      customSubjects: current.customSubjects.filter((item) => item !== subject),
-    }))
-  }
-
-  function handlePhotoChange(event) {
-    const file = event.currentTarget.files?.[0]
-    setPhotoError('')
-
-    if (!file) {
-      setProfilePicture(null)
-      return
-    }
-
-    if (!file.type.startsWith('image/')) {
-      setPhotoError('Choose an image file, such as a JPG or PNG.')
-      event.currentTarget.value = ''
-      setProfilePicture(null)
-      return
-    }
-
-    if (file.size > 5 * 1024 * 1024) {
-      setPhotoError('Your profile picture must be 5 MB or smaller.')
-      event.currentTarget.value = ''
-      setProfilePicture(null)
-      return
-    }
-
-    setProfilePicture(file)
-  }
-
-  async function handleSubmit(event) {
-    event.preventDefault()
-    const form = event.currentTarget
-
-    if (step === 1) {
-      const password = form.elements.password
-      const confirmPassword = form.elements.confirmPassword
-      const username = form.elements.username
-      password.setCustomValidity(
-        passwordStrength >= 3
-          ? ''
-          : 'Use at least 8 characters and meet 3 of these: uppercase and lowercase letters, a number, and a symbol.',
-      )
-      username.setCustomValidity(
-        /^[a-zA-Z0-9._-]{3,30}$/.test(values.username)
-          ? ''
-          : 'Use 3–30 letters, numbers, dots, underscores, or hyphens.',
-      )
-      confirmPassword.setCustomValidity(
-        values.password === values.confirmPassword ? '' : 'Your passwords do not match.',
-      )
-
-      if (!form.reportValidity()) return
-      setStep(2)
-      return
-    }
-
-    const nextSelectionErrors = {
-      expertise: values.expertise.length ? '' : 'Select at least one area of expertise.',
-      subjects:
-        values.subjects.some((subject) => !values.customSubjects.includes(subject)) ||
-        values.customSubjects.length > 0
-          ? ''
-          : 'Select or add at least one subject or skill.',
-      languages: values.languages.length
-        ? values.languages.includes('Other') && !values.customLanguage.trim()
-          ? 'Enter the other language you teach.'
-          : ''
-        : 'Select at least one teaching language.',
-    }
-    const phone = form.elements.phone
-    const phoneDigits = values.phone.replace(/\D/g, '')
-    const nextFieldErrors = {
-      professionalTitle: values.professionalTitle.trim() ? '' : 'Enter your professional title.',
-      phone:
-        phoneDigits.length >= 7 && phoneDigits.length <= 15 && /^[0-9\s().-]+$/.test(values.phone.trim())
-          ? ''
-          : 'Enter a phone number containing 7–15 digits.',
-      experience: values.experience ? '' : 'Select your teaching experience.',
-      customLanguage:
-        values.languages.includes('Other') && !values.customLanguage.trim()
-          ? 'Enter the other language you teach.'
-          : '',
-    }
-    phone.setCustomValidity(
-      phoneDigits.length >= 7 && phoneDigits.length <= 15 && /^[0-9\s().-]+$/.test(values.phone.trim())
-        ? ''
-        : 'Enter a phone number with 7–15 digits. Spaces, parentheses, dots, and hyphens are allowed.',
-    )
-    if (form.elements.customSubject) {
-      form.elements.customSubject.setCustomValidity('')
-    }
-    if (values.languages.includes('Other')) {
-      const customLanguage = form.elements.customLanguage
-      customLanguage.setCustomValidity(
-        values.customLanguage.trim() ? '' : 'Enter the other language you teach.',
-      )
-    }
-    setSelectionErrors(nextSelectionErrors)
-    setFieldErrors(nextFieldErrors)
-
-    if (
-      !form.reportValidity() ||
-      nextSelectionErrors.expertise ||
-      nextSelectionErrors.subjects ||
-      nextSelectionErrors.languages ||
-      Object.values(nextFieldErrors).some(Boolean)
-    ) return
-
-    setIsSubmitting(true)
-    onMessage('')
-    try {
-      const profilePictureData = profilePicture
-        ? await readFileAsDataUrl(profilePicture)
-        : undefined
-      const result = await registerAccount({
-        role: 'instructor',
-        fullName: values.fullName,
-        email: values.email,
-        username: values.username,
-        password: values.password,
-        confirmPassword: values.confirmPassword,
-        termsAccepted: values.termsAccepted,
-        instructorDetails: {
-          countryCode: values.countryCode,
-          phone: values.phone,
-          professionalTitle: values.professionalTitle,
-          expertise: values.expertise,
-          subjects: values.subjects,
-          customSubjects: values.customSubjects,
-          experience: values.experience,
-          languages: values.languages,
-          customLanguage: values.customLanguage,
-          profilePicture: profilePictureData
-            ? {
-                dataUrl: profilePictureData,
-                contentType: profilePicture.type,
-              }
-            : undefined,
-        },
-      })
-      onMessage(result.message || 'Your instructor application is awaiting admin approval.')
-    } catch (error) {
-      if (error?.fieldErrors && typeof error.fieldErrors === 'object' && !Array.isArray(error.fieldErrors)) {
-        setFieldErrors((current) => ({ ...current, ...error.fieldErrors }))
-        setSelectionErrors((current) => ({
-          ...current,
-          expertise: error.fieldErrors.expertise || current.expertise,
-          subjects: error.fieldErrors.subjects || current.subjects,
-          languages: error.fieldErrors.languages || current.languages,
-        }))
-      }
-      onMessage(
-        error instanceof TypeError
-          ? 'Could not connect to the server. Check that the backend is running and try again.'
-          : error instanceof Error
-            ? error.message
-            : 'Instructor registration failed. Please try again.',
-        'error',
-      )
-    } finally {
-      setIsSubmitting(false)
-    }
-  }
-
-  const filteredExpertise = expertiseAreas.filter((area) =>
-    area.toLowerCase().includes(expertiseSearch.trim().toLowerCase()),
-  )
-
-  return (
-    <form className="auth-form instructor-form" onSubmit={handleSubmit} noValidate>
-      <div className="form-heading">
-        <p className="eyebrow">INSTRUCTOR APPLICATION</p>
-        <h1 id="instructor-step-title">
-          {step === 1 ? 'Create your account.' : 'Share your expertise.'}
-        </h1>
-        <p className="form-subtitle">
-          {step === 1
-            ? 'Start with your account details. You can add your teaching profile next.'
-            : 'Tell us about your experience and how you’ll help learners grow.'}
-        </p>
-        {fieldErrors.professionalDetails && (
-          <span className="field-error" role="alert">{fieldErrors.professionalDetails}</span>
-        )}
-      </div>
-
-      <ol className="registration-progress" aria-label="Registration progress">
-        {['Account Details', 'Professional Details'].map((label, index) => {
-          const itemStep = index + 1
-          return (
-            <li
-              key={label}
-              className={step === itemStep ? 'is-current' : step > itemStep ? 'is-complete' : ''}
-              aria-current={step === itemStep ? 'step' : undefined}
-            >
-              <span className="progress-step-number">{step > itemStep ? '✓' : itemStep}</span>
-              <span>{label}</span>
-            </li>
-          )
-        })}
-      </ol>
-
-      {step === 1 ? (
-        <>
-          <div className="form-fields instructor-grid">
-            <div className="field">
-              <label htmlFor="instructor-full-name">Full name</label>
-              <input
-                id="instructor-full-name"
-                name="fullName"
-                type="text"
-                autoComplete="name"
-                minLength={2}
-                maxLength={100}
-                value={values.fullName}
-                onChange={updateValue}
-                required
-              />
-            </div>
-            <div className="field">
-              <label htmlFor="instructor-email">Email address</label>
-              <input
-                id="instructor-email"
-                name="email"
-                type="email"
-                autoComplete="email"
-                value={values.email}
-                onChange={updateValue}
-                required
-              />
-            </div>
-            <div className="field">
-              <label htmlFor="instructor-username">Username</label>
-              <input
-                id="instructor-username"
-                name="username"
-                type="text"
-                autoComplete="username"
-                minLength={3}
-                maxLength={30}
-                title="Use 3–30 letters, numbers, dots, underscores, or hyphens."
-                value={values.username}
-                onChange={updateValue}
-                required
-              />
-            </div>
-            <div className="field profile-picture-field">
-              <label htmlFor="profile-picture">Profile picture <span>(optional)</span></label>
-              <div className="profile-picture-control">
-                <div className="profile-picture-preview" aria-hidden="true">
-                  {photoPreview
-                    ? <img src={photoPreview} alt="" />
-                    : <span>{values.fullName.trim().charAt(0).toUpperCase() || '＋'}</span>}
-                </div>
-                <div className="profile-picture-copy">
-                  <label className="upload-button" htmlFor="profile-picture">Choose a photo</label>
-                  <span>JPG or PNG, up to 5 MB</span>
-                  <input
-                    id="profile-picture"
-                    name="profilePicture"
-                    type="file"
-                    accept="image/*"
-                    onChange={handlePhotoChange}
-                    aria-describedby={photoError ? 'profile-picture-error' : 'profile-picture-help'}
-                  />
-                </div>
-              </div>
-              <span id="profile-picture-help" className="field-hint">A clear, friendly headshot works best.</span>
-              {photoError && <span id="profile-picture-error" className="field-error" role="alert">{photoError}</span>}
-            </div>
-            <PasswordField
-              id="instructor-password"
-              name="password"
-              label="Password"
-              value={values.password}
-              onChange={updateValue}
-              autoComplete="new-password"
-              strength={passwordStrength}
-            />
-            <PasswordField
-              id="instructor-confirm-password"
-              name="confirmPassword"
-              label="Confirm password"
-              value={values.confirmPassword}
-              onChange={updateValue}
-              autoComplete="new-password"
-            />
-          </div>
-          <button className="primary-button" type="submit">
-            Continue to professional details <span aria-hidden="true">→</span>
-          </button>
-        </>
-      ) : (
-        <>
-          <div className="form-fields instructor-grid">
-            <div className="field">
-              <label htmlFor="instructor-phone">Phone number</label>
-              <div className="phone-input">
-                <select
-                  id="instructor-country-code"
-                  name="countryCode"
-                  aria-label="Phone country code"
-                  value={values.countryCode}
-                  onChange={updateValue}
-                  aria-describedby={fieldErrors.countryCode ? 'country-code-error' : undefined}
-                >
-                  {countryCodes.map(({ country, code }) => (
-                    <option key={`${country}-${code}`} value={code}>{code} — {country}</option>
-                  ))}
-                </select>
-                <input
-                  id="instructor-phone"
-                  name="phone"
-                  type="tel"
-                  autoComplete="tel-national"
-                  inputMode="tel"
-                  title="Enter 7–15 digits; spaces, parentheses, dots, and hyphens are allowed."
-                  placeholder="Phone number"
-                  value={values.phone}
-                  onChange={updateValue}
-                  required
-                  aria-describedby={fieldErrors.phone ? 'instructor-phone-error' : undefined}
-                />
-              </div>
-              {fieldErrors.countryCode && <span id="country-code-error" className="field-error" role="alert">{fieldErrors.countryCode}</span>}
-              {fieldErrors.phone && <span id="instructor-phone-error" className="field-error" role="alert">{fieldErrors.phone}</span>}
-            </div>
-            <div className="field">
-              <label htmlFor="professional-title">Professional title</label>
-              <input
-                id="professional-title"
-                name="professionalTitle"
-                type="text"
-                placeholder="e.g. Senior Product Designer"
-                maxLength={100}
-                value={values.professionalTitle}
-                onChange={updateValue}
-                required
-                aria-describedby={fieldErrors.professionalTitle ? 'professional-title-error' : undefined}
-              />
-              {fieldErrors.professionalTitle && <span id="professional-title-error" className="field-error" role="alert">{fieldErrors.professionalTitle}</span>}
-            </div>
-            <fieldset className="field selection-field full-span">
-              <legend>Area of expertise <span className="required-mark">*</span></legend>
-              <p className="field-hint">Search and select all that apply.</p>
-              <input
-                className="expertise-search"
-                type="search"
-                aria-label="Search areas of expertise"
-                placeholder="Search expertise"
-                value={expertiseSearch}
-                onChange={(event) => setExpertiseSearch(event.currentTarget.value)}
-              />
-              <div className="choice-grid expertise-choices">
-                {filteredExpertise.length ? filteredExpertise.map((area) => (
-                  <label className="choice-chip" key={area}>
-                    <input
-                      type="checkbox"
-                      checked={values.expertise.includes(area)}
-                      onChange={() => toggleSelection('expertise', area)}
-                    />
-                    <span>{area}</span>
-                  </label>
-                )) : <span className="field-hint">No matching areas. Try another search.</span>}
-              </div>
-              {(selectionErrors.expertise || fieldErrors.expertise) && <span className="field-error" role="alert">{selectionErrors.expertise || fieldErrors.expertise}</span>}
-            </fieldset>
-            <fieldset className="field selection-field full-span">
-              <legend>Specific subjects / skills <span className="required-mark">*</span></legend>
-              <p className="field-hint">Choose from the subjects for your selected expertise areas, or add your own.</p>
-              {values.expertise.length ? (
-                <div className="subject-category-list">
-                  {values.expertise.map((area) => (
-                    <div className="subject-category" key={area}>
-                      <p className="subject-category-title">{area}</p>
-                      <div className="choice-grid">
-                        {subjectsByExpertise[area].map((subject) => (
-                          <label className="choice-chip" key={subject}>
-                            <input
-                              type="checkbox"
-                              name="subjects"
-                              value={subject}
-                              checked={values.subjects.includes(subject)}
-                              onChange={() => toggleSelection('subjects', subject)}
-                            />
-                            <span>{subject}</span>
-                          </label>
-                        ))}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <p className="field-hint">Select an area of expertise to see related subjects and skills.</p>
-              )}
-              {values.expertise.length > 0 && (
-                <div className="custom-subject-entry">
-                  <input
-                    id="custom-subject"
-                    name="customSubject"
-                    type="text"
-                    maxLength={80}
-                    placeholder="Add a custom subject or skill"
-                    value={values.customSubject}
-                    onChange={updateValue}
-                  />
-                  <button className="back-button" type="button" onClick={addCustomSubject}>Add</button>
-                </div>
-              )}
-              {values.customSubjects.length > 0 && (
-                <div className="choice-grid custom-subject-list" aria-label="Custom subjects">
-                  {values.customSubjects.map((subject) => (
-                    <span className="custom-subject-item" key={subject}>
-                      <input type="hidden" name="subjects" value={subject} />
-                      <input type="hidden" name="customSubjects" value={subject} />
-                      <button
-                        className="custom-subject-chip"
-                        type="button"
-                        onClick={() => removeCustomSubject(subject)}
-                        aria-label={`Remove custom subject ${subject}`}
-                      >
-                        {subject}<span aria-hidden="true"> ×</span>
-                      </button>
-                    </span>
-                  ))}
-                </div>
-              )}
-              {(selectionErrors.subjects || fieldErrors.subjects) && <span className="field-error" role="alert">{selectionErrors.subjects || fieldErrors.subjects}</span>}
-            </fieldset>
-            <div className="field">
-              <label htmlFor="teaching-experience">Teaching experience</label>
-              <select
-                id="teaching-experience"
-                name="experience"
-                value={values.experience}
-                onChange={updateValue}
-                required
-                aria-describedby={fieldErrors.experience ? 'teaching-experience-error' : undefined}
-              >
-                <option value="">Select experience</option>
-                <option value="fresher">Fresher / No Experience</option>
-                <option value="less-than-1">Less than 1 year</option>
-                <option value="1-3">1–3 years</option>
-                <option value="3-5">3–5 years</option>
-                <option value="5-10">5–10 years</option>
-                <option value="10+">10+ years</option>
-              </select>
-              {fieldErrors.experience && <span id="teaching-experience-error" className="field-error" role="alert">{fieldErrors.experience}</span>}
-            </div>
-            <fieldset className="field selection-field full-span">
-              <legend>Teaching languages <span className="required-mark">*</span></legend>
-              <div className="choice-grid language-choices">
-                {teachingLanguages.map((language) => (
-                  <label className="choice-chip" key={language}>
-                    <input
-                      type="checkbox"
-                      checked={values.languages.includes(language)}
-                      onChange={() => toggleSelection('languages', language)}
-                    />
-                    <span>{language}</span>
-                  </label>
-                ))}
-              </div>
-              {values.languages.includes('Other') && (
-                <div className="field custom-language-field">
-                  <label htmlFor="custom-language">Other teaching language</label>
-                  <input
-                    id="custom-language"
-                    name="customLanguage"
-                    type="text"
-                    maxLength={60}
-                    placeholder="Enter a language"
-                    value={values.customLanguage}
-                    onChange={updateValue}
-                    required
-                    aria-describedby={fieldErrors.customLanguage ? 'custom-language-error' : undefined}
-                  />
-                  {fieldErrors.customLanguage && <span id="custom-language-error" className="field-error" role="alert">{fieldErrors.customLanguage}</span>}
-                </div>
-              )}
-              {(selectionErrors.languages || fieldErrors.languages) && <span className="field-error" role="alert">{selectionErrors.languages || fieldErrors.languages}</span>}
-            </fieldset>
-            <label className="terms-checkbox full-span">
-              <input
-                name="termsAccepted"
-                type="checkbox"
-                checked={values.termsAccepted}
-                onChange={updateValue}
-                required
-              />
-              <span>I agree to the <a href="#instructor-terms">Instructor Terms &amp; Conditions</a>.</span>
-            </label>
-          </div>
-          <p className="approval-note">
-            <span className="approval-dot" aria-hidden="true" />
-            Instructor accounts are reviewed and require admin approval.
-          </p>
-          <div className="wizard-actions">
-            <button className="back-button" type="button" onClick={() => setStep(1)} disabled={isSubmitting}>Back</button>
-            <button className="primary-button" type="submit" disabled={isSubmitting}>
-              {isSubmitting ? 'Submitting application…' : 'Submit instructor application'} <span aria-hidden="true">→</span>
-            </button>
-          </div>
-        </>
-      )}
-    </form>
-  )
-}
-
 function AuthForm({ mode, role, onMessage, onRegistrationSuccess }) {
   const [password, setPassword] = useState('')
   const [confirmPassword, setConfirmPassword] = useState('')
@@ -880,7 +190,8 @@ function AuthForm({ mode, role, onMessage, onRegistrationSuccess }) {
   const googleCodeClient = useRef(null)
   const onMessageRef = useRef(onMessage)
   const isRegistering = mode === 'register'
-  const isInstructor = role === 'Instructor'
+  const roleKey = AUTH_ROLE_KEYS[role]
+  const isAdministrativeRole = roleKey === 'main_admin' || roleKey === 'college_admin'
 
   onMessageRef.current = onMessage
 
@@ -926,7 +237,7 @@ function AuthForm({ mode, role, onMessage, onRegistrationSuccess }) {
   }, [isRegistering, username])
 
   useEffect(() => {
-    if (isRegistering || role === 'Admin' || !GOOGLE_CLIENT_ID) return undefined
+    if (isRegistering || isAdministrativeRole || !GOOGLE_CLIENT_ID) return undefined
 
     let cancelled = false
     loadGoogleIdentityServices()
@@ -966,7 +277,7 @@ function AuthForm({ mode, role, onMessage, onRegistrationSuccess }) {
       cancelled = true
       googleCodeClient.current = null
     }
-  }, [isRegistering, role])
+  }, [isRegistering, isAdministrativeRole])
 
   async function handleSubmit(event) {
     event.preventDefault()
@@ -1011,33 +322,45 @@ function AuthForm({ mode, role, onMessage, onRegistrationSuccess }) {
     setIsSubmitting(true)
     onMessage('')
     try {
-      const response = await fetch(`${API_BASE_URL}/auth/${isRegistering ? 'register' : 'login'}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(isRegistering
-          ? {
-              fullName: form.elements.fullName.value,
-              email: form.elements.email.value,
-              username: form.elements.username.value,
-              password,
-              confirmPassword,
-              role: 'student',
-              accountType: 'independent',
-            }
-          : {
-              identifier: identifier.value,
-              password,
-              role: role.toLowerCase(),
-            }),
-      })
-      const result = await readApiResponse(response)
-
-      if (!response.ok) {
+      let response
+      let result
+      let authenticatedRole = roleKey
+      const loginRoles = ['student', 'main_admin', 'college_admin']
+      for (const candidateRole of isRegistering ? ['student'] : loginRoles) {
+        response = await fetch(`${API_BASE_URL}/auth/${isRegistering ? 'register' : 'login'}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(isRegistering
+            ? {
+                fullName: form.elements.fullName.value,
+                email: form.elements.email.value,
+                username: form.elements.username.value,
+                password,
+                confirmPassword,
+                role: 'student',
+                accountType: 'independent',
+              }
+            : {
+                identifier: identifier.value,
+                password,
+                role: candidateRole,
+              }),
+        })
+        result = await readApiResponse(response)
+        if (response.ok) {
+          authenticatedRole = candidateRole
+          break
+        }
+        if (!isRegistering && response.status === 401) continue
         throw new Error(
           typeof result.message === 'string'
             ? result.message
             : `${isRegistering ? 'Registration' : 'Login'} failed. Please try again.`,
         )
+      }
+
+      if (!response.ok) {
+        throw new Error('Invalid username/email or password.')
       }
 
       if (isRegistering) {
@@ -1049,11 +372,10 @@ function AuthForm({ mode, role, onMessage, onRegistrationSuccess }) {
         return
       }
 
-      const expectedRole = role.toLowerCase()
       if (
         typeof result.token !== 'string' ||
         typeof result.user?.id !== 'string' ||
-        result.user.role !== expectedRole
+        result.user.role !== authenticatedRole
       ) {
         throw new Error('The server returned incomplete or mismatched login details.')
       }
@@ -1167,7 +489,7 @@ function AuthForm({ mode, role, onMessage, onRegistrationSuccess }) {
     setIsGoogleSubmitting(true)
     onMessage('')
     googleAttempt.current = {
-      role: role.toLowerCase(),
+      role: roleKey,
       active: true,
       codeReceived: false,
       timeoutId: window.setTimeout(() => {
@@ -1189,14 +511,10 @@ function AuthForm({ mode, role, onMessage, onRegistrationSuccess }) {
   }
 
   const title = isRegistering
-    ? isInstructor
-      ? 'Teach what moves you.'
-      : 'Your next chapter starts here.'
-    : role === 'Admin'
-      ? 'Welcome back, admin.'
-      : role === 'Instructor'
-        ? 'Good to have you back.'
-        : 'A little closer to your goals.'
+    ? 'Your next chapter starts here.'
+    : isAdministrativeRole
+      ? 'Welcome back.'
+      : 'A little closer to your goals.'
 
   return (
     <form
@@ -1209,9 +527,7 @@ function AuthForm({ mode, role, onMessage, onRegistrationSuccess }) {
         <h1>{isRegistering ? title : 'Login'}</h1>
         <p className="form-subtitle">
           {isRegistering
-            ? isInstructor
-              ? 'Share your expertise with a community ready to learn.'
-              : 'Build a learning habit that takes you somewhere new.'
+            ? 'Build a learning habit that takes you somewhere new.'
             : title}
         </p>
       </div>
@@ -1325,24 +641,6 @@ function AuthForm({ mode, role, onMessage, onRegistrationSuccess }) {
           />
         )}
 
-        {isRegistering && isInstructor && (
-          <>
-            <div className="field">
-              <label htmlFor="professional-details">Professional details</label>
-              <textarea
-                id="professional-details"
-                name="professionalDetails"
-                rows="3"
-                placeholder="Your field, experience, or areas of expertise"
-                required
-              />
-            </div>
-            <p className="approval-note">
-              <span className="approval-dot" aria-hidden="true" />
-              Instructor accounts are reviewed and require admin approval.
-            </p>
-          </>
-        )}
       </div>
 
       {!isRegistering && (
@@ -1379,7 +677,7 @@ function AuthForm({ mode, role, onMessage, onRegistrationSuccess }) {
         {!isSubmitting && <span aria-hidden="true">→</span>}
       </button>
 
-      {!isRegistering && role !== 'Admin' && (
+      {!isRegistering && !isAdministrativeRole && (
         <>
           <div className="separator"><span>or</span></div>
           <button
@@ -1403,10 +701,81 @@ function AuthForm({ mode, role, onMessage, onRegistrationSuccess }) {
   )
 }
 
+function ActivationPage() {
+  const location = useLocation()
+  const token = new URLSearchParams(location.search).get('token') || ''
+  const [error, setError] = useState('')
+  const [message, setMessage] = useState('')
+  const [isSubmitting, setIsSubmitting] = useState(false)
+
+  async function activateAccount(event) {
+    event.preventDefault()
+    setError('')
+    setMessage('')
+    const form = event.currentTarget
+    const password = form.elements.password.value
+    const confirmPassword = form.elements.confirmPassword.value
+    if (password !== confirmPassword) {
+      setError('Your passwords do not match.')
+      return
+    }
+
+    setIsSubmitting(true)
+    try {
+      const response = await fetch(`${API_BASE_URL}/auth/activate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token, password, confirmPassword }),
+      })
+      const result = await readApiResponse(response)
+      if (!response.ok) throw new Error(result.message || 'Account activation failed.')
+      setMessage(result.message)
+      form.reset()
+    } catch (activationError) {
+      setError(activationError instanceof Error ? activationError.message : 'Account activation failed.')
+    } finally {
+      setIsSubmitting(false)
+    }
+  }
+
+  return (
+    <main className="activation-page">
+      <section className="dashboard-card">
+        <BrandMark />
+        <p className="dashboard-eyebrow">COLLEGE SUB-ADMIN</p>
+        <h1>Create your password</h1>
+        {!token ? (
+          <p role="alert">This activation link is missing its token. Ask your administrator to send a new link.</p>
+        ) : message ? (
+          <>
+            <p role="status">{message}</p>
+            <a className="dashboard-button" href="/">Continue to login</a>
+          </>
+        ) : (
+          <form className="activation-form" onSubmit={activateAccount}>
+            <label htmlFor="activation-password">Password</label>
+            <input id="activation-password" name="password" type="password" minLength="8" maxLength="72" autoComplete="new-password" required />
+            <label htmlFor="activation-confirm-password">Confirm password</label>
+            <input id="activation-confirm-password" name="confirmPassword" type="password" minLength="8" maxLength="72" autoComplete="new-password" required />
+            {error && <p role="alert">{error}</p>}
+            <button className="dashboard-button" type="submit" disabled={isSubmitting}>
+              {isSubmitting ? 'Activating…' : 'Activate account'}
+            </button>
+          </form>
+        )}
+      </section>
+    </main>
+  )
+}
+
 function DashboardPage({ role }) {
   const [user, setUser] = useState(null)
   const [error, setError] = useState('')
-  const roleLabels = { student: 'Student', instructor: 'Instructor', admin: 'Admin' }
+  const roleLabels = {
+    student: 'Student',
+    main_admin: 'Main Admin',
+    college_admin: 'College Sub-Admin',
+  }
 
   useEffect(() => {
     const controller = new AbortController()
@@ -1431,7 +800,7 @@ function DashboardPage({ role }) {
         if (
           !response.ok ||
           result.user?.role !== role ||
-          (role === 'instructor' && !userIsActive)
+          (role === 'college_admin' && !userIsActive)
         ) {
           sessionStorage.removeItem('lms.auth')
           window.location.replace('/')
@@ -1467,19 +836,12 @@ function DashboardPage({ role }) {
     )
   }
 
-  if (role === 'admin' && user) {
+  if (role === 'main_admin' && user) {
     return <AdminDashboard email={user.email} onLogout={signOut} />
   }
-  if (role === 'instructor' && user) {
-    return (
-      <InstructorDashboard
-        fullName={user.fullName}
-        email={user.email}
-        onLogout={signOut}
-      />
-    )
+  if (role === 'college_admin' && user) {
+    return <CollegeAdminDashboard user={user} onLogout={signOut} />
   }
-
   return (
     <main className="dashboard-landing">
       <section className="dashboard-card" aria-live="polite">
@@ -1518,11 +880,8 @@ function App() {
   const [message, setMessage] = useState(null)
   const [isDark, setIsDark] = useState(false)
   const isRegistering = mode === 'register'
-  const selectedRole = 'Student'
-  const dashboardRole = location.pathname.startsWith('/user/')
-    ? 'student'
-    : Object.entries(DASHBOARD_PATHS)
-      .find(([, path]) => path === location.pathname)?.[0]
+  const dashboardRole = Object.entries(DASHBOARD_PATHS)
+    .find(([, path]) => path === location.pathname)?.[0]
 
   function switchMode(nextMode) {
     setMode(nextMode)
@@ -1536,6 +895,9 @@ function App() {
 
   if (dashboardRole) {
     return <DashboardPage role={dashboardRole} />
+  }
+  if (location.pathname === '/activate') {
+    return <ActivationPage />
   }
 
   return (
@@ -1628,9 +990,9 @@ function App() {
         <div className="mobile-brand"><BrandMark /></div>
         <div className="auth-shell">
           <AuthForm
-            key={`${mode}-${selectedRole}`}
+            key={mode}
             mode={mode}
-            role={selectedRole}
+            role="Student"
             onMessage={(text, type = 'success') => setMessage(text ? { text, type } : null)}
             onRegistrationSuccess={completeRegistration}
           />
@@ -1657,7 +1019,7 @@ function App() {
             By continuing, you agree to our <a href="#terms">Terms</a> and <a href="#privacy">Privacy Policy</a>.
           </p>
         </div>
-        <div className="form-bottom"><span>Made for curious minds</span><span>© 2025 Morrow Learning</span></div>
+        <div className="form-bottom"><span>Made for curious minds</span><span>© 2025 LMS</span></div>
       </section>
     </main>
   )

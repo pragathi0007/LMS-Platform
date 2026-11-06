@@ -1,13 +1,17 @@
 import bcrypt from 'bcryptjs'
 import mongoose from 'mongoose'
+import { pathToFileURL } from 'node:url'
 import { config } from '../config/env.js'
 import { connectToDatabase } from '../config/db.js'
 import AccountIdentity from '../models/AccountIdentity.js'
 import { Admin } from '../models/account-models.js'
 
-async function seedAdmin() {
-  const email = config.adminEmail?.trim().toLowerCase()
-  const password = config.adminPassword
+export async function createAdminAccount({
+  email: configuredEmail = config.adminEmail,
+  password = config.adminPassword,
+  connect = true,
+} = {}) {
+  const email = configuredEmail?.trim().toLowerCase()
   if (!email || !password) {
     throw new Error('Set ADMIN_EMAIL and ADMIN_PASSWORD in backend/.env before seeding.')
   }
@@ -17,12 +21,12 @@ async function seedAdmin() {
   if (password.length < 12) {
     throw new Error('ADMIN_PASSWORD must be at least 12 characters.')
   }
-  await connectToDatabase()
+  if (connect) await connectToDatabase()
 
   const existingAdmin = await Admin.findOne({ username: 'admin' })
   if (existingAdmin) {
     console.log('Admin account already exists; no changes made.')
-    return
+    return existingAdmin
   }
 
   const duplicate = await AccountIdentity.findOne({
@@ -47,6 +51,7 @@ async function seedAdmin() {
           username: 'admin',
           email,
           passwordHash,
+          role: 'main_admin',
           status: 'active',
           permissions: ['*'],
         }],
@@ -54,12 +59,13 @@ async function seedAdmin() {
       )
     })
     console.log('Admin account created successfully.')
+    return await Admin.findOne({ _id: accountId })
   } catch (error) {
     if (error?.code === 11000) {
       const adminCreatedConcurrently = await Admin.exists({ username: 'admin' })
       if (adminCreatedConcurrently) {
         console.log('Admin account already exists; no changes made.')
-        return
+        return await Admin.findOne({ username: 'admin' })
       }
     }
     throw error
@@ -68,11 +74,17 @@ async function seedAdmin() {
   }
 }
 
-try {
-  await seedAdmin()
-} catch (error) {
-  console.error(`Admin seed failed: ${error instanceof Error ? error.message : 'Unknown error'}`)
-  process.exitCode = 1
-} finally {
-  await mongoose.disconnect()
+export async function seedAdmin() {
+  return createAdminAccount()
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  try {
+    await seedAdmin()
+  } catch (error) {
+    console.error(`Admin seed failed: ${error instanceof Error ? error.message : 'Unknown error'}`)
+    process.exitCode = 1
+  } finally {
+    await mongoose.disconnect()
+  }
 }

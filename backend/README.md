@@ -1,6 +1,8 @@
-# Backend admin account
+# AIHustle LMS backend
 
-From this directory, add these values to `.env` without committing the file:
+## Main Admin account
+
+Add these values to `backend/.env` without committing the file:
 
 ```env
 ADMIN_EMAIL=the-admin-email@example.com
@@ -8,62 +10,109 @@ ADMIN_PASSWORD=choose-a-long-unique-password
 JWT_SECRET=use-a-random-secret-at-least-32-bytes-long
 ```
 
-Replace the example values with your own; never send or commit them.
-Keep the existing `MONGO_URI` entry. `ADMIN_PASSWORD` must be at least 12
-characters. Generate a JWT secret with:
+Keep the existing `MONGO_URI` entry pointed at the `LMS` database.
+`MONGO_DB_NAME` can explicitly override the database name for isolated test
+connections; production startup should target `LMS`.
+`ADMIN_PASSWORD` must be at least 12 characters. Generate a JWT secret with:
 
 ```sh
 node -e "console.log(require('node:crypto').randomBytes(32).toString('hex'))"
 ```
 
-For an existing database, run the migration instructions below before seeding
-the admin or starting the API. For a fresh database, no legacy migration is
-needed. Then seed the admin and start the API:
+Seed a Main Admin and start the API:
 
 ```sh
-npm install
 npm run seed:admin
 npm run dev
 ```
 
-The script creates the `admin` username in `admin` with role `admin`, status
-`active`, and wildcard administrative permissions. It hashes the password with
-bcryptjs and does not replace or duplicate an existing `admin` account. The
-login API accepts the account through the common sign-in form; there is no
-public admin registration endpoint.
+The seed command creates a `main_admin` account in `admin`, reserves its login
+identity in `accountidentities`, and bcrypt-hashes the password. It leaves an
+existing account unchanged. Public registration is available only to
+independent students.
 
-## Account collections
+## Account collections and roles
 
-The backend explicitly uses the `LMS` database. Student accounts are stored
-in `users`; admin accounts remain in `admin`. The private `accountidentities`
-collection reserves normalized emails and usernames with unique indexes and
-stores the owning account collection and ID, not passwords or profiles.
-Passwords are hashed with bcryptjs before storage.
+The application uses the `LMS` database selected by `MONGO_URI`.
 
-Public registration at `POST /api/auth/register` accepts `student` (and the
-legacy `user` alias); admin and instructor registration are rejected.
+| Collection | Account/data |
+|---|---|
+| `admin` | Main Admin (`main_admin`) |
+| `sub_admins` | College Sub-Admins (`college_admin`) |
+| `students` | Independent Students (`student`, `studentType: "independent"`) |
+| `clg_students` | College Students (`student`, `studentType: "college"`, with `collegeId`) |
+| `colleges` | College details |
+| `courses` | Courses, modules, and lessons |
+| `enrollment` | Course enrollments |
+| `accountidentities` | Normalized login identity-to-collection/document mappings |
+
+Authentication accepts only the `main_admin`, `college_admin`, and `student`
+roles. JWTs include the canonical role and the account collection; identity
+lookups use `accountidentities`. No `users` collection fallback is used by
+authentication. A college has a unique code. Courses support modules, lessons,
+assignments, and quizzes; correct quiz answers are not returned to students.
+
+## Database backup, integration tests, and reset
+
+The integration test writes real test accounts and learning records only to
+`LMS_TEST`, verifies each collection and login mapping, and drops that disposable
+database after it finishes. It refuses to run if `LMS_TEST` is not empty.
+
+```powershell
+$env:LMS_BACKUP_DIR = 'C:\protected\backup\LMS-before-reset'
+npm run backup:database
+npm run test:database
+npm run reset:database
+```
+
+The backup command connects explicitly to `LMS`, writes BSON collection data,
+collection/index metadata, and a SHA-256 manifest to an empty directory, then
+decodes the BSON and checks counts and hashes. Keep that directory protected;
+it contains account data and password hashes.
+
+`reset:database` is read-only and prints the exact current collection/count
+deletion plan after checking the verified backup against the live database.
+`reset:database:execute` is destructive: it drops only `LMS`, recreates exactly
+the eight collections and indexes, and seeds only the configured Main Admin.
+Do not run it until the backup is verified, the deletion list is reviewed, and
+the reset is explicitly approved. The obsolete legacy reset utility has been
+removed.
+
+## College Sub-Admin activation
+
+The Main Admin creates a College Sub-Admin without setting a password. The API
+stores a hash of a random, single-use activation token and emails the activation
+link. The sub-admin sets a password; only its bcrypt hash is stored. Tokens
+expire after 24 hours and are invalidated on use. A pending invite can be
+resent from the Colleges page.
+
+Configure outbound SMTP and the public frontend origin in `backend/.env`:
+
+```env
+CLIENT_ORIGIN=https://your-frontend.example
+SMTP_HOST=smtp.example
+SMTP_PORT=587
+SMTP_SECURE=false
+SMTP_USER=your-smtp-user
+SMTP_PASSWORD=your-smtp-password
+SMTP_FROM=LMS <no-reply@example.com>
+```
+
+Keep SMTP credentials private and never commit `.env`. If mail delivery fails,
+the account remains pending and the Main Admin can retry after fixing SMTP.
 
 ## Google sign-in
 
-Set `GOOGLE_CLIENT_ID` and the matching `GOOGLE_CLIENT_SECRET` in
-`backend/.env`, and set the matching `VITE_GOOGLE_CLIENT_ID` in `client/.env`.
-Keep the client secret only on the backend; never add it to a `VITE_` variable
-or frontend code. Configure the OAuth client with the frontend origin as an
-authorized JavaScript origin and authorized redirect URI. The client uses
-Google's OAuth authorization-code popup and sends the one-time code with the
-selected role to `POST /api/auth/google`. The
-API checks the popup request origin, exchanges the code on the server, verifies
-the returned ID token audience and verified email, then authenticates only an
-existing account. Google sign-in never creates accounts; an unregistered email
-is rejected. Student, instructor, and admin lookups use their respective
-collections.
+Set `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` in `backend/.env`, and set the
+matching `VITE_GOOGLE_CLIENT_ID` in `client/.env`. Keep the client secret only
+on the backend. Configure the OAuth client with the frontend origin as an
+authorized JavaScript origin and redirect URI.
 
-Instructor accounts must first be created through the instructor application,
-include the required professional details, and be approved before they can
-authenticate. Existing instructor approval and role-protected route checks
-also apply to Google sign-in.
+The client sends the one-time authorization code and selected canonical role
+to `POST /api/auth/google`. The API validates the request origin, exchanges the
+code, verifies the ID token and verified email, then finds the existing
+`accountidentities` mapping. Google sign-in never creates accounts.
 
-Run the backend with `npm run dev`, then use the client’s Create account form.
-For a separately hosted client, set `VITE_API_BASE_URL` to the backend API base
-URL (for example, `http://localhost:5000/api`) before starting/building the
-client. The default local client API base is `http://localhost:5000/api`.
+Run the backend with `npm run dev`. For a separately hosted client, set
+`VITE_API_BASE_URL` to the backend API base URL before starting or building the
+client. The default local API base is `http://localhost:5000/api`.
