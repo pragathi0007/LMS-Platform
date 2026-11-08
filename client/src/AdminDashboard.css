@@ -82,9 +82,11 @@
   border-radius: 8px;
   background: transparent;
   color: #6f766e;
+  cursor: pointer;
   font: inherit;
   font-size: 11px;
   text-align: left;
+  text-decoration: none;
   transition: background 140ms ease, color 140ms ease;
 }
 
@@ -203,6 +205,36 @@
   gap: 19px;
 }
 
+.admin-topbar .admin-theme-toggle {
+  position: static;
+  display: grid;
+  width: 32px;
+  height: 32px;
+  min-height: 32px;
+  place-items: center;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  border-color: transparent;
+  background: transparent;
+  color: #69756a;
+  box-shadow: none;
+}
+
+.admin-topbar .admin-theme-toggle:hover {
+  border-color: #e1e4dc;
+  background: #f0f2ec;
+}
+
+.admin-topbar .admin-theme-toggle .theme-toggle__label {
+  display: none;
+}
+
+.admin-topbar .admin-theme-toggle svg {
+  width: 18px;
+  height: 18px;
+}
+
 .admin-search {
   display: flex;
   width: min(250px, 24vw);
@@ -257,6 +289,16 @@
   background: transparent;
   color: #69756a;
   font-size: 17px;
+}
+
+.admin-icon-button svg {
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.7;
 }
 
 .admin-icon-button:hover {
@@ -1197,16 +1239,25 @@
   }
 
   .admin-profile {
-    gap: 0;
+    gap: 6px;
   }
 
-  .admin-profile > span:not(.admin-avatar) {
+  .admin-profile > span:nth-child(2) {
+    display: block;
+  }
+
+  .admin-profile__chevron {
     display: none;
   }
 
   .admin-profile .admin-avatar {
     width: 31px;
     height: 31px;
+  }
+
+  .admin-profile strong,
+  .admin-profile small {
+    max-width: 82px;
   }
 
   .admin-content {

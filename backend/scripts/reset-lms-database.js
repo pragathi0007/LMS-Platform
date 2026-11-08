@@ -9,6 +9,8 @@ import { Admin, CollegeAdmin, CollegeStudent, Student } from '../models/account-
 import College from '../models/College.js'
 import Course from '../models/Course.js'
 import Enrollment from '../models/Enrollment.js'
+import ReferralCode from '../models/ReferralCode.js'
+import ReferralCodeDailyLimit from '../models/ReferralCodeDailyLimit.js'
 import { createAdminAccount } from './seed-admin.js'
 
 const databaseName = 'LMS'
@@ -20,10 +22,23 @@ const expectedCollections = [
   'colleges',
   'courses',
   'enrollment',
+  'referralCodeDailyLimits',
+  'referralCodes',
   'students',
   'sub_admins',
 ]
-const models = [Admin, CollegeAdmin, Student, CollegeStudent, AccountIdentity, College, Course, Enrollment]
+const models = [
+  Admin,
+  CollegeAdmin,
+  Student,
+  CollegeStudent,
+  AccountIdentity,
+  College,
+  Course,
+  Enrollment,
+  ReferralCode,
+  ReferralCodeDailyLimit,
+]
 const BSON = mongoose.mongo.BSON
 
 function hash(value) {

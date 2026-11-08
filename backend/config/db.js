@@ -5,6 +5,10 @@ import AccountIdentity from '../models/AccountIdentity.js'
 import Course from '../models/Course.js'
 import College from '../models/College.js'
 import Enrollment from '../models/Enrollment.js'
+import SupportTicket from '../models/SupportTicket.js'
+import EmailOtpChallenge from '../models/EmailOtpChallenge.js'
+import ReferralCode from '../models/ReferralCode.js'
+import ReferralCodeDailyLimit from '../models/ReferralCodeDailyLimit.js'
 
 const requiredModels = [
   Admin,
@@ -15,6 +19,10 @@ const requiredModels = [
   Course,
   College,
   Enrollment,
+  SupportTicket,
+  EmailOtpChallenge,
+  ReferralCode,
+  ReferralCodeDailyLimit,
 ]
 
 export async function connectToDatabase() {

@@ -252,7 +252,7 @@ router.post('/college-admins/:id/activation', ...requireAdmin, async (req, res, 
 router.get('/courses', ...requireAdmin, async (req, res, next) => {
   try {
     const courses = await Course.find({})
-      .select('title description modules assignments quizzes status createdAt +quizzes.questions.correctOptionIndex')
+      .select('title description modules assignments status createdAt quizzes.title quizzes.description quizzes.questions.prompt quizzes.questions.options +quizzes.questions.correctOptionIndex')
       .sort({ createdAt: -1 })
       .limit(500)
       .lean()

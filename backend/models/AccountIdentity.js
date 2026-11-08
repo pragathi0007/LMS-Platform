@@ -5,6 +5,12 @@ const accountIdentitySchema = new mongoose.Schema(
     email: { type: String, required: true, lowercase: true, trim: true, unique: true },
     username: { type: String, required: true, lowercase: true, trim: true },
     googleSub: { type: String, unique: true, sparse: true, select: false },
+    googleEmail: { type: String, lowercase: true, trim: true, select: false },
+    pendingEmail: { type: String, lowercase: true, trim: true, select: false },
+    pendingEmailVerificationCodeHash: { type: String, select: false },
+    pendingEmailVerificationExpiresAt: { type: Date, select: false },
+    pendingEmailVerificationRequestedAt: { type: Date, select: false },
+    pendingEmailVerificationAttempts: { type: Number, default: 0, select: false },
     accountCollection: {
       type: String,
       required: true,
@@ -25,6 +31,15 @@ accountIdentitySchema.index(
   },
 )
 accountIdentitySchema.index({ accountCollection: 1, accountId: 1 }, { unique: true })
+accountIdentitySchema.index(
+  { googleEmail: 1 },
+  {
+    unique: true,
+    sparse: true,
+    name: 'google_email_case_insensitive_unique',
+    collation: { locale: 'en', strength: 2 },
+  },
+)
 
 const AccountIdentity =
   mongoose.models.AccountIdentity ||

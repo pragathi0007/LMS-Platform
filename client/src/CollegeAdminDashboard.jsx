@@ -1,12 +1,15 @@
 import React, { useEffect, useState } from 'react'
+import { isInvalidSessionResponse } from './auth-session.js'
+import WorkspaceTopbar from './WorkspaceTopbar.jsx'
 import './CollegeAdminDashboard.css'
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000/api'
 
-async function collegeRequest(path, options = {}) {
+async function collegeRequest(path, onLogout, options = {}) {
   const savedAuth = sessionStorage.getItem('lms.auth')
   const auth = savedAuth ? JSON.parse(savedAuth) : null
   if (auth?.user?.role !== 'college_admin' || typeof auth.token !== 'string') {
+    onLogout()
     throw new Error('Your college administrator session has ended.')
   }
   const response = await fetch(`${API_BASE_URL}${path}`, {
@@ -23,11 +26,12 @@ async function collegeRequest(path, options = {}) {
   } catch {
     throw new Error('The server returned an invalid response.')
   }
+  if (isInvalidSessionResponse(response, result)) onLogout()
   if (!response.ok) throw new Error(result.message || 'The request could not be completed.')
   return result
 }
 
-function CollegeAdminDashboard({ user, onLogout }) {
+function CollegeAdminDashboard({ user, onLogout, isDark, onToggleTheme }) {
   const [dashboard, setDashboard] = useState(null)
   const [loadError, setLoadError] = useState('')
   const [formError, setFormError] = useState('')
@@ -37,9 +41,8 @@ function CollegeAdminDashboard({ user, onLogout }) {
   async function loadDashboard() {
     setLoadError('')
     try {
-      setDashboard(await collegeRequest('/college/dashboard'))
+      setDashboard(await collegeRequest('/college/dashboard', onLogout))
     } catch (error) {
-      if (/session has ended/i.test(error.message)) onLogout()
       setLoadError(error instanceof Error ? error.message : 'Unable to load college data.')
     }
   }
@@ -53,7 +56,7 @@ function CollegeAdminDashboard({ user, onLogout }) {
     setMessage('')
     try {
       const data = Object.fromEntries(new FormData(event.currentTarget).entries())
-      const result = await collegeRequest('/college/enrollments', {
+      const result = await collegeRequest('/college/enrollments', onLogout, {
         method: 'POST',
         body: JSON.stringify(data),
       })
@@ -69,14 +72,19 @@ function CollegeAdminDashboard({ user, onLogout }) {
 
   return (
     <main className="college-admin">
-      <header className="college-admin__header">
-        <div>
-          <p>COLLEGE LEARNING WORKSPACE</p>
-          <h1>{dashboard?.college?.name || 'College Sub-Admin'}</h1>
-          <span>Signed in as {user.fullName || user.email}</span>
-        </div>
-        <button type="button" onClick={onLogout}>Log out</button>
-      </header>
+      <WorkspaceTopbar
+        title="College Workspace"
+        name={user.fullName}
+        email={user.email}
+        roleLabel="College Sub-Admin"
+        dashboardPath="/college-admin/dashboard"
+        helpPath="/college-admin/support"
+        settingsPath="/college-admin/settings"
+        isDark={isDark}
+        onToggleTheme={onToggleTheme}
+        onLogout={onLogout}
+      />
+      <div className="college-admin__content">
 
       {loadError && <p className="college-admin__alert" role="alert">{loadError}<button type="button" onClick={loadDashboard}>Retry</button></p>}
       {!dashboard && !loadError && <p className="college-admin__loading">Loading college data…</p>}
@@ -141,6 +149,7 @@ function CollegeAdminDashboard({ user, onLogout }) {
           </section>
         </>
       )}
+      </div>
     </main>
   )
 }

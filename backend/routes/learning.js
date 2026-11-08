@@ -40,7 +40,14 @@ router.get('/courses', ...requireStudent, async (req, res, next) => {
 
 router.get('/enrollments/me', ...requireStudent, async (req, res, next) => {
   try {
-    const enrollments = await Enrollment.find({ userId: req.auth.id, status: { $ne: 'cancelled' } })
+    const scope = req.auth.user.studentType === 'college'
+      ? { collegeId: req.auth.user.collegeId }
+      : { collegeId: { $exists: false } }
+    const enrollments = await Enrollment.find({
+      userId: req.auth.id,
+      ...scope,
+      status: { $ne: 'cancelled' },
+    })
       .populate('courseId', 'title description modules assignments quizzes status')
       .sort({ createdAt: -1 })
       .lean()

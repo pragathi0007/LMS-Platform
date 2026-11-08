@@ -5,6 +5,9 @@ import { connectToDatabase } from './config/db.js'
 import authRouter from './routes/auth.js'
 import adminRouter from './routes/admin.js'
 import learningRouter from './routes/learning.js'
+import supportRouter from './routes/support.js'
+import settingsRouter from './routes/settings.js'
+import referralsRouter from './routes/referrals.js'
 
 const app = express()
 app.use(
@@ -25,6 +28,9 @@ app.use(express.json({ limit: '8mb' }))
 app.use('/api/auth', authRouter)
 app.use('/api/admin', adminRouter)
 app.use('/api', learningRouter)
+app.use('/api/support', supportRouter)
+app.use('/api/settings', settingsRouter)
+app.use('/api/referrals', referralsRouter)
 app.use('/api', (req, res) => {
   res.status(404).json({ message: 'API route not found.' })
 })
@@ -45,6 +51,9 @@ app.use((error, req, res, next) => {
   }
   if (typeof error?.codeName === 'string') {
     diagnostic.errorCodeName = error.codeName
+  }
+  if ([117, 31249].includes(error?.code) && typeof error?.message === 'string') {
+    diagnostic.mongoMessage = error.message.slice(0, 500)
   }
   if (error?.keyPattern && typeof error.keyPattern === 'object') {
     diagnostic.mongoKeyFields = Object.keys(error.keyPattern)

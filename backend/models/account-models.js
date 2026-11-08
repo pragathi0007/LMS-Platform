@@ -30,6 +30,8 @@ function createAccountModel(modelName, collectionName, role, additionalFields = 
 
 const independentStudentFields = {
   studentType: { type: String, enum: ['independent'], default: 'independent', required: true },
+  twoFactorEnabled: { type: Boolean, default: false },
+  twoFactorEnabledAt: { type: Date },
 }
 
 const collegeStudentFields = {
@@ -38,6 +40,8 @@ const collegeStudentFields = {
   studentId: { type: String, trim: true, maxlength: 100 },
   department: { type: String, trim: true, maxlength: 120 },
   batch: { type: String, trim: true, maxlength: 80 },
+  twoFactorEnabled: { type: Boolean, default: false },
+  twoFactorEnabledAt: { type: Date },
 }
 
 const collegeAdminFields = {

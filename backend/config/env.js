@@ -24,6 +24,8 @@ export const config = Object.freeze({
   smtpUser: process.env.SMTP_USER,
   smtpPassword: process.env.SMTP_PASSWORD,
   smtpFrom: process.env.SMTP_FROM,
+  resendApiKey: process.env.RESEND_API_KEY,
+  emailFrom: process.env.EMAIL_FROM,
   nodeEnv: process.env.NODE_ENV,
   port: process.env.PORT || 5000,
 })

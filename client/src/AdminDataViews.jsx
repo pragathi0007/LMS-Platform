@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react'
+import { isInvalidSessionResponse } from './auth-session.js'
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000/api'
 
@@ -24,10 +25,7 @@ async function adminRequest(path, onLogout, options = {}) {
   } catch {
     throw new Error('The server returned an invalid response.')
   }
-  if (response.status === 401 || response.status === 403) {
-    onLogout()
-    throw new Error('Your administrator session has ended.')
-  }
+  if (isInvalidSessionResponse(response, result)) onLogout()
   return { response, result }
 }
 

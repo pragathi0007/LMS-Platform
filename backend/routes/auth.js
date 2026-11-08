@@ -14,6 +14,17 @@ import {
   roleForAccountCollection,
 } from '../models/account-models.js'
 import { authenticate, requireRoles } from '../middleware/auth.js'
+import ReferralCode from '../models/ReferralCode.js'
+import { findTakenEmails, findTakenUsernames } from '../utils/account-identity-availability.js'
+import {
+  cancelStudentOtp,
+  getOtpRateLimitDelay,
+  issueStudentOtpChallenge,
+  readChallengeToken,
+  resendStudentOtp,
+  TwoFactorError,
+  verifyStudentOtp,
+} from '../utils/two-factor.js'
 
 const router = Router()
 const registrationRoles = new Set(['student'])
@@ -24,6 +35,16 @@ const usernameCheckWindowMs = 60 * 1000
 const usernameCheckMaxRequests = 30
 
 const allowedRoles = new Set(['main_admin', 'college_admin', 'student'])
+
+export function createReferralRedemptionFilter(code, accountId, now) {
+  return {
+    code,
+    generatedBy: { $ne: accountId },
+    status: 'active',
+    expiresAt: { $gt: now },
+    usedBy: null,
+  }
+}
 
 function isAllowedGoogleOrigin(origin) {
   if (!origin) return false
@@ -51,6 +72,12 @@ function serializeAccount(user, role = user.role) {
     status: user.status,
     collegeId: user.collegeId ? String(user.collegeId) : undefined,
     studentType: user.studentType,
+    ...(role === 'student'
+      ? {
+          twoFactorEnabled: user.twoFactorEnabled === true,
+          twoFactorEnabledAt: user.twoFactorEnabledAt || null,
+        }
+      : {}),
   }
 }
 
@@ -66,8 +93,19 @@ function getDuplicateField(error) {
   return null
 }
 
-function escapeRegex(value) {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+function rejectOtpRateLimit(res, retryAfterSeconds) {
+  if (!retryAfterSeconds) return false
+  res.set('Retry-After', String(retryAfterSeconds))
+  res.status(429).json({
+    message: 'Too many verification requests. Please wait before trying again.',
+    retryAfterSeconds,
+  })
+  return true
+}
+
+function isActiveAccount(user) {
+  const status = String(user?.status || user?.approvalStatus || '').toLowerCase()
+  return user && user.isActive !== false && status === 'active'
 }
 
 function limitUsernameChecks(req, res, next) {
@@ -99,39 +137,6 @@ function createUsernameSuggestions(username) {
     return `${stem.slice(0, availableStemLength)}${suffix}`
   }))]
     .filter((suggestion) => usernamePattern.test(suggestion))
-}
-
-async function findTakenUsernames(usernames) {
-  const candidates = [...new Set(usernames.map((username) => username.trim().toLowerCase()))]
-  if (!candidates.length) return new Set()
-
-  const patterns = candidates.map((username) => new RegExp(`^${escapeRegex(username)}$`, 'i'))
-  const query = { username: { $in: patterns } }
-  const collectionNames = new Set([
-    ...Object.values(accountModelsByCollection).map((AccountModel) => AccountModel.collection.name),
-  ])
-  const database = mongoose.connection.db
-  const resultSets = await Promise.all([
-    AccountIdentity.find(query).select('username').lean(),
-    ...[...collectionNames].map((collectionName) =>
-      database.collection(collectionName).find(query, { projection: { username: 1, _id: 0 } }).toArray(),
-    ),
-  ])
-
-  return new Set(
-    resultSets
-      .flat()
-      .map((account) => typeof account.username === 'string' ? account.username.trim().toLowerCase() : '')
-      .filter(Boolean),
-  )
-}
-
-async function findExistingAccount(field, value) {
-  for (const AccountModel of Object.values(accountModelsByCollection)) {
-    const account = await AccountModel.findOne({ [field]: value }).select('_id').lean()
-    if (account) return account
-  }
-  return null
 }
 
 router.get('/check-username', limitUsernameChecks, async (req, res, next) => {
@@ -175,6 +180,7 @@ router.post('/register', async (req, res, next) => {
       role,
       accountType,
       collegeId,
+      referralCode: submittedReferralCode,
     } = req.body ?? {}
     const normalizedRole = typeof role === 'string' ? role.trim().toLowerCase() : ''
 
@@ -217,15 +223,31 @@ router.post('/register', async (req, res, next) => {
     if (typeof confirmPassword !== 'string' || password !== confirmPassword) {
       return res.status(400).json({ message: 'Your passwords do not match.' })
     }
+    let referralCode
+    if (submittedReferralCode !== undefined) {
+      if (typeof submittedReferralCode !== 'string' || submittedReferralCode.trim().length < 8 || submittedReferralCode.trim().length > 64) {
+        return res.status(400).json({ message: 'Enter a valid referral code.' })
+      }
+      referralCode = submittedReferralCode.trim().toUpperCase()
+      const availableReferral = await ReferralCode.findOne({
+        code: referralCode,
+        status: 'active',
+        expiresAt: { $gt: new Date() },
+        usedBy: null,
+      }).select('_id').lean()
+      if (!availableReferral) {
+        return res.status(400).json({ message: 'This referral code is invalid, expired, or already used.' })
+      }
+    }
     const normalizedName = fullName.trim()
     const normalizedEmail = email.trim().toLowerCase()
     const normalizedUsername = username.trim().toLowerCase()
     const AccountModel = accountModelsByRole[normalizedRole]
-    const [existingAccount, takenUsernames] = await Promise.all([
-      findExistingAccount('email', normalizedEmail),
+    const [takenEmails, takenUsernames] = await Promise.all([
+      findTakenEmails([normalizedEmail]),
       findTakenUsernames([normalizedUsername]),
     ])
-    if (existingAccount) {
+    if (takenEmails.has(normalizedEmail)) {
       return res.status(409).json({ message: 'An account with this email already exists.' })
     }
     if (takenUsernames.has(normalizedUsername)) {
@@ -274,6 +296,26 @@ router.post('/register', async (req, res, next) => {
           }],
           { session },
         )
+        if (referralCode) {
+          const usedAt = new Date()
+          const referral = await ReferralCode.findOneAndUpdate(
+            createReferralRedemptionFilter(referralCode, accountId, usedAt),
+            {
+              $set: {
+                status: 'used',
+                usedBy: accountId,
+                usedAt,
+                registrationStatus: account.status === 'active' ? 'approved' : 'awaiting_approval',
+              },
+            },
+            { new: true, session },
+          )
+          if (!referral) {
+            const error = new Error('This referral code is invalid, expired, or already used.')
+            error.statusCode = 400
+            throw error
+          }
+        }
       })
     } finally {
       await session.endSession()
@@ -291,6 +333,9 @@ router.post('/register', async (req, res, next) => {
       },
     })
   } catch (error) {
+    if (error?.statusCode === 400) {
+      return res.status(400).json({ message: error.message })
+    }
     if (error?.code === 11000) {
       const duplicateField = getDuplicateField(error)
       if (duplicateField === 'email') {
@@ -408,14 +453,16 @@ router.post('/google', async (req, res, next) => {
     try {
       failureStage = 'lookup_email_identity'
       await session.withTransaction(async () => {
-        const emailIdentity = await AccountIdentity.findOne({ email }).select('+googleSub').session(session)
+        const emailIdentity = await AccountIdentity.findOne({
+          $or: [{ email }, { googleEmail: email }],
+        }).select('+googleSub +googleEmail').session(session)
         failureStage = 'lookup_google_subject_identity'
         const subjectIdentity = await AccountIdentity.findOne({ googleSub: payload.sub })
-          .select('+googleSub')
+          .select('+googleSub +googleEmail')
           .session(session)
         if (
           (emailIdentity && subjectIdentity && !emailIdentity._id.equals(subjectIdentity._id)) ||
-          (subjectIdentity && subjectIdentity.email !== email)
+          (subjectIdentity && subjectIdentity.email !== email && subjectIdentity.googleEmail !== email)
         ) {
           throw createGoogleAuthError(409, 'This Google account is already linked to a different LMS account.')
         }
@@ -431,7 +478,7 @@ router.post('/google', async (req, res, next) => {
           account = await AccountModel.findById(identity.accountId).session(session)
           if (
             !account ||
-            account.email !== email ||
+            account.email !== identity.email ||
             !matchesStoredAccountRole(identity.accountCollection, account.role)
           ) {
             throw createGoogleAuthError(401, 'The linked account could not be verified.')
@@ -446,7 +493,7 @@ router.post('/google', async (req, res, next) => {
                 _id: identity._id,
                 $or: [{ googleSub: { $exists: false } }, { googleSub: null }],
               },
-              { $set: { googleSub: payload.sub } },
+              { $set: { googleSub: payload.sub, googleEmail: email } },
               { session },
             )
             if (linkResult.matchedCount !== 1) {
@@ -481,6 +528,7 @@ router.post('/google', async (req, res, next) => {
               email,
               username: account.username,
               googleSub: payload.sub,
+              googleEmail: email,
               accountCollection,
               accountId: account._id,
             }],
@@ -495,9 +543,18 @@ router.post('/google', async (req, res, next) => {
       await session.endSession()
     }
 
-    const status = String(account.status || account.approvalStatus || '').toLowerCase()
-    if (account.isActive === false || status !== 'active') {
+    if (!isActiveAccount(account)) {
       return res.status(403).json({ message: 'Your account is not active.' })
+    }
+
+    if (requestedRole === 'student' && account.twoFactorEnabled === true) {
+      if (rejectOtpRateLimit(res, getOtpRateLimitDelay(req, 'request'))) return
+      const challenge = await issueStudentOtpChallenge({
+        user: account,
+        accountCollection,
+        purpose: 'login',
+      })
+      return res.json({ requiresTwoFactor: true, ...challenge })
     }
 
     failureStage = 'issue_lms_token'
@@ -507,6 +564,7 @@ router.post('/google', async (req, res, next) => {
     })
   } catch (error) {
     if (error?.statusCode) {
+      if (error.retryAfterSeconds) res.set('Retry-After', String(error.retryAfterSeconds))
       return res.status(error.statusCode).json({ message: error.message })
     }
     if (error?.code === 11000) {
@@ -574,9 +632,18 @@ router.post('/login', async (req, res, next) => {
       return res.status(401).json({ message: 'Invalid username/email or password.' })
     }
 
-    const status = String(user.status || user.approvalStatus || '').toLowerCase()
-    if (user.isActive === false || status !== 'active') {
+    if (!isActiveAccount(user)) {
       return res.status(403).json({ message: 'Your account is not active.' })
+    }
+
+    if (requestedRole === 'student' && user.twoFactorEnabled === true) {
+      if (rejectOtpRateLimit(res, getOtpRateLimitDelay(req, 'request'))) return
+      const challenge = await issueStudentOtpChallenge({
+        user,
+        accountCollection,
+        purpose: 'login',
+      })
+      return res.json({ requiresTwoFactor: true, ...challenge })
     }
 
     const token = createAuthToken(user, accountCollection)
@@ -586,6 +653,86 @@ router.post('/login', async (req, res, next) => {
       user: serializeAccount(user, requestedRole),
     })
   } catch (error) {
+    if (error instanceof TwoFactorError || error?.statusCode) {
+      if (error.retryAfterSeconds) res.set('Retry-After', String(error.retryAfterSeconds))
+      return res.status(error.statusCode).json({
+        message: error.message,
+        ...(error.retryAfterSeconds ? { retryAfterSeconds: error.retryAfterSeconds } : {}),
+      })
+    }
+    return next(error)
+  }
+})
+
+router.post('/two-factor/verify', async (req, res, next) => {
+  try {
+    if (rejectOtpRateLimit(res, getOtpRateLimitDelay(req, 'verify'))) return
+    const challengeToken = req.body?.challengeToken
+    const payload = readChallengeToken(challengeToken, 'login')
+    const AccountModel = accountModelsByCollection[payload.accountCollection]
+    const user = await AccountModel.findById(payload.sub)
+    if (
+      !isActiveAccount(user) ||
+      user.role !== 'student' ||
+      user.twoFactorEnabled !== true
+    ) {
+      return res.status(401).json({ message: 'This login verification is no longer valid. Sign in again.' })
+    }
+
+    await verifyStudentOtp({
+      challengeToken,
+      code: req.body?.code,
+      purpose: 'login',
+      authenticatedUser: { id: payload.sub, accountCollection: payload.accountCollection },
+    })
+    return res.json({
+      token: createAuthToken(user, payload.accountCollection),
+      user: serializeAccount(user, 'student'),
+    })
+  } catch (error) {
+    if (error instanceof TwoFactorError || error?.statusCode) {
+      if (error.retryAfterSeconds) res.set('Retry-After', String(error.retryAfterSeconds))
+      return res.status(error.statusCode).json({
+        message: error.message,
+        ...(error.retryAfterSeconds ? { retryAfterSeconds: error.retryAfterSeconds } : {}),
+      })
+    }
+    return next(error)
+  }
+})
+
+router.post('/two-factor/resend', async (req, res, next) => {
+  try {
+    if (rejectOtpRateLimit(res, getOtpRateLimitDelay(req, 'request'))) return
+    const challengeToken = req.body?.challengeToken
+    const payload = readChallengeToken(challengeToken, 'login')
+    const AccountModel = accountModelsByCollection[payload.accountCollection]
+    const user = await AccountModel.findById(payload.sub)
+    if (!isActiveAccount(user) || user.twoFactorEnabled !== true) {
+      return res.status(401).json({ message: 'This login verification is no longer valid. Sign in again.' })
+    }
+    const challenge = await resendStudentOtp({ challengeToken, purpose: 'login' })
+    return res.json(challenge)
+  } catch (error) {
+    if (error instanceof TwoFactorError || error?.statusCode) {
+      if (error.retryAfterSeconds) res.set('Retry-After', String(error.retryAfterSeconds))
+      return res.status(error.statusCode).json({
+        message: error.message,
+        ...(error.retryAfterSeconds ? { retryAfterSeconds: error.retryAfterSeconds } : {}),
+      })
+    }
+    return next(error)
+  }
+})
+
+router.post('/two-factor/cancel', async (req, res, next) => {
+  try {
+    await cancelStudentOtp({ challengeToken: req.body?.challengeToken, purpose: 'login' })
+    return res.json({ message: 'Login verification was cancelled.' })
+  } catch (error) {
+    if (error instanceof TwoFactorError || error?.statusCode) {
+      return res.status(error.statusCode).json({ message: error.message })
+    }
     return next(error)
   }
 })

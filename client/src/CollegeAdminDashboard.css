@@ -1,8 +1,12 @@
 .college-admin {
   min-height: 100vh;
-  padding: clamp(20px, 5vw, 56px);
-  background: #f5f6f1;
-  color: #414941;
+  padding: 0;
+  background: #f7f5ee;
+  color: #303832;
+}
+
+.college-admin__content {
+  padding: clamp(20px, 5vw, 42px) 18px;
 }
 
 .college-admin__header,
@@ -21,6 +25,26 @@
   align-items: center;
   justify-content: space-between;
   gap: 20px;
+}
+
+.college-admin__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.college-admin__actions a {
+  display: inline-flex;
+  min-height: 38px;
+  align-items: center;
+  padding: 0 12px;
+  border: 1px solid #d5decf;
+  border-radius: 7px;
+  color: #465744;
+  font-size: 12px;
+  font-weight: 650;
+  text-decoration: none;
 }
 
 .college-admin__header p {
@@ -143,7 +167,38 @@
 }
 
 @media (max-width: 760px) {
+  .college-admin__content {
+    padding: 18px 12px;
+  }
+
   .college-admin__form {
     grid-template-columns: 1fr;
   }
+}
+
+:root[data-theme='dark'] .college-admin {
+  background: #171d1c;
+  color: #edf0e9;
+}
+
+:root[data-theme='dark'] .college-admin__panel {
+  border-color: #3a4540;
+  background: #202725;
+}
+
+:root[data-theme='dark'] .college-admin__panel h2,
+:root[data-theme='dark'] .college-admin td {
+  color: #edf0e9;
+}
+
+:root[data-theme='dark'] .college-admin__panel > p,
+:root[data-theme='dark'] .college-admin__form label,
+:root[data-theme='dark'] .college-admin th {
+  color: #b0b9af;
+}
+
+:root[data-theme='dark'] .college-admin__form select {
+  border-color: #46504a;
+  background: #252d29;
+  color: #edf0e9;
 }

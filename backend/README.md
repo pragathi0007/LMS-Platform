@@ -12,7 +12,7 @@ JWT_SECRET=use-a-random-secret-at-least-32-bytes-long
 
 Keep the existing `MONGO_URI` entry pointed at the `LMS` database.
 `MONGO_DB_NAME` can explicitly override the database name for isolated test
-connections; production startup should target `LMS`.
+connections; otherwise, startup uses the database named in `MONGO_URI`.
 `ADMIN_PASSWORD` must be at least 12 characters. Generate a JWT secret with:
 
 ```sh
@@ -33,7 +33,7 @@ independent students.
 
 ## Account collections and roles
 
-The application uses the `LMS` database selected by `MONGO_URI`.
+The application uses the database selected by `MONGO_URI` (currently `LMS`).
 
 | Collection | Account/data |
 |---|---|
@@ -45,12 +45,44 @@ The application uses the `LMS` database selected by `MONGO_URI`.
 | `courses` | Courses, modules, and lessons |
 | `enrollment` | Course enrollments |
 | `accountidentities` | Normalized login identity-to-collection/document mappings |
+| `referralCodes` | External User referral codes and redemption history |
+| `referralCodeDailyLimits` | Atomic per-External-User UTC daily generation counters |
 
 Authentication accepts only the `main_admin`, `college_admin`, and `student`
 roles. JWTs include the canonical role and the account collection; identity
 lookups use `accountidentities`. No `users` collection fallback is used by
 authentication. A college has a unique code. Courses support modules, lessons,
 assignments, and quizzes; correct quiz answers are not returned to students.
+The `accountidentities` collection enforces global case-insensitive username
+uniqueness across student and administrator account collections.
+
+## External User referrals
+
+External Users can generate up to five referral codes per UTC calendar day.
+Generation requests are idempotent per authenticated user, and the per-day
+counter and new code are written in a MongoDB transaction. Codes are generated
+with Node.js cryptographic randomness and expire 15 days after creation.
+
+The referral API is:
+
+| Method | Endpoint | Access |
+|---|---|---|
+| `POST` | `/api/referrals/generate` | Authenticated External User |
+| `GET` | `/api/referrals/me` | Authenticated External User |
+| `POST` | `/api/referrals/validate` | Public registration validation |
+
+`POST /api/auth/register` accepts an optional `referralCode`. Registration,
+identity creation, and one-time referral redemption happen in the same MongoDB
+transaction. The `referralCodes` collection has unique code and per-user
+idempotency indexes, owner/date history and expiry indexes. The daily-counter
+collection has a unique owner/UTC-day index. Referral history is retained; no
+TTL index is used. Referral history returns only whether the friend registered
+and their registration status, not their account identifiers or profile data.
+
+The current public External User registration flow activates accounts
+immediately. Referral registration status is derived from the referred
+account's current approval/account status and is refreshed when the creator
+loads referral history; the referral feature does not alter account approval.
 
 ## Database backup, integration tests, and reset
 
@@ -72,8 +104,8 @@ it contains account data and password hashes.
 
 `reset:database` is read-only and prints the exact current collection/count
 deletion plan after checking the verified backup against the live database.
-`reset:database:execute` is destructive: it drops only `LMS`, recreates exactly
-the eight collections and indexes, and seeds only the configured Main Admin.
+`reset:database:execute` is destructive: it drops only `LMS`, recreates the
+application collections and indexes, and seeds only the configured Main Admin.
 Do not run it until the backup is verified, the deletion list is reviewed, and
 the reset is explicitly approved. The obsolete legacy reset utility has been
 removed.
@@ -100,6 +132,28 @@ SMTP_FROM=LMS <no-reply@example.com>
 
 Keep SMTP credentials private and never commit `.env`. If mail delivery fails,
 the account remains pending and the Main Admin can retry after fixing SMTP.
+
+## Student email changes
+
+Student email changes require an 8-digit verification code sent to the new
+address. The current email remains active until the code is verified; codes
+expire after 15 minutes. This uses the SMTP settings above. Account identity
+and student email records are updated together after verification.
+
+## Student email two-factor authentication
+
+Set `RESEND_API_KEY` and `EMAIL_FROM` in `backend/.env`; see `.env.example` for
+the variable names. Keep the Resend API key private. Email OTPs are random
+six-digit values, stored only as keyed hashes, expire after five minutes, and
+are limited to five verification attempts. Resending is limited to once per
+minute.
+
+Students enable or disable two-factor authentication from Settings after
+verifying a code sent to their registered email. When enabled, password and
+Google sign-in return a short-lived login challenge instead of an access token.
+The normal JWT is issued only after successful OTP verification. The
+`emailotpchallenges` collection uses a TTL index to remove expired challenge
+records.
 
 ## Google sign-in
 

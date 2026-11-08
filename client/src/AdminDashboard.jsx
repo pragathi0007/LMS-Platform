@@ -1,5 +1,8 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
+import { Link, useNavigate } from 'react-router-dom'
 import { CollegesManagement, CourseManagement, EnrollmentManagement } from './AdminDataViews.jsx'
+import { isInvalidSessionResponse } from './auth-session.js'
+import ThemeToggle from './ThemeToggle.jsx'
 import './AdminDashboard.css'
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000/api'
@@ -16,7 +19,7 @@ const navigation = [
   { id: 'settings', label: 'Settings', icon: '⚙' },
 ]
 
-async function readResponse(response) {
+async function readResponse(response, onLogout) {
   const text = await response.text()
   let body
   try {
@@ -24,6 +27,7 @@ async function readResponse(response) {
   } catch {
     throw new Error('The server returned an invalid response.')
   }
+  if (isInvalidSessionResponse(response, body)) onLogout()
   if (!response.ok) {
     throw new Error(body.message || 'The request could not be completed.')
   }
@@ -92,7 +96,8 @@ function RegistrationsTable({ users, emptyMessage }) {
   )
 }
 
-function AdminDashboard({ email, onLogout }) {
+function AdminDashboard({ user, email = user?.email, onLogout, isDark, onToggleTheme }) {
+  const navigate = useNavigate()
   const [overview, setOverview] = useState(null)
   const [loadError, setLoadError] = useState('')
   const [isLoading, setIsLoading] = useState(true)
@@ -123,11 +128,7 @@ function AdminDashboard({ email, onLogout }) {
         headers: { Authorization: `Bearer ${auth.token}` },
         signal,
       })
-      if (response.status === 401 || response.status === 403) {
-        onLogout()
-        return
-      }
-      const result = await readResponse(response)
+      const result = await readResponse(response, onLogout)
       setOverview(result)
     } catch (error) {
       if (error.name !== 'AbortError') {
@@ -165,11 +166,7 @@ function AdminDashboard({ email, onLogout }) {
           headers: { Authorization: 'Bearer ' + auth.token },
           signal: controller.signal,
         })
-        if (response.status === 401 || response.status === 403) {
-          onLogout()
-          return
-        }
-        const result = await readResponse(response)
+        const result = await readResponse(response, onLogout)
         setColleges(result.colleges || [])
       } catch (error) {
         if (error.name !== 'AbortError') {
@@ -219,11 +216,7 @@ function AdminDashboard({ email, onLogout }) {
         },
         body: JSON.stringify({ csvText, collegeId: selectedCollegeId }),
       })
-      if (response.status === 401 || response.status === 403) {
-        onLogout()
-        return
-      }
-      const result = await readResponse(response)
+      const result = await readResponse(response, onLogout)
       setStudentImportResult(result)
       await loadOverview()
     } catch (error) {
@@ -262,6 +255,10 @@ function AdminDashboard({ email, onLogout }) {
   function selectView(view) {
     if (view === 'logout') {
       onLogout()
+      return
+    }
+    if (view === 'settings') {
+      navigate('/admin/settings')
       return
     }
     setActiveView(view)
@@ -314,6 +311,10 @@ function AdminDashboard({ email, onLogout }) {
               </button>
             </React.Fragment>
           ))}
+          <Link className="admin-nav__item" to="/admin/support">
+            <span className="admin-nav__icon" aria-hidden="true">✉</span>
+            <span>Support tickets</span>
+          </Link>
         </nav>
         <div className="admin-sidebar__bottom">
           <div className="admin-sidebar__help"><span>✦</span><strong>Need a hand?</strong><small>Help center and support</small></div>
@@ -345,12 +346,22 @@ function AdminDashboard({ email, onLogout }) {
               />
               <kbd>⌘ K</kbd>
             </label>
+            <ThemeToggle isDark={isDark} onToggle={onToggleTheme} className="admin-theme-toggle" />
             <button type="button" className="admin-icon-button" aria-label="Notifications" onClick={() => selectView('notifications')}>
-              ♧<i />
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M18 9a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9m-8 12a2 2 0 0 0 4 0" />
+              </svg>
+              <i />
             </button>
+            <Link to="/admin/support" className="admin-icon-button" aria-label="Help and support">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <circle cx="12" cy="12" r="9" />
+                <path d="M9.6 9a2.5 2.5 0 1 1 4.5 1.5c-.9 1.1-2.1 1.3-2.1 3m0 3h.01" />
+              </svg>
+            </Link>
             <button type="button" className="admin-profile" onClick={() => selectView('settings')}>
               <span className="admin-avatar">{(email || 'A').slice(0, 1).toUpperCase()}</span>
-              <span><strong>Administrator</strong><small>{email}</small></span>
+              <span><strong>{user?.fullName || 'Administrator'}</strong><small>Main Admin</small></span>
               <span className="admin-profile__chevron">⌄</span>
             </button>
           </div>

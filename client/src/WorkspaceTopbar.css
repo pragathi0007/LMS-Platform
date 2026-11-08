@@ -1,0 +1,237 @@
+.workspace-topbar {
+  position: sticky;
+  z-index: 20;
+  top: 0;
+  display: flex;
+  min-height: 66px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 0 clamp(18px, 3vw, 36px);
+  border-bottom: 1px solid #e1ddd2;
+  background: rgba(255, 253, 247, 0.96);
+  color: #303832;
+  backdrop-filter: blur(12px);
+}
+
+.workspace-topbar__breadcrumb,
+.workspace-topbar__actions,
+.workspace-topbar__account {
+  display: flex;
+  align-items: center;
+}
+
+.workspace-topbar__breadcrumb {
+  min-width: 0;
+  gap: 10px;
+  color: #626960;
+  font-size: 11px;
+}
+
+.workspace-topbar__breadcrumb a {
+  color: inherit;
+  text-decoration: none;
+}
+
+.workspace-topbar__breadcrumb span {
+  color: #aaa99d;
+}
+
+.workspace-topbar__breadcrumb strong {
+  overflow: hidden;
+  color: #303832;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workspace-topbar__actions {
+  flex: 0 0 auto;
+  gap: 5px;
+}
+
+.workspace-topbar .workspace-topbar__theme {
+  position: static;
+  display: grid;
+  width: 36px;
+  height: 36px;
+  min-height: 36px;
+  place-items: center;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  border-color: transparent;
+  background: transparent;
+  color: #5d665e;
+  box-shadow: none;
+}
+
+.workspace-topbar .workspace-topbar__theme:hover,
+.workspace-topbar__icon:hover {
+  border-color: #dedace;
+  background: #f1efe6;
+}
+
+.workspace-topbar .workspace-topbar__theme svg {
+  width: 19px;
+  height: 19px;
+}
+
+.workspace-topbar .workspace-topbar__theme .theme-toggle__label {
+  display: none;
+}
+
+.workspace-topbar__icon {
+  display: grid;
+  width: 36px;
+  height: 36px;
+  place-items: center;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  color: #5d665e;
+}
+
+.workspace-topbar__icon svg {
+  width: 19px;
+  height: 19px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.7;
+}
+
+.workspace-topbar__account {
+  gap: 9px;
+  margin-left: 3px;
+}
+
+.workspace-topbar__avatar {
+  display: grid;
+  width: 38px;
+  height: 38px;
+  flex: 0 0 38px;
+  place-items: center;
+  border: 1px solid #c5ddce;
+  border-radius: 50%;
+  background: #e4eee5;
+  color: #3f7061;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.workspace-topbar__identity {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.workspace-topbar__identity strong,
+.workspace-topbar__identity small {
+  max-width: 145px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workspace-topbar__identity strong {
+  color: #2e352f;
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.workspace-topbar__identity small {
+  color: #626960;
+  font-size: 10px;
+}
+
+.workspace-topbar__logout {
+  min-height: 34px;
+  padding: 0 10px;
+  border: 1px solid #dedace;
+  border-radius: 7px;
+  background: transparent;
+  color: #5d665e;
+  font-size: 10px;
+}
+
+.workspace-topbar__logout:hover {
+  background: #f1efe6;
+}
+
+@media (max-width: 600px) {
+  .workspace-topbar {
+    gap: 10px;
+    padding: 0 12px;
+  }
+
+  .workspace-topbar__breadcrumb {
+    min-width: 0;
+    flex: 1 1 auto;
+    overflow: hidden;
+    gap: 6px;
+    font-size: 10px;
+    white-space: nowrap;
+  }
+
+  .workspace-topbar__actions {
+    gap: 1px;
+  }
+
+  .workspace-topbar__logout {
+    display: none;
+  }
+
+  .workspace-topbar__account {
+    gap: 6px;
+    margin-left: 0;
+  }
+
+  .workspace-topbar__avatar {
+    width: 32px;
+    height: 32px;
+    flex-basis: 32px;
+  }
+
+  .workspace-topbar__identity strong,
+  .workspace-topbar__identity small {
+    max-width: 78px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .workspace-topbar *,
+  .workspace-topbar *::before,
+  .workspace-topbar *::after {
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+:root[data-theme='dark'] .workspace-topbar {
+  border-color: #343e39;
+  background: rgba(32, 39, 37, 0.96);
+  color: #edf0e9;
+}
+
+:root[data-theme='dark'] .workspace-topbar__breadcrumb strong,
+:root[data-theme='dark'] .workspace-topbar__identity strong {
+  color: #edf0e9;
+}
+
+:root[data-theme='dark'] .workspace-topbar__breadcrumb,
+:root[data-theme='dark'] .workspace-topbar__identity small {
+  color: #b0b9af;
+}
+
+:root[data-theme='dark'] .workspace-topbar__icon,
+:root[data-theme='dark'] .workspace-topbar__logout {
+  color: #dce3db;
+}
+
+:root[data-theme='dark'] .workspace-topbar__icon:hover,
+:root[data-theme='dark'] .workspace-topbar__logout:hover,
+:root[data-theme='dark'] .workspace-topbar .workspace-topbar__theme:hover {
+  border-color: #46504a;
+  background: #303b35;
+}

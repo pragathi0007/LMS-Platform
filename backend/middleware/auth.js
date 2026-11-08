@@ -45,6 +45,7 @@ export async function authenticate(req, res, next) {
     req.auth = {
       id: String(user._id),
       role: payload.role,
+      accountCollection: payload.accountCollection,
       user: {
         id: String(user._id),
         fullName: user.fullName,
@@ -55,6 +56,7 @@ export async function authenticate(req, res, next) {
         studentType: user.studentType,
         status: user.status,
         isActive: user.isActive,
+        permissions: user.permissions,
       },
     }
     return next()

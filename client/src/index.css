@@ -11,6 +11,12 @@
   font-weight: 400;
 }
 
+:root[data-theme='dark'] {
+  color-scheme: dark;
+  color: #e6ebe4;
+  background: #171d1c;
+}
+
 * {
   box-sizing: border-box;
 }
@@ -24,6 +30,10 @@ body {
   min-width: 320px;
   min-height: 100vh;
   margin: 0;
+}
+
+:root[data-theme='dark'] body {
+  background: #171d1c;
 }
 
 button,
@@ -47,4 +57,338 @@ textarea:focus-visible {
 ::selection {
   background: #dcebe1;
   color: #293630;
+}
+
+:root[data-theme='dark'] {
+  color-scheme: dark;
+  --theme-canvas: #171d1c;
+  --theme-surface: #202725;
+  --theme-surface-raised: #252d29;
+  --theme-border: #3a4540;
+  --theme-ink: #e6ebe4;
+  --theme-muted: #b0b9af;
+}
+
+:root[data-theme='dark'] body,
+:root[data-theme='dark'] #root {
+  background: var(--theme-canvas);
+  color: var(--theme-ink);
+}
+
+:root[data-theme='dark'] .student-dashboard {
+  --student-ink: var(--theme-ink);
+  --student-muted: var(--theme-muted);
+  --student-soft: #a4afa5;
+  --student-line: var(--theme-border);
+  --student-paper: var(--theme-surface);
+  --student-sidebar-paper: #1d2421;
+  --student-canvas: var(--theme-canvas);
+  color: var(--theme-ink);
+  background: var(--theme-canvas);
+}
+
+:root[data-theme='dark'] .student-sidebar,
+:root[data-theme='dark'] .student-topbar {
+  border-color: var(--theme-border);
+  background: #1d2421;
+}
+
+:root[data-theme='dark'] .student-sidebar__brand > span,
+:root[data-theme='dark'] .student-sidebar__label,
+:root[data-theme='dark'] .student-sidebar__identity strong,
+:root[data-theme='dark'] .student-profile-trigger__copy strong,
+:root[data-theme='dark'] .student-breadcrumb strong,
+:root[data-theme='dark'] .student-stat__value,
+:root[data-theme='dark'] .student-section-heading h2,
+:root[data-theme='dark'] .student-route-page h2,
+:root[data-theme='dark'] .student-route-page h3,
+:root[data-theme='dark'] .student-profile-details dd,
+:root[data-theme='dark'] .student-achievement-item strong,
+:root[data-theme='dark'] .student-welcome h1,
+:root[data-theme='dark'] .student-panel,
+:root[data-theme='dark'] .student-tool-card,
+:root[data-theme='dark'] .student-recommendation-card,
+:root[data-theme='dark'] .student-resource-card,
+:root[data-theme='dark'] .student-courses__card {
+  color: var(--theme-ink);
+}
+
+:root[data-theme='dark'] .student-sidebar__label,
+:root[data-theme='dark'] .student-sidebar__identity small,
+:root[data-theme='dark'] .student-profile-trigger__copy small,
+:root[data-theme='dark'] .student-sidebar__link,
+:root[data-theme='dark'] .student-breadcrumb,
+:root[data-theme='dark'] .student-stat__label,
+:root[data-theme='dark'] .student-stat > small,
+:root[data-theme='dark'] .student-eyebrow,
+:root[data-theme='dark'] .student-section-heading p,
+:root[data-theme='dark'] .student-route-page p,
+:root[data-theme='dark'] .student-profile-details dt,
+:root[data-theme='dark'] .student-achievement-item small,
+:root[data-theme='dark'] .student-achievement-item > span:last-child,
+:root[data-theme='dark'] .student-courses__card p,
+:root[data-theme='dark'] .student-courses__card small {
+  color: var(--theme-muted);
+}
+
+:root[data-theme='dark'] .student-sidebar__link:hover,
+:root[data-theme='dark'] .student-sidebar__logout:hover,
+:root[data-theme='dark'] .student-icon-button:hover,
+:root[data-theme='dark'] .student-topbar .student-theme-toggle:hover {
+  border-color: #46564d;
+  background: #29332e;
+  color: #dce8df;
+}
+
+:root[data-theme='dark'] .student-sidebar__link.is-active {
+  border-color: #776533;
+  background: #383321;
+  color: #f0dfaa;
+}
+
+:root[data-theme='dark'] .student-sidebar__bottom {
+  border-color: var(--theme-border);
+}
+
+:root[data-theme='dark'] .student-panel,
+:root[data-theme='dark'] .student-stat,
+:root[data-theme='dark'] .student-tool-card,
+:root[data-theme='dark'] .student-recommendation-card,
+:root[data-theme='dark'] .student-resource-card,
+:root[data-theme='dark'] .student-state-card,
+:root[data-theme='dark'] .student-courses__card,
+:root[data-theme='dark'] .student-profile-overview > .student-route-page,
+:root[data-theme='dark'] .student-profile-sections > .student-route-page {
+  border-color: var(--theme-border);
+  background: var(--theme-surface);
+  box-shadow: 0 5px 17px rgba(0, 0, 0, 0.16);
+}
+
+:root[data-theme='dark'] .student-profile-overview .student-stat.is-peach,
+:root[data-theme='dark'] .student-profile-overview .student-stat.is-mint,
+:root[data-theme='dark'] .student-profile-overview .student-stat.is-gold,
+:root[data-theme='dark'] .student-profile-overview .student-stat.is-blue,
+:root[data-theme='dark'] .student-achievement-item {
+  border-color: #3f4a43;
+  background: #252e2a;
+}
+
+:root[data-theme='dark'] .student-stat__icon,
+:root[data-theme='dark'] .student-profile-overview .student-stat__icon {
+  background: #303a34;
+  color: #d7c27d;
+}
+
+:root[data-theme='dark'] .student-welcome {
+  border-color: #3a4941;
+  background: linear-gradient(120deg, #25312c, #292f2c);
+}
+
+:root[data-theme='dark'] .student-search,
+:root[data-theme='dark'] .student-learning-search,
+:root[data-theme='dark'] .student-learning-difficulty,
+:root[data-theme='dark'] .student-profile-dropdown,
+:root[data-theme='dark'] .student-courses__enrollments li {
+  border-color: var(--theme-border);
+  background: var(--theme-surface-raised);
+  color: var(--theme-ink);
+}
+
+:root[data-theme='dark'] .student-search input,
+:root[data-theme='dark'] .student-search input::placeholder,
+:root[data-theme='dark'] .student-learning-search input,
+:root[data-theme='dark'] .student-route-page input,
+:root[data-theme='dark'] .student-route-page select,
+:root[data-theme='dark'] .student-route-page textarea {
+  color: var(--theme-ink);
+}
+
+:root[data-theme='dark'] .student-route-page input,
+:root[data-theme='dark'] .student-route-page select,
+:root[data-theme='dark'] .student-route-page textarea {
+  border-color: #46504a;
+  background: #252d29;
+}
+
+:root[data-theme='dark'] .student-profile-details > div {
+  border-color: var(--theme-border);
+}
+
+:root[data-theme='dark'] .student-empty,
+:root[data-theme='dark'] .student-empty p,
+:root[data-theme='dark'] .student-state-card p {
+  color: var(--theme-muted);
+}
+
+:root[data-theme='dark'] .admin-app {
+  --admin-ink: var(--theme-ink);
+  --admin-muted: var(--theme-muted);
+  --admin-line: var(--theme-border);
+  --admin-cream: #1d2421;
+  background: var(--theme-canvas);
+  color: var(--theme-ink);
+}
+
+:root[data-theme='dark'] .admin-sidebar,
+:root[data-theme='dark'] .admin-topbar {
+  border-color: var(--theme-border);
+  background: #1d2421;
+}
+
+:root[data-theme='dark'] .admin-panel,
+:root[data-theme='dark'] .admin-metric,
+:root[data-theme='dark'] .admin-review-card,
+:root[data-theme='dark'] .admin-view-panel,
+:root[data-theme='dark'] .admin-data-form,
+:root[data-theme='dark'] .admin-college-list,
+:root[data-theme='dark'] .admin-college-list__item,
+:root[data-theme='dark'] .admin-student-import {
+  border-color: var(--theme-border);
+  background: var(--theme-surface);
+  color: var(--theme-ink);
+}
+
+:root[data-theme='dark'] .admin-page-heading h1,
+:root[data-theme='dark'] .admin-panel__heading h2,
+:root[data-theme='dark'] .admin-secondary-queue h2,
+:root[data-theme='dark'] .admin-metric > strong,
+:root[data-theme='dark'] .admin-table__name,
+:root[data-theme='dark'] .admin-review-card__header h2,
+:root[data-theme='dark'] .admin-profile strong,
+:root[data-theme='dark'] .admin-data-form h2,
+:root[data-theme='dark'] .admin-college-list h2 {
+  color: var(--theme-ink);
+}
+
+:root[data-theme='dark'] .admin-page-heading p,
+:root[data-theme='dark'] .admin-panel__heading p,
+:root[data-theme='dark'] .admin-metric p,
+:root[data-theme='dark'] .admin-table td,
+:root[data-theme='dark'] .admin-table th,
+:root[data-theme='dark'] .admin-profile small,
+:root[data-theme='dark'] .admin-data-form p,
+:root[data-theme='dark'] .admin-college-list > p,
+:root[data-theme='dark'] .admin-student-import__heading p {
+  color: var(--theme-muted);
+}
+
+:root[data-theme='dark'] .admin-search,
+:root[data-theme='dark'] .admin-data-form input,
+:root[data-theme='dark'] .admin-data-form select,
+:root[data-theme='dark'] .admin-data-form textarea,
+:root[data-theme='dark'] .admin-student-import__form input,
+:root[data-theme='dark'] .admin-student-import__form select,
+:root[data-theme='dark'] .admin-panel__heading select {
+  border-color: #46504a;
+  background: #252d29;
+  color: var(--theme-ink);
+}
+
+:root[data-theme='dark'] .admin-table th,
+:root[data-theme='dark'] .admin-table td,
+:root[data-theme='dark'] .admin-college-list__item {
+  border-color: var(--theme-border);
+}
+
+:root[data-theme='dark'] .college-admin {
+  background: var(--theme-canvas);
+  color: var(--theme-ink);
+}
+
+:root[data-theme='dark'] .college-admin__header,
+:root[data-theme='dark'] .college-admin__panel {
+  border-color: var(--theme-border);
+  background: var(--theme-surface);
+  color: var(--theme-ink);
+}
+
+:root[data-theme='dark'] .college-admin__header h1,
+:root[data-theme='dark'] .college-admin__panel h2,
+:root[data-theme='dark'] .college-admin td {
+  color: var(--theme-ink);
+}
+
+:root[data-theme='dark'] .college-admin__header p,
+:root[data-theme='dark'] .college-admin__header span,
+:root[data-theme='dark'] .college-admin__panel > p,
+:root[data-theme='dark'] .college-admin th {
+  color: var(--theme-muted);
+}
+
+:root[data-theme='dark'] .college-admin__form select {
+  border-color: #46504a;
+  background: var(--theme-surface-raised);
+  color: var(--theme-ink);
+}
+
+:root[data-theme='dark'] .admin-support {
+  background: var(--theme-canvas);
+  color: var(--theme-ink);
+}
+
+:root[data-theme='dark'] .admin-support__main .student-panel,
+:root[data-theme='dark'] .admin-support__main .support-ticket-row,
+:root[data-theme='dark'] .admin-support__main .support-ticket-description,
+:root[data-theme='dark'] .admin-support__main .support-conversation {
+  border-color: var(--theme-border);
+  background: var(--theme-surface);
+  color: var(--theme-ink);
+}
+
+:root[data-theme='dark'] .admin-support__main h1,
+:root[data-theme='dark'] .admin-support__main h2,
+:root[data-theme='dark'] .admin-support__main h3,
+:root[data-theme='dark'] .admin-support__main strong {
+  color: var(--theme-ink);
+}
+
+:root[data-theme='dark'] .admin-support__main p,
+:root[data-theme='dark'] .admin-support__main small,
+:root[data-theme='dark'] .admin-support__main label,
+:root[data-theme='dark'] .admin-support__main time {
+  color: var(--theme-muted);
+}
+
+:root[data-theme='dark'] .workspace-topbar__logout,
+:root[data-theme='dark'] .admin-nav__item,
+:root[data-theme='dark'] .student-sidebar__logout {
+  color: var(--theme-muted);
+}
+
+:root[data-theme='dark'] .support-center-page .support-page-panel,
+:root[data-theme='dark'] .support-center-page .support-ticket-row,
+:root[data-theme='dark'] .support-center-page .support-faq-item,
+:root[data-theme='dark'] .support-center-page .support-ticket-description,
+:root[data-theme='dark'] .support-center-page .support-conversation,
+:root[data-theme='dark'] .support-center-page .support-status-history {
+  border-color: var(--theme-border);
+  background: var(--theme-surface);
+  color: var(--theme-ink);
+}
+
+:root[data-theme='dark'] .support-center-page .support-form input,
+:root[data-theme='dark'] .support-center-page .support-form select,
+:root[data-theme='dark'] .support-center-page .support-form textarea,
+:root[data-theme='dark'] .support-center-page .support-faq-search input {
+  border-color: #46504a;
+  background: var(--theme-surface-raised);
+  color: var(--theme-ink);
+}
+
+:root[data-theme='dark'] .support-center-page .support-option-card__copy strong,
+:root[data-theme='dark'] .support-center-page .support-empty-state h3,
+:root[data-theme='dark'] .support-center-page .support-faq-item summary,
+:root[data-theme='dark'] .support-center-page .support-ticket-row__main strong {
+  color: var(--theme-ink);
+}
+
+:root[data-theme='dark'] .support-center-page .support-option-card__copy small,
+:root[data-theme='dark'] .support-center-page .support-empty-state p,
+:root[data-theme='dark'] .support-center-page .support-faq-item p,
+:root[data-theme='dark'] .support-center-page .support-muted {
+  color: var(--theme-muted);
+}
+
+:root[data-theme='dark'] .auth-page {
+  color: var(--theme-ink);
 }

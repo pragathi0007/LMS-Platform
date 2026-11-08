@@ -1,8 +1,13 @@
 import React, { useEffect, useRef, useState } from 'react'
+import AdminSupport from './AdminSupport.jsx'
 import AdminDashboard from './AdminDashboard.jsx'
 import CollegeAdminDashboard from './CollegeAdminDashboard.jsx'
+import SettingsPage from './SettingsPage.jsx'
 import StudentDashboard from './StudentDashboard.jsx'
-import { useLocation } from 'react-router-dom'
+import ThemeToggle from './ThemeToggle.jsx'
+import WorkspaceTopbar from './WorkspaceTopbar.jsx'
+import { Navigate, useLocation } from 'react-router-dom'
+import { isInvalidSessionResponse } from './auth-session.js'
 import './App.css'
 
 function getPasswordStrength(password) {
@@ -13,7 +18,11 @@ function getPasswordStrength(password) {
     /[^a-zA-Z0-9]/.test(password),
   ].filter(Boolean).length
 }
-const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000/api').replace(/\/+$/, '')
+const API_BASE_URL = (
+  import.meta.env.VITE_API_URL ||
+  import.meta.env.VITE_API_BASE_URL ||
+  'http://localhost:5000/api'
+).replace(/\/+$/, '')
 const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID
 let googleIdentityServicesPromise
 const DASHBOARD_PATHS = {
@@ -102,6 +111,23 @@ async function registerAccount(payload) {
   return result
 }
 
+async function validateReferralCode(code) {
+  const response = await fetch(`${API_BASE_URL}/referrals/validate`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ code }),
+  })
+  const result = await readApiResponse(response)
+  if (!response.ok || result.valid !== true) {
+    throw new Error(
+      typeof result.message === 'string'
+        ? result.message
+        : 'This referral code is invalid, expired, or already used.',
+    )
+  }
+  return result
+}
+
 async function checkUsernameAvailability(username, signal) {
   const query = new URLSearchParams({ username })
   const response = await fetch(`${API_BASE_URL}/auth/check-username?${query}`, { signal })
@@ -180,20 +206,64 @@ function AuthForm({ mode, role, onMessage, onRegistrationSuccess }) {
   const [password, setPassword] = useState('')
   const [confirmPassword, setConfirmPassword] = useState('')
   const [username, setUsername] = useState('')
+  const [referralCode, setReferralCode] = useState('')
+  const [referralCodeStatus, setReferralCodeStatus] = useState('')
+  const [referralCodeMessage, setReferralCodeMessage] = useState('')
+  const [isCheckingReferralCode, setIsCheckingReferralCode] = useState(false)
+  const [educationQualification, setEducationQualification] = useState('')
+  const [customQualification, setCustomQualification] = useState('')
+  const [livingWithWhom, setLivingWithWhom] = useState('')
+  const [customLivingArrangement, setCustomLivingArrangement] = useState('')
   const [usernameStatus, setUsernameStatus] = useState('idle')
   const [usernameSuggestions, setUsernameSuggestions] = useState([])
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [isGoogleSubmitting, setIsGoogleSubmitting] = useState(false)
   const [googleClientLoadError, setGoogleClientLoadError] = useState('')
+  const [loginChallenge, setLoginChallenge] = useState(null)
+  const [loginOtp, setLoginOtp] = useState('')
+  const [loginOtpError, setLoginOtpError] = useState('')
+  const [isVerifyingLoginOtp, setIsVerifyingLoginOtp] = useState(false)
+  const [isResendingLoginOtp, setIsResendingLoginOtp] = useState(false)
+  const [loginOtpResendCountdown, setLoginOtpResendCountdown] = useState(0)
   const googleAttempt = useRef(null)
   const googleCodeHandler = useRef(null)
   const googleCodeClient = useRef(null)
+  const referralCodeInput = useRef(null)
   const onMessageRef = useRef(onMessage)
   const isRegistering = mode === 'register'
   const roleKey = AUTH_ROLE_KEYS[role]
   const isAdministrativeRole = roleKey === 'main_admin' || roleKey === 'college_admin'
 
   onMessageRef.current = onMessage
+
+  async function checkRegistrationReferralCode(value) {
+    const normalizedCode = value.trim().toUpperCase()
+    if (!normalizedCode) {
+      setReferralCodeStatus('')
+      setReferralCodeMessage('')
+      return
+    }
+
+    setIsCheckingReferralCode(true)
+    setReferralCodeStatus('checking')
+    setReferralCodeMessage('')
+    try {
+      await validateReferralCode(normalizedCode)
+      if (referralCodeInput.current?.value.trim().toUpperCase() === normalizedCode) {
+        setReferralCodeStatus('valid')
+        setReferralCodeMessage('Referral code is valid.')
+      }
+    } catch (error) {
+      if (referralCodeInput.current?.value.trim().toUpperCase() === normalizedCode) {
+        setReferralCodeStatus('invalid')
+        setReferralCodeMessage(error instanceof Error ? error.message : 'Referral code could not be validated.')
+      }
+    } finally {
+      if (referralCodeInput.current?.value.trim().toUpperCase() === normalizedCode) {
+        setIsCheckingReferralCode(false)
+      }
+    }
+  }
 
   useEffect(() => {
     if (!isRegistering) {
@@ -237,6 +307,16 @@ function AuthForm({ mode, role, onMessage, onRegistrationSuccess }) {
   }, [isRegistering, username])
 
   useEffect(() => {
+    if (!loginChallenge) return undefined
+    setLoginOtpResendCountdown(loginChallenge.resendAfterSeconds || 60)
+    const timerId = window.setInterval(
+      () => setLoginOtpResendCountdown((current) => Math.max(0, current - 1)),
+      1000,
+    )
+    return () => window.clearInterval(timerId)
+  }, [loginChallenge])
+
+  useEffect(() => {
     if (isRegistering || isAdministrativeRole || !GOOGLE_CLIENT_ID) return undefined
 
     let cancelled = false
@@ -251,7 +331,7 @@ function AuthForm({ mode, role, onMessage, onRegistrationSuccess }) {
           callback: (codeResponse) => googleCodeHandler.current?.(codeResponse),
           error_callback: (error) => {
             const attempt = googleAttempt.current
-            if (!attempt?.active) return
+            if (!attempt?.active || attempt.codeReceived) return
             attempt.active = false
             window.clearTimeout(attempt.timeoutId)
             setIsGoogleSubmitting(false)
@@ -339,6 +419,9 @@ function AuthForm({ mode, role, onMessage, onRegistrationSuccess }) {
                 confirmPassword,
                 role: 'student',
                 accountType: 'independent',
+                ...(form.elements.referralCode.value.trim()
+                  ? { referralCode: form.elements.referralCode.value.trim() }
+                  : {}),
               }
             : {
                 identifier: identifier.value,
@@ -372,6 +455,16 @@ function AuthForm({ mode, role, onMessage, onRegistrationSuccess }) {
         return
       }
 
+      if (result.requiresTwoFactor === true) {
+        if (typeof result.challengeToken !== 'string' || typeof result.maskedEmail !== 'string') {
+          throw new Error('The server returned an invalid login verification request.')
+        }
+        setLoginChallenge(result)
+        setLoginOtp('')
+        setLoginOtpError('')
+        return
+      }
+
       if (
         typeof result.token !== 'string' ||
         typeof result.user?.id !== 'string' ||
@@ -396,10 +489,105 @@ function AuthForm({ mode, role, onMessage, onRegistrationSuccess }) {
     }
   }
 
+  async function verifyLoginOtp(event) {
+    event.preventDefault()
+    setLoginOtpError('')
+    if (!/^\d{6}$/.test(loginOtp)) {
+      setLoginOtpError('Enter the 6-digit verification code.')
+      return
+    }
+
+    setIsVerifyingLoginOtp(true)
+    try {
+      const response = await fetch(`${API_BASE_URL}/auth/two-factor/verify`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ challengeToken: loginChallenge.challengeToken, code: loginOtp }),
+      })
+      const result = await readApiResponse(response)
+      if (!response.ok) throw new Error(result.message || 'The verification code could not be checked.')
+      if (
+        typeof result.token !== 'string' ||
+        typeof result.user?.id !== 'string' ||
+        result.user.role !== 'student'
+      ) {
+        throw new Error('The server returned incomplete or mismatched login details.')
+      }
+      sessionStorage.setItem('lms.auth', JSON.stringify({ token: result.token, user: result.user }))
+      window.location.assign(DASHBOARD_PATHS[result.user.role])
+    } catch (error) {
+      setLoginOtpError(
+        error instanceof TypeError
+          ? 'Could not connect to the server. Check that the backend is running and try again.'
+          : error instanceof Error ? error.message : 'The verification code could not be checked.',
+      )
+    } finally {
+      setIsVerifyingLoginOtp(false)
+    }
+  }
+
+  async function resendLoginOtp() {
+    if (!loginChallenge?.challengeToken) return
+    setLoginOtpError('')
+    setIsResendingLoginOtp(true)
+    try {
+      const response = await fetch(`${API_BASE_URL}/auth/two-factor/resend`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ challengeToken: loginChallenge.challengeToken }),
+      })
+      const result = await readApiResponse(response)
+      if (!response.ok) {
+        if (typeof result.retryAfterSeconds === 'number') {
+          setLoginOtpResendCountdown(result.retryAfterSeconds)
+        }
+        throw new Error(result.message || 'A new verification code could not be sent.')
+      }
+      setLoginChallenge(result)
+      setLoginOtp('')
+    } catch (error) {
+      setLoginOtpError(error instanceof TypeError
+        ? 'Could not connect to the server. Check that the backend is running and try again.'
+        : error instanceof Error ? error.message : 'A new verification code could not be sent.')
+    } finally {
+      setIsResendingLoginOtp(false)
+    }
+  }
+
+  async function cancelLoginOtp() {
+    if (!loginChallenge?.challengeToken) {
+      setLoginChallenge(null)
+      return
+    }
+    setLoginOtpError('')
+    try {
+      const response = await fetch(`${API_BASE_URL}/auth/two-factor/cancel`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ challengeToken: loginChallenge.challengeToken }),
+      })
+      const result = await readApiResponse(response)
+      if (response.status === 410) {
+        setLoginChallenge(null)
+        setLoginOtp('')
+        return
+      }
+      if (!response.ok) throw new Error(result.message || 'The verification request could not be cancelled.')
+    } catch (error) {
+      setLoginOtpError(error instanceof TypeError
+        ? 'Could not connect to the server. Check that the backend is running and try again.'
+        : error instanceof Error ? error.message : 'The verification request could not be cancelled.')
+      return
+    }
+    setLoginChallenge(null)
+    setLoginOtp('')
+    setLoginOtpError('')
+  }
+
   useEffect(() => {
     googleCodeHandler.current = async (codeResponse) => {
       const attempt = googleAttempt.current
-      if (!attempt?.active) return
+      if (!attempt?.active || attempt.codeReceived) return
       attempt.codeReceived = true
       window.clearTimeout(attempt.timeoutId)
       if (typeof codeResponse?.error === 'string') {
@@ -449,6 +637,17 @@ function AuthForm({ mode, role, onMessage, onRegistrationSuccess }) {
           )
         }
 
+        if (result.requiresTwoFactor === true) {
+          if (typeof result.challengeToken !== 'string' || typeof result.maskedEmail !== 'string') {
+            throw new Error('The server returned an invalid login verification request.')
+          }
+          attempt.active = false
+          setLoginChallenge(result)
+          setLoginOtp('')
+          setLoginOtpError('')
+          return
+        }
+
         if (
           typeof result.token !== 'string' ||
           typeof result.user?.id !== 'string' ||
@@ -485,6 +684,7 @@ function AuthForm({ mode, role, onMessage, onRegistrationSuccess }) {
       onMessage(googleClientLoadError || 'Google Sign-In is still loading. Please try again in a moment.', 'error')
       return
     }
+    if (googleAttempt.current?.active) return
 
     setIsGoogleSubmitting(true)
     onMessage('')
@@ -515,6 +715,55 @@ function AuthForm({ mode, role, onMessage, onRegistrationSuccess }) {
     : isAdministrativeRole
       ? 'Welcome back.'
       : 'A little closer to your goals.'
+
+  if (loginChallenge) {
+    return (
+      <section className="auth-form login-form login-otp" aria-labelledby="login-otp-title">
+        <div className="form-heading">
+          <p className="eyebrow">SECURE SIGN IN</p>
+          <h1 id="login-otp-title">Check your email</h1>
+          <p className="form-subtitle">Enter the 6-digit code sent to {loginChallenge.maskedEmail}.</p>
+        </div>
+        <form className="form-fields" onSubmit={verifyLoginOtp}>
+          <div className="field">
+            <label htmlFor="login-email-otp">Email verification code</label>
+            <input
+              id="login-email-otp"
+              type="text"
+              inputMode="numeric"
+              autoComplete="one-time-code"
+              pattern="[0-9]{6}"
+              maxLength={6}
+              placeholder="6-digit code"
+              value={loginOtp}
+              onChange={(event) => {
+                setLoginOtp(event.currentTarget.value.replace(/\D/g, '').slice(0, 6))
+                setLoginOtpError('')
+              }}
+              required
+            />
+          </div>
+          <button className="primary-button" type="submit" disabled={isVerifyingLoginOtp || isResendingLoginOtp}>
+            {isVerifyingLoginOtp ? 'Verifying code…' : 'Verify and log in'}
+          </button>
+        </form>
+        {loginOtpError && <p className="form-message" data-status="error" role="alert">{loginOtpError}</p>}
+        <div className="login-otp__actions">
+          <button
+            className="text-button"
+            type="button"
+            onClick={resendLoginOtp}
+            disabled={isVerifyingLoginOtp || isResendingLoginOtp || loginOtpResendCountdown > 0}
+          >
+            {isResendingLoginOtp ? 'Sending code…' : loginOtpResendCountdown > 0 ? `Resend code in ${loginOtpResendCountdown}s` : 'Resend code'}
+          </button>
+          <button className="text-button" type="button" onClick={cancelLoginOtp} disabled={isVerifyingLoginOtp || isResendingLoginOtp}>
+            Use another account
+          </button>
+        </div>
+      </section>
+    )
+  }
 
   return (
     <form
@@ -556,6 +805,47 @@ function AuthForm({ mode, role, onMessage, onRegistrationSuccess }) {
               onChange={(event) => event.currentTarget.setCustomValidity('')}
               required
             />
+          </div>
+        )}
+
+        {isRegistering && (
+          <div className="field">
+            <label htmlFor="registration-referral-code">Referral Code (optional)</label>
+            <div className="referral-code-input">
+              <input
+                id="registration-referral-code"
+                name="referralCode"
+                type="text"
+                autoComplete="off"
+                maxLength={64}
+                value={referralCode}
+                ref={referralCodeInput}
+                aria-describedby="registration-referral-status"
+                onChange={(event) => {
+                  setReferralCode(event.currentTarget.value)
+                  setReferralCodeStatus('')
+                  setReferralCodeMessage('')
+                  setIsCheckingReferralCode(false)
+                }}
+                onBlur={(event) => checkRegistrationReferralCode(event.currentTarget.value)}
+              />
+              <button
+                className="text-button"
+                type="button"
+                disabled={isCheckingReferralCode || !referralCode.trim()}
+                onClick={() => checkRegistrationReferralCode(referralCodeInput.current?.value || '')}
+              >
+                {isCheckingReferralCode ? 'Checking…' : 'Check code'}
+              </button>
+            </div>
+            <span
+              id="registration-referral-status"
+              className={`referral-code-status${referralCodeStatus ? ` is-${referralCodeStatus}` : ''}`}
+              role="status"
+              aria-live="polite"
+            >
+              {referralCodeMessage}
+            </span>
           </div>
         )}
 
@@ -639,6 +929,101 @@ function AuthForm({ mode, role, onMessage, onRegistrationSuccess }) {
             onChange={(event) => setConfirmPassword(event.target.value)}
             autoComplete="new-password"
           />
+        )}
+
+        {isRegistering && (
+          <>
+            <div className="field">
+              <label htmlFor="education-qualification">Education Qualification</label>
+              <select
+                id="education-qualification"
+                name="educationQualification"
+                value={educationQualification}
+                onChange={(event) => {
+                  const value = event.currentTarget.value
+                  setEducationQualification(value)
+                  if (value !== 'Other') setCustomQualification('')
+                }}
+              >
+                <option value="">Select your qualification</option>
+                <option value="School Student">School Student</option>
+                <option value="Higher Secondary">Higher Secondary</option>
+                <option value="Diploma">Diploma</option>
+                <option value="Undergraduate">Undergraduate</option>
+                <option value="Postgraduate">Postgraduate</option>
+                <option value="Other">Other</option>
+              </select>
+              {educationQualification === 'Other' && (
+                <>
+                  <label htmlFor="custom-qualification">Please specify your qualification</label>
+                  <input
+                    id="custom-qualification"
+                    name="customQualification"
+                    type="text"
+                    placeholder="Enter your qualification"
+                    value={customQualification}
+                    onChange={(event) => setCustomQualification(event.currentTarget.value)}
+                  />
+                </>
+              )}
+            </div>
+
+            <div className="field">
+              <label htmlFor="user-expectations">User Expectations</label>
+              <textarea
+                id="user-expectations"
+                name="userExpectations"
+                placeholder="What do you expect from the platform?"
+                rows={3}
+              />
+            </div>
+
+            <div className="field">
+              <label htmlFor="location">Location</label>
+              <input
+                id="location"
+                name="location"
+                type="text"
+                autoComplete="address-level2"
+                placeholder="Enter your location"
+              />
+            </div>
+
+            <div className="field">
+              <label htmlFor="living-with-whom">Living With Whom</label>
+              <select
+                id="living-with-whom"
+                name="livingWithWhom"
+                value={livingWithWhom}
+                onChange={(event) => {
+                  const value = event.currentTarget.value
+                  setLivingWithWhom(value)
+                  if (value !== 'Other') setCustomLivingArrangement('')
+                }}
+              >
+                <option value="">Select an option</option>
+                <option value="Family">Family</option>
+                <option value="Friends">Friends</option>
+                <option value="Alone">Alone</option>
+                <option value="Relatives">Relatives</option>
+                <option value="Hostel / PG">Hostel / PG</option>
+                <option value="Other">Other</option>
+              </select>
+              {livingWithWhom === 'Other' && (
+                <>
+                  <label htmlFor="custom-living-arrangement">Please specify</label>
+                  <input
+                    id="custom-living-arrangement"
+                    name="customLivingArrangement"
+                    type="text"
+                    placeholder="Enter who you live with"
+                    value={customLivingArrangement}
+                    onChange={(event) => setCustomLivingArrangement(event.currentTarget.value)}
+                  />
+                </>
+              )}
+            </div>
+          </>
         )}
 
       </div>
@@ -768,8 +1153,29 @@ function ActivationPage() {
   )
 }
 
-function DashboardPage({ role }) {
-  const [user, setUser] = useState(null)
+function getCachedDashboardUser(role) {
+  try {
+    const storedAuth = sessionStorage.getItem('lms.auth')
+    const auth = storedAuth ? JSON.parse(storedAuth) : null
+    const user = auth?.user
+    if (
+      typeof auth?.token !== 'string' ||
+      !auth.token ||
+      user?.role !== role ||
+      typeof user.id !== 'string' ||
+      !user.id
+    ) {
+      return null
+    }
+    return user
+  } catch {
+    return null
+  }
+}
+
+function DashboardPage({ role, isDark, onToggleTheme, themePreference, onSetTheme }) {
+  const location = useLocation()
+  const [user, setUser] = useState(() => getCachedDashboardUser(role))
   const [error, setError] = useState('')
   const roleLabels = {
     student: 'Student',
@@ -794,16 +1200,24 @@ function DashboardPage({ role }) {
           signal: controller.signal,
         })
         const result = await readApiResponse(response)
+        if (isInvalidSessionResponse(response, result)) {
+          sessionStorage.removeItem('lms.auth')
+          window.location.replace('/')
+          return
+        }
         const userIsActive =
           result.user?.isActive === true &&
           ['active', 'approved'].includes(String(result.user?.status || '').toLowerCase())
-        if (
-          !response.ok ||
-          result.user?.role !== role ||
-          (role === 'college_admin' && !userIsActive)
-        ) {
-          sessionStorage.removeItem('lms.auth')
-          window.location.replace('/')
+        if (!response.ok) {
+          setError(result.message || 'Your account could not access this dashboard.')
+          return
+        }
+        if (result.user?.role !== role) {
+          setError('This account does not match the selected dashboard role.')
+          return
+        }
+        if (role === 'college_admin' && !userIsActive) {
+          setError('Your college administrator account is not active.')
           return
         }
 
@@ -824,6 +1238,22 @@ function DashboardPage({ role }) {
     window.location.replace('/')
   }
 
+  function updateAccount(updatedAccount) {
+    setUser((current) => current ? { ...current, ...updatedAccount } : current)
+    const storedAuth = sessionStorage.getItem('lms.auth')
+    if (!storedAuth) return
+    try {
+      const auth = JSON.parse(storedAuth)
+      sessionStorage.setItem('lms.auth', JSON.stringify({
+        ...auth,
+        user: { ...auth.user, ...updatedAccount },
+      }))
+    } catch {
+      sessionStorage.removeItem('lms.auth')
+      window.location.replace('/')
+    }
+  }
+
   if (role === 'student') {
     return (
       <StudentDashboard
@@ -832,15 +1262,116 @@ function DashboardPage({ role }) {
         error={error}
         onRetry={() => window.location.reload()}
         onLogout={signOut}
+        isDark={isDark}
+        onToggleTheme={onToggleTheme}
+        themePreference={themePreference}
+        onSetTheme={onSetTheme}
+        onAccountUpdated={updateAccount}
       />
     )
   }
 
+  if (role === 'main_admin' && user && location.pathname.startsWith('/admin/support')) {
+    return (
+      <AdminSupport
+        user={user}
+        onLogout={signOut}
+        isDark={isDark}
+        onToggleTheme={onToggleTheme}
+        dashboardPath="/admin/dashboard"
+        supportPath="/admin/support"
+        settingsPath="/admin/settings"
+        roleLabel={roleLabels[role]}
+      />
+    )
+  }
+  if (role === 'main_admin' && user && location.pathname.startsWith('/admin/settings')) {
+    return (
+      <>
+        <WorkspaceTopbar
+          title="Settings"
+          name={user.fullName}
+          email={user.email}
+          roleLabel={roleLabels[role]}
+          dashboardPath="/admin/dashboard"
+          helpPath="/admin/support"
+          settingsPath="/admin/settings"
+          isDark={isDark}
+          onToggleTheme={onToggleTheme}
+          onLogout={signOut}
+        />
+        <SettingsPage
+          user={user}
+          onAccountUpdated={updateAccount}
+          themePreference={themePreference}
+          onSetTheme={onSetTheme}
+          standalone
+        />
+      </>
+    )
+  }
   if (role === 'main_admin' && user) {
-    return <AdminDashboard email={user.email} onLogout={signOut} />
+    return (
+      <AdminDashboard
+        user={user}
+        onLogout={signOut}
+        isDark={isDark}
+        onToggleTheme={onToggleTheme}
+      />
+    )
+  }
+  if (
+    role === 'college_admin' &&
+    user &&
+    (location.pathname.startsWith('/admin/support') || location.pathname.startsWith('/college-admin/support'))
+  ) {
+    return (
+      <AdminSupport
+        user={user}
+        onLogout={signOut}
+        isDark={isDark}
+        onToggleTheme={onToggleTheme}
+        dashboardPath="/college-admin/dashboard"
+        supportPath="/college-admin/support"
+        settingsPath="/college-admin/settings"
+        roleLabel={roleLabels[role]}
+      />
+    )
+  }
+  if (role === 'college_admin' && user && location.pathname.startsWith('/college-admin/settings')) {
+    return (
+      <>
+        <WorkspaceTopbar
+          title="Settings"
+          name={user.fullName}
+          email={user.email}
+          roleLabel={roleLabels[role]}
+          dashboardPath="/college-admin/dashboard"
+          helpPath="/college-admin/support"
+          settingsPath="/college-admin/settings"
+          isDark={isDark}
+          onToggleTheme={onToggleTheme}
+          onLogout={signOut}
+        />
+        <SettingsPage
+          user={user}
+          onAccountUpdated={updateAccount}
+          themePreference={themePreference}
+          onSetTheme={onSetTheme}
+          standalone
+        />
+      </>
+    )
   }
   if (role === 'college_admin' && user) {
-    return <CollegeAdminDashboard user={user} onLogout={signOut} />
+    return (
+      <CollegeAdminDashboard
+        user={user}
+        onLogout={signOut}
+        isDark={isDark}
+        onToggleTheme={onToggleTheme}
+      />
+    )
   }
   return (
     <main className="dashboard-landing">
@@ -878,10 +1409,24 @@ function App() {
   const location = useLocation()
   const [mode, setMode] = useState('login')
   const [message, setMessage] = useState(null)
-  const [isDark, setIsDark] = useState(false)
+  const [themePreference, setThemePreference] = useState(() => {
+    const storedTheme = localStorage.getItem('lms.theme')
+    return storedTheme === 'dark' ? 'dark' : 'light'
+  })
+  const isDark = themePreference === 'dark'
+  useEffect(() => {
+    document.documentElement.dataset.theme = isDark ? 'dark' : 'light'
+    localStorage.setItem('lms.theme', themePreference)
+  }, [isDark, themePreference])
   const isRegistering = mode === 'register'
-  const dashboardRole = Object.entries(DASHBOARD_PATHS)
-    .find(([, path]) => path === location.pathname)?.[0]
+  const dashboardRole = location.pathname.startsWith('/student/')
+    ? 'student'
+    : location.pathname.startsWith('/admin/support') || location.pathname.startsWith('/admin/settings')
+      ? 'main_admin'
+      : location.pathname.startsWith('/college-admin/')
+        ? 'college_admin'
+        : Object.entries(DASHBOARD_PATHS)
+          .find(([, path]) => path === location.pathname)?.[0]
 
   function switchMode(nextMode) {
     setMode(nextMode)
@@ -893,33 +1438,54 @@ function App() {
     setMessage({ text, type: 'success' })
   }
 
+  function toggleTheme() {
+    setThemePreference(isDark ? 'light' : 'dark')
+  }
+
+  if (location.pathname === '/student') {
+    return (
+      <Navigate
+        to={{ pathname: DASHBOARD_PATHS.student, search: location.search, hash: location.hash }}
+        replace
+      />
+    )
+  }
+
+  if (location.pathname === '/user' || location.pathname.startsWith('/user/')) {
+    const legacyPath = location.pathname.slice('/user'.length) || '/dashboard'
+    return (
+      <Navigate
+        to={{
+          pathname: `/student${legacyPath}`,
+          search: location.search,
+          hash: location.hash,
+        }}
+        replace
+      />
+    )
+  }
+
   if (dashboardRole) {
-    return <DashboardPage role={dashboardRole} />
+    return (
+      <DashboardPage
+        role={dashboardRole}
+        isDark={isDark}
+        onToggleTheme={toggleTheme}
+        themePreference={themePreference}
+        onSetTheme={setThemePreference}
+      />
+    )
   }
   if (location.pathname === '/activate') {
     return <ActivationPage />
   }
 
   return (
-    <main className="auth-page" data-theme={isDark ? 'dark' : 'light'}>
-      <button
-        className="theme-toggle"
-        type="button"
-        aria-label={`Switch to ${isDark ? 'light' : 'dark'} theme`}
-        onClick={() => setIsDark((current) => !current)}
-      >
-        {isDark ? (
-          <svg viewBox="0 0 20 20" aria-hidden="true">
-            <circle cx="10" cy="10" r="3.5" />
-            <path d="M10 1.8v2M10 16.2v2M18.2 10h-2M3.8 10h-2m14-5.8-1.4 1.4M5.6 14.4l-1.4 1.4m11.6 0-1.4-1.4M5.6 5.6 4.2 4.2" />
-          </svg>
-        ) : (
-          <svg viewBox="0 0 20 20" aria-hidden="true">
-            <path d="M16.8 12.2A7.3 7.3 0 0 1 7.8 3.2a7.3 7.3 0 1 0 9 9Z" />
-          </svg>
-        )}
-        <span>{isDark ? 'Light mode' : 'Dark mode'}</span>
-      </button>
+    <main
+      className={`auth-page${isRegistering ? ' auth-page--register' : ''}`}
+      data-theme={isDark ? 'dark' : 'light'}
+    >
+      <ThemeToggle isDark={isDark} onToggle={toggleTheme} />
       <section className="welcome-panel" aria-label="Welcome to Morrow">
         <div className="welcome-top">
           <BrandMark />
@@ -931,6 +1497,42 @@ function App() {
           <h2>Small steps.<br />Remarkable <span>things.</span></h2>
           <p>Make space for new ideas, meaningful skills, and the person you’re becoming.</p>
         </div>
+
+        {isRegistering && (
+          <svg
+            className="welcome-illustration"
+            viewBox="0 0 500 250"
+            fill="none"
+            aria-hidden="true"
+          >
+            <ellipse cx="249" cy="216" rx="188" ry="15" fill="#E6E9DA" />
+            <path d="M92 121V78a48 48 0 0 1 48-48h220a32 32 0 0 1 32 32v59" stroke="#D8DDCF" strokeWidth="2" />
+            <path d="M111 120V79a29 29 0 0 1 29-29h57" stroke="#B8CDBE" strokeWidth="3" strokeLinecap="round" />
+            <circle cx="372" cy="76" r="13" fill="#E7C976" opacity=".8" />
+            <path d="M80 190h342" stroke="#C9A97C" strokeWidth="8" strokeLinecap="round" />
+            <path d="m115 198-8 22m275-22 8 22" stroke="#A98761" strokeWidth="6" strokeLinecap="round" />
+            <path d="M111 184h34v-25a17 17 0 0 0-17-17h-1a16 16 0 0 0-16 16v26Z" fill="#8BAE9C" />
+            <path d="M128 143v-20" stroke="#8BAE9C" strokeWidth="4" strokeLinecap="round" />
+            <path d="M127 125c-14-13-13-24-9-29 12 4 17 13 14 25m-2-2c2-17 11-24 18-24 2 13-4 23-16 29" stroke="#6F9B83" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />
+            <path d="M209 162c0-22 18-40 40-40h7c18 0 33 15 33 33v24h-80v-17Z" fill="#6F9B83" />
+            <path d="M220 87c0-17 13-30 30-30s30 13 30 30v5c0 17-13 30-30 30s-30-13-30-30v-5Z" fill="#D9A985" />
+            <path d="M219 89c-5-20 8-38 28-38 14 0 24 8 28 21-7-3-13-8-17-15-6 10-19 16-37 16l-2 16Z" fill="#45564D" />
+            <path d="M223 105c8 10 18 15 31 16" stroke="#C88F6A" strokeWidth="3" strokeLinecap="round" />
+            <path d="M250 129v15" stroke="#D9A985" strokeWidth="5" strokeLinecap="round" />
+            <path d="M263 148h80l9 37h-97l8-37Z" fill="#DCE8E0" stroke="#7D9E8C" strokeWidth="3" strokeLinejoin="round" />
+            <path d="M273 157h60" stroke="#A7BDB0" strokeWidth="3" strokeLinecap="round" />
+            <path d="m242 159 24 23m69-1 16-16" stroke="#D9A985" strokeWidth="7" strokeLinecap="round" />
+            <path d="M262 185h90" stroke="#718A7B" strokeWidth="4" strokeLinecap="round" />
+            <path d="M359 180h39v-7h-39z" fill="#E7C976" />
+            <path d="M364 170h34v-7h-34z" fill="#E9E5D6" />
+            <path d="M371 160h27v-7h-27z" fill="#8BAE9C" />
+            <path d="M387 146c6-11 13-15 19-14-1 8-7 14-17 17m-3-2c-2-11-8-16-14-16 0 8 5 14 14 18" stroke="#789B81" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />
+            <path d="M383 149v10m-9 0h19" stroke="#A98761" strokeWidth="3" strokeLinecap="round" />
+            <path d="m173 74 4 9 10 1-7 6 2 9-9-5-8 5 2-9-7-6 10-1 3-9Z" fill="#E5C36F" opacity=".85" />
+            <circle cx="315" cy="80" r="4" fill="#83A994" />
+            <circle cx="188" cy="121" r="3" fill="#83A994" />
+          </svg>
+        )}
 
         <div className="learning-card" aria-hidden="true">
           <div className="card-icon">
