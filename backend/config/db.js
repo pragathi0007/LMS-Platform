@@ -9,6 +9,7 @@ import SupportTicket from '../models/SupportTicket.js'
 import EmailOtpChallenge from '../models/EmailOtpChallenge.js'
 import ReferralCode from '../models/ReferralCode.js'
 import ReferralCodeDailyLimit from '../models/ReferralCodeDailyLimit.js'
+import Notification from '../models/Notification.js'
 
 const requiredModels = [
   Admin,
@@ -23,6 +24,7 @@ const requiredModels = [
   EmailOtpChallenge,
   ReferralCode,
   ReferralCodeDailyLimit,
+  Notification,
 ]
 
 export async function connectToDatabase() {

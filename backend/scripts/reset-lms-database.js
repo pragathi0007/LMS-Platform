@@ -11,6 +11,7 @@ import Course from '../models/Course.js'
 import Enrollment from '../models/Enrollment.js'
 import ReferralCode from '../models/ReferralCode.js'
 import ReferralCodeDailyLimit from '../models/ReferralCodeDailyLimit.js'
+import Notification from '../models/Notification.js'
 import { createAdminAccount } from './seed-admin.js'
 
 const databaseName = 'LMS'
@@ -24,6 +25,7 @@ const expectedCollections = [
   'enrollment',
   'referralCodeDailyLimits',
   'referralCodes',
+  'notifications',
   'students',
   'sub_admins',
 ]
@@ -38,6 +40,7 @@ const models = [
   Enrollment,
   ReferralCode,
   ReferralCodeDailyLimit,
+  Notification,
 ]
 const BSON = mongoose.mongo.BSON
 

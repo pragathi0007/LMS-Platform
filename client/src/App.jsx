@@ -451,7 +451,7 @@ function AuthForm({ mode, role, onMessage, onRegistrationSuccess }) {
           throw new Error('The server could not confirm account creation. Please try again.')
         }
 
-        onRegistrationSuccess('Your account was created successfully. You can now log in.')
+        onRegistrationSuccess(result.message || 'Your account was created and is awaiting administrator approval.')
         return
       }
 

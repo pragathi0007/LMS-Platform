@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { randomBytes } from 'node:crypto'
 import express from 'express'
+import jwt from 'jsonwebtoken'
 import mongoose from 'mongoose'
 
 process.env.MONGO_DB_NAME = 'LMS_TEST'
@@ -21,6 +22,7 @@ const expectedCollections = [
   'colleges',
   'courses',
   'enrollment',
+  'notifications',
   'students',
   'sub_admins',
 ]
@@ -51,22 +53,26 @@ try {
     { default: adminRouter },
     { default: authRouter },
     { default: learningRouter },
+    { default: notificationsRouter },
     { AccountIdentity },
     { Admin, CollegeAdmin, CollegeStudent, Student },
     { default: College },
     { default: Course },
     { default: Enrollment },
+    { Notification },
   ] = await Promise.all([
     import('../config/db.js'),
     import('./seed-admin.js'),
     import('../routes/admin.js'),
     import('../routes/auth.js'),
     import('../routes/learning.js'),
+    import('../routes/notifications.js'),
     import('../models/AccountIdentity.js').then((module) => ({ AccountIdentity: module.default })),
     import('../models/account-models.js'),
     import('../models/College.js'),
     import('../models/Course.js'),
     import('../models/Enrollment.js'),
+    import('../models/Notification.js').then((module) => ({ Notification: module.default })),
   ])
   await connectToDatabase()
   assert.equal(mongoose.connection.db.databaseName, integrationDatabaseName)
@@ -77,6 +83,7 @@ try {
   app.use('/api/admin', adminRouter)
   app.use('/api/auth', authRouter)
   app.use('/api', learningRouter)
+  app.use('/api/notifications', notificationsRouter)
   app.use((error, req, res, next) => {
     console.error(JSON.stringify({
       event: 'database.integration_test_request_failed',
@@ -178,9 +185,29 @@ try {
   const student = await Student.findOne({ email: studentEmail }).lean()
   assert.equal(student.studentType, 'independent')
   assert.equal(student.collegeId, undefined)
+  assert.equal(student.status, 'pending')
+  assert.equal(student.approvalStatus, 'pending')
+  const pendingLogin = await request('/auth/login', {
+    body: { identifier: student.username, password: studentPassword, role: 'student' },
+  })
+  assert.equal(pendingLogin.response.status, 403)
+  assert.match(pendingLogin.result.message, /awaiting approval/)
+  const pendingToken = jwt.sign(
+    { role: 'student', accountCollection: 'students' },
+    process.env.JWT_SECRET,
+    { subject: String(student._id), expiresIn: '5m' },
+  )
+  const pendingApi = await request('/courses', { method: 'GET', token: pendingToken })
+  assert.equal(pendingApi.response.status, 403)
+  const approval = await request(`/admin/independent-students/${student._id}/approval`, {
+    method: 'PATCH',
+    token: adminToken,
+    body: { decision: 'approve' },
+  })
+  assert.equal(approval.response.status, 200, approval.result.message)
   const studentToken = await login(student.username, studentPassword, 'student')
   assert.equal((await AccountIdentity.findOne({ accountId: student._id }).lean()).accountCollection, 'students')
-  console.log('PASS Independent student registration, mapping, collection, and login')
+  console.log('PASS Independent student registration, pending login/API denial, Main Admin approval, mapping, collection, and login')
 
   const csvText = 'Full Name,Student ID,Email,Department,Batch\nLMS_TEST College Student,TEST-001,college-student@lms-test.invalid,Testing,2026\n'
   const importResult = await request('/admin/students/import', {

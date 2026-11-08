@@ -11,6 +11,7 @@ import {
 import SettingsPage from './SettingsPage.jsx'
 import ThemeToggle from './ThemeToggle.jsx'
 import { isInvalidSessionResponse } from './auth-session.js'
+import NotificationFeed from './NotificationFeed.jsx'
 import './StudentDashboard.css'
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000/api'
@@ -1265,7 +1266,7 @@ function StudentDashboard({
                     <div><span className="student-eyebrow">FROM YOUR LEARNING COMMUNITY</span><h2 id="student-announcements-title">Announcements</h2></div>
                     <span className="student-section-link student-section-link--muted">Updates</span>
                   </div>
-                  <EmptyState icon="bell" title="Announcement data isn’t connected yet" description="Main Admin and College Sub-Admin announcements will appear here once the LMS provides them." />
+                  <NotificationFeed role="student" onLogout={onLogout} />
                 </section>
               </div>
 
@@ -1357,7 +1358,11 @@ function StudentDashboard({
               <Route path="/student/help/faqs" element={<SupportFaqPage />} />
               <Route path="/student/help/requests" element={<SupportRequestsPage />} />
               <Route path="/student/help/requests/:ticketId" element={<SupportTicketDetailPage />} />
-              <Route path="/student/announcements" element={<StudentUpdates />} />
+              <Route path="/student/announcements" element={
+                <StudentRoutePage eyebrow="FROM YOUR LEARNING COMMUNITY" title="Announcements">
+                  <NotificationFeed role="student" onLogout={onLogout} />
+                </StudentRoutePage>
+              } />
               <Route path="/student/study-companion" element={
                 <StudentRoutePage eyebrow="A HELPFUL STUDY SPACE" title="AI Study Companion">
                   <EmptyState icon="spark" title="Study Companion is not connected" description="Topic explanations, lesson summaries and practice questions are planned for a future release." />

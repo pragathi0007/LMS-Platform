@@ -29,7 +29,8 @@ npm run dev
 The seed command creates a `main_admin` account in `admin`, reserves its login
 identity in `accountidentities`, and bcrypt-hashes the password. It leaves an
 existing account unchanged. Public registration is available only to
-independent students.
+independent students. New independent student registrations remain pending
+until approved by a Main Admin; the existing college onboarding flow is unchanged.
 
 ## Account collections and roles
 
@@ -47,6 +48,7 @@ The application uses the database selected by `MONGO_URI` (currently `LMS`).
 | `accountidentities` | Normalized login identity-to-collection/document mappings |
 | `referralCodes` | External User referral codes and redemption history |
 | `referralCodeDailyLimits` | Atomic per-External-User UTC daily generation counters |
+| `notifications` | Persistent Main Admin and student notifications |
 
 Authentication accepts only the `main_admin`, `college_admin`, and `student`
 roles. JWTs include the canonical role and the account collection; identity
@@ -79,10 +81,10 @@ collection has a unique owner/UTC-day index. Referral history is retained; no
 TTL index is used. Referral history returns only whether the friend registered
 and their registration status, not their account identifiers or profile data.
 
-The current public External User registration flow activates accounts
-immediately. Referral registration status is derived from the referred
-account's current approval/account status and is refreshed when the creator
-loads referral history; the referral feature does not alter account approval.
+Independent student registrations remain pending until approved by a Main
+Admin. Referral registration status is derived from the referred account's
+current approval/account status and is refreshed when the creator loads referral
+history.
 
 ## Database backup, integration tests, and reset
 

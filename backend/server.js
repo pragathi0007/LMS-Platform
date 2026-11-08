@@ -8,6 +8,7 @@ import learningRouter from './routes/learning.js'
 import supportRouter from './routes/support.js'
 import settingsRouter from './routes/settings.js'
 import referralsRouter from './routes/referrals.js'
+import notificationsRouter from './routes/notifications.js'
 
 const app = express()
 app.use(
@@ -31,6 +32,7 @@ app.use('/api', learningRouter)
 app.use('/api/support', supportRouter)
 app.use('/api/settings', settingsRouter)
 app.use('/api/referrals', referralsRouter)
+app.use('/api/notifications', notificationsRouter)
 app.use('/api', (req, res) => {
   res.status(404).json({ message: 'API route not found.' })
 })
