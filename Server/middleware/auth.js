@@ -5,6 +5,10 @@ import {
   matchesStoredAccountRole,
   roleForAccountCollection,
 } from '../models/account-models.js'
+import {
+  independentApprovalMessage,
+  isIndependentStudentAccount,
+} from '../utils/independent-approval.js'
 
 const allowedRoles = new Set(['main_admin', 'college_admin', 'student'])
 
@@ -37,9 +41,16 @@ export async function authenticate(req, res, next) {
       return res.status(401).json({ message: 'The access token is invalid.' })
     }
 
+    const approvalMessage = independentApprovalMessage(user, payload.accountCollection)
     const status = String(user.status || user.approvalStatus || '').toLowerCase()
-    if (user.isActive === false || status !== 'active') {
-      return res.status(403).json({ message: 'Your account is not active.' })
+    const approvalStatus = String(user.approvalStatus || '').toLowerCase()
+    const independentStudent = isIndependentStudentAccount(user, payload.accountCollection)
+    if (
+      user.isActive === false ||
+      status !== 'active' ||
+      (independentStudent && approvalStatus !== 'approved')
+    ) {
+      return res.status(403).json({ message: approvalMessage || 'Your account is not active.' })
     }
 
     req.auth = {
@@ -55,6 +66,7 @@ export async function authenticate(req, res, next) {
         collegeId: user.collegeId ? String(user.collegeId) : undefined,
         studentType: user.studentType,
         status: user.status,
+        approvalStatus: user.approvalStatus,
         isActive: user.isActive,
         permissions: user.permissions,
       },

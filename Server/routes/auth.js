@@ -6,6 +6,8 @@ import jwt from 'jsonwebtoken'
 import { OAuth2Client } from 'google-auth-library'
 import { config } from '../config/env.js'
 import AccountIdentity from '../models/AccountIdentity.js'
+import Notification from '../models/Notification.js'
+import RegistrationEmailVerification from '../models/RegistrationEmailVerification.js'
 import {
   accountModelsByCollection,
   accountModelsByRole,
@@ -25,6 +27,22 @@ import {
   TwoFactorError,
   verifyStudentOtp,
 } from '../utils/two-factor.js'
+import {
+  independentApprovalMessage,
+  isIndependentStudentAccount,
+} from '../utils/independent-approval.js'
+import {
+  logEmailDeliveryFailure,
+  sendRegistrationEmailVerificationCodeEmail,
+  sendStudentRegistrationConfirmationEmail,
+} from '../utils/email.js'
+import {
+  createRegistrationEmailOtp,
+  createRegistrationEmailVerificationToken,
+  hashRegistrationEmailOtp,
+  readRegistrationEmailVerificationToken,
+  registrationEmailOtpMatches,
+} from '../utils/registration-email-verification.js'
 
 const router = Router()
 const registrationRoles = new Set(['student'])
@@ -33,8 +51,54 @@ const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 const usernameCheckRateLimits = new Map()
 const usernameCheckWindowMs = 60 * 1000
 const usernameCheckMaxRequests = 30
+const registrationEmailOtpLifetimeMs = 10 * 60 * 1000
+const registrationEmailVerificationLifetimeMs = 30 * 60 * 1000
+const registrationEmailCleanupLifetimeMs = 24 * 60 * 60 * 1000
+const registrationEmailResendCooldownMs = 60 * 1000
+const registrationEmailMaxRequests = 5
+const registrationEmailRequestWindowMs = 60 * 60 * 1000
+const registrationEmailMaxAttempts = 5
 
 const allowedRoles = new Set(['main_admin', 'college_admin', 'student'])
+const protectedRegistrationField = /(password|token|secret|credential|auth|otp|hash)/i
+const accountRegistrationFields = new Set([
+  '_id',
+  '__v',
+  'role',
+  'studentType',
+  'accountType',
+  'collegeId',
+  'studentId',
+  'status',
+  'isActive',
+  'approvalStatus',
+  'approvedAt',
+  'approvedBy',
+  'rejectedAt',
+  'rejectedBy',
+  'rejectionReason',
+  'createdAt',
+  'updatedAt',
+])
+
+function createRegistrationDetails(input, accountFields) {
+  const details = {}
+  if (input && typeof input === 'object' && !Array.isArray(input)) {
+    for (const [field, value] of Object.entries(input)) {
+      if (
+        !/^[a-zA-Z][a-zA-Z0-9_-]*$/.test(field) ||
+        accountRegistrationFields.has(field) ||
+        protectedRegistrationField.test(field) ||
+        typeof value !== 'string'
+      ) continue
+      details[field] = value
+    }
+  }
+  return {
+    ...details,
+    ...accountFields,
+  }
+}
 
 export function createReferralRedemptionFilter(code, accountId, now) {
   return {
@@ -76,6 +140,7 @@ function serializeAccount(user, role = user.role) {
       ? {
           twoFactorEnabled: user.twoFactorEnabled === true,
           twoFactorEnabledAt: user.twoFactorEnabledAt || null,
+          approvalStatus: user.approvalStatus,
         }
       : {}),
   }
@@ -103,9 +168,14 @@ function rejectOtpRateLimit(res, retryAfterSeconds) {
   return true
 }
 
-function isActiveAccount(user) {
+function isActiveAccount(user, accountCollection) {
   const status = String(user?.status || user?.approvalStatus || '').toLowerCase()
-  return user && user.isActive !== false && status === 'active'
+  const isIndependentStudent = isIndependentStudentAccount(user, accountCollection)
+  const isApprovedIndependentStudent = String(user?.approvalStatus || '').toLowerCase() === 'approved'
+  return user &&
+    user.isActive !== false &&
+    status === 'active' &&
+    (!isIndependentStudent || isApprovedIndependentStudent)
 }
 
 function limitUsernameChecks(req, res, next) {
@@ -169,6 +239,242 @@ router.get('/check-username', limitUsernameChecks, async (req, res, next) => {
   }
 })
 
+router.post('/registration/email/send', async (req, res, next) => {
+  try {
+    if (rejectOtpRateLimit(res, getOtpRateLimitDelay(req, 'registration:request'))) return
+    const email = typeof req.body?.email === 'string' ? req.body.email.trim().toLowerCase() : ''
+    if (email.length > 254 || !emailPattern.test(email)) {
+      return res.status(400).json({ message: 'Enter a valid email address.' })
+    }
+
+    const takenEmails = await findTakenEmails([email])
+    if (takenEmails.has(email)) {
+      return res.status(409).json({ message: 'An account with this email already exists.' })
+    }
+
+    const now = new Date()
+    let verification = await RegistrationEmailVerification.findOne({ email }).select('+hashedOtp')
+    if (verification?.consumedAt) {
+      return res.status(409).json({ message: 'An account with this email already exists.' })
+    }
+    if (
+      verification &&
+      verification.lastSentAt &&
+      now.getTime() - new Date(verification.lastSentAt).getTime() < registrationEmailResendCooldownMs
+    ) {
+      const retryAfterSeconds = Math.ceil(
+        (registrationEmailResendCooldownMs - (now.getTime() - new Date(verification.lastSentAt).getTime())) / 1000,
+      )
+      res.set('Retry-After', String(retryAfterSeconds))
+      return res.status(429).json({
+        message: `Please wait ${retryAfterSeconds} seconds before requesting another code.`,
+        retryAfterSeconds,
+      })
+    }
+
+    const requestWindowExpired =
+      !verification?.requestWindowStartedAt ||
+      now.getTime() - new Date(verification.requestWindowStartedAt).getTime() >= registrationEmailRequestWindowMs
+    if (!requestWindowExpired && verification.requestCount >= registrationEmailMaxRequests) {
+      const retryAfterSeconds = Math.ceil(
+        (registrationEmailRequestWindowMs - (now.getTime() - new Date(verification.requestWindowStartedAt).getTime())) / 1000,
+      )
+      res.set('Retry-After', String(retryAfterSeconds))
+      return res.status(429).json({
+        message: 'Too many verification code requests. Please try again later.',
+        retryAfterSeconds,
+      })
+    }
+
+    const verificationId = verification?._id || new mongoose.Types.ObjectId()
+    let code = createRegistrationEmailOtp()
+    let hashedOtp = hashRegistrationEmailOtp(verificationId, email, code)
+    while (verification && hashedOtp === verification.hashedOtp) {
+      code = createRegistrationEmailOtp()
+      hashedOtp = hashRegistrationEmailOtp(verificationId, email, code)
+    }
+    const nextRequestCount = requestWindowExpired ? 1 : verification.requestCount + 1
+    const verificationData = {
+      hashedOtp,
+      expiresAt: new Date(now.getTime() + registrationEmailOtpLifetimeMs),
+      verificationExpiresAt: null,
+      cleanupAt: new Date(now.getTime() + registrationEmailCleanupLifetimeMs),
+      attempts: 0,
+      requestCount: nextRequestCount,
+      requestWindowStartedAt: requestWindowExpired ? now : verification.requestWindowStartedAt,
+      lastSentAt: now,
+      verifiedAt: null,
+      consumedAt: null,
+      invalidatedAt: null,
+    }
+
+    if (verification) {
+      const previousLastSentAt = verification.lastSentAt
+      verification = await RegistrationEmailVerification.findOneAndUpdate(
+        { _id: verification._id, lastSentAt: previousLastSentAt, consumedAt: null },
+        { $set: verificationData },
+        { new: true },
+      )
+      if (!verification) {
+        return res.status(429).json({
+          message: 'A verification code was just requested. Please wait before trying again.',
+          retryAfterSeconds: 60,
+        })
+      }
+    } else {
+      verification = new RegistrationEmailVerification({
+        _id: verificationId,
+        email,
+        ...verificationData,
+      })
+      try {
+        await verification.save()
+      } catch (error) {
+        if (error?.code === 11000) {
+          return res.status(429).json({
+            message: 'A verification code was just requested. Please wait before trying again.',
+            retryAfterSeconds: 60,
+          })
+        }
+        throw error
+      }
+    }
+
+    try {
+      await sendRegistrationEmailVerificationCodeEmail({
+        email,
+        code,
+      })
+    } catch (error) {
+      await RegistrationEmailVerification.updateOne(
+        { _id: verification._id, verifiedAt: null },
+        { $set: { invalidatedAt: now } },
+      )
+      logEmailDeliveryFailure({
+        event: 'notification.registration_email_verification.failed',
+        error,
+      })
+      return res.status(error?.statusCode === 503 ? 503 : 502).json({
+        message: 'The verification email could not be sent. Please try again later.',
+      })
+    }
+
+    return res.json({
+      message: 'Verification code sent.',
+      resendAfterSeconds: 60,
+    })
+  } catch (error) {
+    if (error instanceof TwoFactorError || error?.statusCode) {
+      if (error.retryAfterSeconds) res.set('Retry-After', String(error.retryAfterSeconds))
+      return res.status(error.statusCode).json({
+        message: error.message,
+        ...(error.retryAfterSeconds ? { retryAfterSeconds: error.retryAfterSeconds } : {}),
+      })
+    }
+    return next(error)
+  }
+})
+
+router.post('/registration/email/verify', async (req, res, next) => {
+  try {
+    if (rejectOtpRateLimit(res, getOtpRateLimitDelay(req, 'registration:verify'))) return
+    const email = typeof req.body?.email === 'string' ? req.body.email.trim().toLowerCase() : ''
+    const code = req.body?.code
+    if (email.length > 254 || !emailPattern.test(email)) {
+      return res.status(400).json({ message: 'Enter a valid email address.' })
+    }
+    if (typeof code !== 'string' || !/^\d{6}$/.test(code)) {
+      return res.status(400).json({ message: 'Enter the 6-digit verification code.' })
+    }
+
+    const now = new Date()
+    const verification = await RegistrationEmailVerification.findOne({
+      email,
+      consumedAt: null,
+      invalidatedAt: null,
+    }).select('+hashedOtp')
+    if (!verification) {
+      return res.status(400).json({ message: 'Please request a new verification code.' })
+    }
+    if (verification.verifiedAt) {
+      return res.status(400).json({ message: 'This verification code has already been used. Please request a new code.' })
+    }
+    if (verification.expiresAt <= now) {
+      await RegistrationEmailVerification.updateOne(
+        { _id: verification._id, verifiedAt: null },
+        { $set: { invalidatedAt: now } },
+      )
+      return res.status(410).json({ message: 'Verification code expired. Please request a new code.' })
+    }
+    if (verification.attempts >= registrationEmailMaxAttempts) {
+      await RegistrationEmailVerification.updateOne(
+        { _id: verification._id, verifiedAt: null },
+        { $set: { invalidatedAt: now } },
+      )
+      return res.status(429).json({ message: 'Too many attempts. Please request a new code.' })
+    }
+
+    if (!registrationEmailOtpMatches(verification._id, email, code, verification.hashedOtp)) {
+      const updated = await RegistrationEmailVerification.findOneAndUpdate(
+        {
+          _id: verification._id,
+          hashedOtp: verification.hashedOtp,
+          verifiedAt: null,
+          invalidatedAt: null,
+          attempts: { $lt: registrationEmailMaxAttempts },
+        },
+        { $inc: { attempts: 1 } },
+        { new: true },
+      )
+      if (!updated || updated.attempts >= registrationEmailMaxAttempts) {
+        await RegistrationEmailVerification.updateOne(
+          { _id: verification._id, verifiedAt: null },
+          { $set: { invalidatedAt: now } },
+        )
+        return res.status(429).json({ message: 'Too many attempts. Please request a new code.' })
+      }
+      return res.status(400).json({ message: 'Incorrect verification code.' })
+    }
+
+    const verified = await RegistrationEmailVerification.findOneAndUpdate(
+      {
+        _id: verification._id,
+        email,
+        hashedOtp: verification.hashedOtp,
+        expiresAt: { $gt: now },
+        verifiedAt: null,
+        consumedAt: null,
+        invalidatedAt: null,
+      },
+      {
+        $set: {
+          verifiedAt: now,
+          verificationExpiresAt: new Date(now.getTime() + registrationEmailVerificationLifetimeMs),
+          cleanupAt: new Date(now.getTime() + registrationEmailCleanupLifetimeMs),
+        },
+      },
+      { new: true },
+    )
+    if (!verified) {
+      return res.status(400).json({ message: 'This verification code is no longer valid. Please request a new code.' })
+    }
+
+    return res.json({
+      message: 'Email verified successfully.',
+      emailVerificationToken: createRegistrationEmailVerificationToken(verified),
+    })
+  } catch (error) {
+    if (error instanceof TwoFactorError || error?.statusCode) {
+      if (error.retryAfterSeconds) res.set('Retry-After', String(error.retryAfterSeconds))
+      return res.status(error.statusCode).json({
+        message: error.message,
+        ...(error.retryAfterSeconds ? { retryAfterSeconds: error.retryAfterSeconds } : {}),
+      })
+    }
+    return next(error)
+  }
+})
+
 router.post('/register', async (req, res, next) => {
   try {
     const {
@@ -177,6 +483,7 @@ router.post('/register', async (req, res, next) => {
       username,
       password,
       confirmPassword,
+      emailVerificationToken,
       role,
       accountType,
       collegeId,
@@ -242,6 +549,10 @@ router.post('/register', async (req, res, next) => {
     const normalizedName = fullName.trim()
     const normalizedEmail = email.trim().toLowerCase()
     const normalizedUsername = username.trim().toLowerCase()
+    const emailVerificationId = readRegistrationEmailVerificationToken(
+      emailVerificationToken,
+      normalizedEmail,
+    )
     const AccountModel = accountModelsByRole[normalizedRole]
     const [takenEmails, takenUsernames] = await Promise.all([
       findTakenEmails([normalizedEmail]),
@@ -261,6 +572,23 @@ router.post('/register', async (req, res, next) => {
 
     try {
       await session.withTransaction(async () => {
+        const verifiedEmail = await RegistrationEmailVerification.findOneAndUpdate(
+          {
+            _id: emailVerificationId,
+            email: normalizedEmail,
+            verifiedAt: { $ne: null },
+            verificationExpiresAt: { $gt: new Date() },
+            consumedAt: null,
+            invalidatedAt: null,
+          },
+          { $set: { consumedAt: new Date() } },
+          { new: true, session },
+        )
+        if (!verifiedEmail) {
+          const error = new Error('Please verify this email address before creating an account.')
+          error.statusCode = 400
+          throw error
+        }
         const duplicate = await AccountIdentity.findOne({
           $or: [{ email: normalizedEmail }, { username: normalizedUsername }],
         }).session(session)
@@ -292,7 +620,26 @@ router.post('/register', async (req, res, next) => {
             passwordHash,
             role: normalizedRole,
             studentType: 'independent',
-            status: 'active',
+            status: 'pending',
+            isActive: false,
+            approvalStatus: 'pending',
+            registrationDetails: createRegistrationDetails(req.body?.registrationDetails, {
+              fullName: normalizedName,
+              email: normalizedEmail,
+              username: normalizedUsername,
+              ...(referralCode ? { referralCode } : {}),
+            }),
+          }],
+          { session },
+        )
+        await Notification.create(
+          [{
+            recipientRole: 'main_admin',
+            type: 'independent_student_registered',
+            title: 'Independent student application',
+            message: `${normalizedName} submitted an independent student application.`,
+            link: '/admin/dashboard?section=independent-approvals',
+            metadata: { studentId: String(accountId), email: normalizedEmail },
           }],
           { session },
         )
@@ -321,8 +668,21 @@ router.post('/register', async (req, res, next) => {
       await session.endSession()
     }
 
+    try {
+      await sendStudentRegistrationConfirmationEmail({
+        email: account.email,
+        fullName: account.fullName,
+      })
+    } catch (emailError) {
+      logEmailDeliveryFailure({
+        event: 'notification.student_registration_email.failed',
+        accountId: account._id,
+        error: emailError,
+      })
+    }
+
     return res.status(201).json({
-      message: 'Account created successfully.',
+      message: 'Your account was created and is awaiting administrator approval.',
       user: {
         id: String(account._id),
         fullName: account.fullName,
@@ -333,8 +693,8 @@ router.post('/register', async (req, res, next) => {
       },
     })
   } catch (error) {
-    if (error?.statusCode === 400) {
-      return res.status(400).json({ message: error.message })
+    if ([400, 503].includes(error?.statusCode)) {
+      return res.status(error.statusCode).json({ message: error.message })
     }
     if (error?.code === 11000) {
       const duplicateField = getDuplicateField(error)
@@ -386,7 +746,7 @@ router.post('/google', async (req, res, next) => {
     }
     if (!config.googleClientSecret || !config.googleClientSecret.trim()) {
       return res.status(503).json({
-        message: 'Google sign-in is not configured. Set GOOGLE_CLIENT_SECRET in backend/.env.',
+        message: 'Google sign-in is not configured. Set GOOGLE_CLIENT_SECRET in Server/.env.',
       })
     }
     if (!config.jwtSecret || !config.jwtSecret.trim()) {
@@ -543,8 +903,10 @@ router.post('/google', async (req, res, next) => {
       await session.endSession()
     }
 
-    if (!isActiveAccount(account)) {
-      return res.status(403).json({ message: 'Your account is not active.' })
+    if (!isActiveAccount(account, accountCollection)) {
+      return res.status(403).json({
+        message: independentApprovalMessage(account, accountCollection) || 'Your account is not active.',
+      })
     }
 
     if (requestedRole === 'student' && account.twoFactorEnabled === true) {
@@ -632,8 +994,10 @@ router.post('/login', async (req, res, next) => {
       return res.status(401).json({ message: 'Invalid username/email or password.' })
     }
 
-    if (!isActiveAccount(user)) {
-      return res.status(403).json({ message: 'Your account is not active.' })
+    if (!isActiveAccount(user, accountCollection)) {
+      return res.status(403).json({
+        message: independentApprovalMessage(user, accountCollection) || 'Your account is not active.',
+      })
     }
 
     if (requestedRole === 'student' && user.twoFactorEnabled === true) {
@@ -672,7 +1036,7 @@ router.post('/two-factor/verify', async (req, res, next) => {
     const AccountModel = accountModelsByCollection[payload.accountCollection]
     const user = await AccountModel.findById(payload.sub)
     if (
-      !isActiveAccount(user) ||
+      !isActiveAccount(user, payload.accountCollection) ||
       user.role !== 'student' ||
       user.twoFactorEnabled !== true
     ) {
@@ -708,7 +1072,7 @@ router.post('/two-factor/resend', async (req, res, next) => {
     const payload = readChallengeToken(challengeToken, 'login')
     const AccountModel = accountModelsByCollection[payload.accountCollection]
     const user = await AccountModel.findById(payload.sub)
-    if (!isActiveAccount(user) || user.twoFactorEnabled !== true) {
+    if (!isActiveAccount(user, payload.accountCollection) || user.twoFactorEnabled !== true) {
       return res.status(401).json({ message: 'This login verification is no longer valid. Sign in again.' })
     }
     const challenge = await resendStudentOtp({ challengeToken, purpose: 'login' })

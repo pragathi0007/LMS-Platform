@@ -6,7 +6,8 @@ import SettingsPage from './SettingsPage.jsx'
 import StudentDashboard from './StudentDashboard.jsx'
 import ThemeToggle from './ThemeToggle.jsx'
 import WorkspaceTopbar from './WorkspaceTopbar.jsx'
-import { Navigate, useLocation } from 'react-router-dom'
+import { Link, Navigate, useLocation } from 'react-router-dom'
+import { API_BASE_URL } from './api-base-url.js'
 import { isInvalidSessionResponse } from './auth-session.js'
 import './App.css'
 
@@ -18,11 +19,6 @@ function getPasswordStrength(password) {
     /[^a-zA-Z0-9]/.test(password),
   ].filter(Boolean).length
 }
-const API_BASE_URL = (
-  import.meta.env.VITE_API_URL ||
-  import.meta.env.VITE_API_BASE_URL ||
-  'http://localhost:5000/api'
-).replace(/\/+$/, '')
 const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID
 let googleIdentityServicesPromise
 const DASHBOARD_PATHS = {
@@ -40,7 +36,6 @@ const AUTH_ROLE_KEYS = {
   'Main Admin': 'main_admin',
   'College Sub-Admin': 'college_admin',
 }
-
 function loadGoogleIdentityServices() {
   if (window.google?.accounts?.oauth2) {
     return Promise.resolve(window.google.accounts.oauth2)
@@ -155,7 +150,7 @@ function BrandMark() {
   )
 }
 
-function PasswordField({ id, name = id, label, value, onChange, autoComplete, strength }) {
+function PasswordField({ id, name = id, label, value, onChange, autoComplete, strength, error }) {
   const [visible, setVisible] = useState(false)
 
   return (
@@ -174,6 +169,8 @@ function PasswordField({ id, name = id, label, value, onChange, autoComplete, st
           autoComplete={autoComplete}
           minLength={8}
           required
+          aria-invalid={Boolean(error)}
+          aria-describedby={error ? `${id}-error` : undefined}
         />
         <button
           className="visibility-toggle"
@@ -198,6 +195,7 @@ function PasswordField({ id, name = id, label, value, onChange, autoComplete, st
           </span>
         </div>
       )}
+      {error && <p id={`${id}-error`} className="field-error" role="alert">{error}</p>}
     </div>
   )
 }
@@ -206,7 +204,18 @@ function AuthForm({ mode, role, onMessage, onRegistrationSuccess }) {
   const [password, setPassword] = useState('')
   const [confirmPassword, setConfirmPassword] = useState('')
   const [username, setUsername] = useState('')
-  const [referralCode, setReferralCode] = useState('')
+  const [registrationEmail, setRegistrationEmail] = useState('')
+  const [registrationEmailCode, setRegistrationEmailCode] = useState('')
+  const [registrationEmailChallengeAddress, setRegistrationEmailChallengeAddress] = useState('')
+  const [registrationEmailVerificationToken, setRegistrationEmailVerificationToken] = useState('')
+  const [registrationEmailError, setRegistrationEmailError] = useState('')
+  const [registrationEmailStatus, setRegistrationEmailStatus] = useState('')
+  const [registrationEmailResendCountdown, setRegistrationEmailResendCountdown] = useState(0)
+  const [isSendingRegistrationEmailCode, setIsSendingRegistrationEmailCode] = useState(false)
+  const [isVerifyingRegistrationEmailCode, setIsVerifyingRegistrationEmailCode] = useState(false)
+  const [referralCode, setReferralCode] = useState(
+    () => new URLSearchParams(window.location.search).get('referralCode') || '',
+  )
   const [referralCodeStatus, setReferralCodeStatus] = useState('')
   const [referralCodeMessage, setReferralCodeMessage] = useState('')
   const [isCheckingReferralCode, setIsCheckingReferralCode] = useState(false)
@@ -219,6 +228,7 @@ function AuthForm({ mode, role, onMessage, onRegistrationSuccess }) {
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [isGoogleSubmitting, setIsGoogleSubmitting] = useState(false)
   const [googleClientLoadError, setGoogleClientLoadError] = useState('')
+  const [fieldErrors, setFieldErrors] = useState({})
   const [loginChallenge, setLoginChallenge] = useState(null)
   const [loginOtp, setLoginOtp] = useState('')
   const [loginOtpError, setLoginOtpError] = useState('')
@@ -317,6 +327,15 @@ function AuthForm({ mode, role, onMessage, onRegistrationSuccess }) {
   }, [loginChallenge])
 
   useEffect(() => {
+    if (!isRegistering || registrationEmailResendCountdown <= 0) return undefined
+    const timerId = window.setTimeout(
+      () => setRegistrationEmailResendCountdown((current) => Math.max(0, current - 1)),
+      1000,
+    )
+    return () => window.clearTimeout(timerId)
+  }, [isRegistering, registrationEmailResendCountdown])
+
+  useEffect(() => {
     if (isRegistering || isAdministrativeRole || !GOOGLE_CLIENT_ID) return undefined
 
     let cancelled = false
@@ -359,6 +378,90 @@ function AuthForm({ mode, role, onMessage, onRegistrationSuccess }) {
     }
   }, [isRegistering, isAdministrativeRole])
 
+  function updateRegistrationEmail(value) {
+    const normalizedEmail = value.trim().toLowerCase()
+    if (normalizedEmail !== registrationEmailChallengeAddress) {
+      setRegistrationEmailChallengeAddress('')
+      setRegistrationEmailCode('')
+      setRegistrationEmailVerificationToken('')
+      setRegistrationEmailError('')
+      setRegistrationEmailStatus('')
+      setRegistrationEmailResendCountdown(0)
+    }
+    setRegistrationEmail(value)
+  }
+
+  async function sendRegistrationEmailCode() {
+    const email = registrationEmail.trim().toLowerCase()
+    setRegistrationEmailError('')
+    setRegistrationEmailStatus('')
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      setRegistrationEmailError('Enter a valid email address.')
+      return
+    }
+
+    setIsSendingRegistrationEmailCode(true)
+    try {
+      const response = await fetch(`${API_BASE_URL}/auth/registration/email/send`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email }),
+      })
+      const result = await readApiResponse(response)
+      if (!response.ok) {
+        if (typeof result.retryAfterSeconds === 'number') {
+          setRegistrationEmailResendCountdown(result.retryAfterSeconds)
+        }
+        throw new Error(result.message || 'A verification code could not be sent.')
+      }
+      setRegistrationEmailChallengeAddress(email)
+      setRegistrationEmailCode('')
+      setRegistrationEmailVerificationToken('')
+      setRegistrationEmailResendCountdown(result.resendAfterSeconds || 60)
+      setRegistrationEmailStatus(result.message || 'Verification code sent.')
+    } catch (error) {
+      setRegistrationEmailError(error instanceof TypeError
+        ? 'Could not connect to the server. Check that the backend is running and try again.'
+        : error instanceof Error ? error.message : 'A verification code could not be sent.')
+    } finally {
+      setIsSendingRegistrationEmailCode(false)
+    }
+  }
+
+  async function verifyRegistrationEmailCode() {
+    const email = registrationEmail.trim().toLowerCase()
+    setRegistrationEmailError('')
+    setRegistrationEmailStatus('')
+    if (!/^\d{6}$/.test(registrationEmailCode)) {
+      setRegistrationEmailError('Enter the 6-digit verification code.')
+      return
+    }
+
+    setIsVerifyingRegistrationEmailCode(true)
+    try {
+      const response = await fetch(`${API_BASE_URL}/auth/registration/email/verify`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, code: registrationEmailCode }),
+      })
+      const result = await readApiResponse(response)
+      if (!response.ok) throw new Error(result.message || 'The verification code could not be checked.')
+      if (typeof result.emailVerificationToken !== 'string') {
+        throw new Error('The server did not confirm email verification. Please try again.')
+      }
+      setRegistrationEmailChallengeAddress(email)
+      setRegistrationEmailVerificationToken(result.emailVerificationToken)
+      setRegistrationEmailCode('')
+      setRegistrationEmailStatus(result.message || 'Email verified successfully.')
+    } catch (error) {
+      setRegistrationEmailError(error instanceof TypeError
+        ? 'Could not connect to the server. Check that the backend is running and try again.'
+        : error instanceof Error ? error.message : 'The verification code could not be checked.')
+    } finally {
+      setIsVerifyingRegistrationEmailCode(false)
+    }
+  }
+
   async function handleSubmit(event) {
     event.preventDefault()
     const form = event.currentTarget
@@ -385,17 +488,30 @@ function AuthForm({ mode, role, onMessage, onRegistrationSuccess }) {
       usernameInput.setCustomValidity(
         !usernameIsValid
           ? 'Use 3–30 letters, numbers, dots, underscores, or hyphens.'
-          : usernameStatus !== 'available' ||
-              normalizedUsername !== username.trim().toLowerCase()
-            ? 'Wait until this username is confirmed as available.'
-            : '',
+          : '',
       )
     }
 
-    if (!form.reportValidity()) return
-
-    if (isRegistering && password !== confirmPassword) {
-      onMessage('Your passwords don’t match. Please check and try again.', 'error')
+    const nextFieldErrors = {}
+    for (const field of form.querySelectorAll('input, select, textarea')) {
+      if (!field.checkValidity()) {
+        nextFieldErrors[field.name || field.id] = field.validationMessage
+      }
+    }
+    if (isRegistering && confirmPassword && password !== confirmPassword) {
+      nextFieldErrors.confirmPassword = 'Your passwords do not match.'
+    }
+    if (
+      isRegistering &&
+      (!registrationEmailVerificationToken ||
+        registrationEmail.trim().toLowerCase() !== registrationEmailChallengeAddress)
+    ) {
+      if (!nextFieldErrors.email) {
+        nextFieldErrors.emailVerification = 'Verify this email address before creating an account.'
+      }
+    }
+    setFieldErrors(nextFieldErrors)
+    if (Object.keys(nextFieldErrors).length > 0) {
       return
     }
 
@@ -405,6 +521,14 @@ function AuthForm({ mode, role, onMessage, onRegistrationSuccess }) {
       let response
       let result
       let authenticatedRole = roleKey
+      const registrationDetails = isRegistering
+        ? Object.fromEntries(
+            [...new FormData(form).entries()].filter(([name, value]) => (
+              typeof value === 'string' &&
+              !/(password|token|secret|credential|auth|otp|hash)/i.test(name)
+            )),
+          )
+        : undefined
       const loginRoles = ['student', 'main_admin', 'college_admin']
       for (const candidateRole of isRegistering ? ['student'] : loginRoles) {
         response = await fetch(`${API_BASE_URL}/auth/${isRegistering ? 'register' : 'login'}`, {
@@ -413,12 +537,14 @@ function AuthForm({ mode, role, onMessage, onRegistrationSuccess }) {
           body: JSON.stringify(isRegistering
             ? {
                 fullName: form.elements.fullName.value,
-                email: form.elements.email.value,
+                email: registrationEmail,
                 username: form.elements.username.value,
                 password,
                 confirmPassword,
+                emailVerificationToken: registrationEmailVerificationToken,
                 role: 'student',
                 accountType: 'independent',
+                registrationDetails,
                 ...(form.elements.referralCode.value.trim()
                   ? { referralCode: form.elements.referralCode.value.trim() }
                   : {}),
@@ -769,6 +895,16 @@ function AuthForm({ mode, role, onMessage, onRegistrationSuccess }) {
     <form
       className={isRegistering ? 'auth-form' : 'auth-form login-form'}
       onSubmit={handleSubmit}
+      onChange={(event) => {
+        const fieldName = event.target.name || event.target.id
+        const errorKeys = fieldName === 'email' ? ['email', 'emailVerification'] : [fieldName]
+        setFieldErrors((current) => {
+          if (!errorKeys.some((key) => current[key])) return current
+          const next = { ...current }
+          errorKeys.forEach((key) => delete next[key])
+          return next
+        })
+      }}
       noValidate
     >
       <div className="form-heading">
@@ -785,14 +921,111 @@ function AuthForm({ mode, role, onMessage, onRegistrationSuccess }) {
         {isRegistering && (
           <div className="field">
             <label htmlFor="full-name">Full name</label>
-            <input id="full-name" name="fullName" type="text" autoComplete="name" required />
+            <input
+              id="full-name"
+              name="fullName"
+              type="text"
+              autoComplete="name"
+              required
+              aria-invalid={Boolean(fieldErrors.fullName)}
+              aria-describedby={fieldErrors.fullName ? 'full-name-error' : undefined}
+            />
+            {fieldErrors.fullName && <p id="full-name-error" className="field-error" role="alert">{fieldErrors.fullName}</p>}
           </div>
         )}
 
         {isRegistering ? (
           <div className="field">
             <label htmlFor="email">Email address</label>
-            <input id="email" name="email" type="email" autoComplete="email" required />
+            <div className="registration-email-entry">
+              <input
+                id="email"
+                name="email"
+                type="email"
+                autoComplete="email"
+                value={registrationEmail}
+                onChange={(event) => updateRegistrationEmail(event.currentTarget.value)}
+                required
+                aria-invalid={Boolean(fieldErrors.email || fieldErrors.emailVerification)}
+                aria-describedby={fieldErrors.email ? 'email-field-error' : fieldErrors.emailVerification ? 'email-verification-error' : undefined}
+              />
+              <button
+                className="registration-email-button"
+                type="button"
+                onClick={sendRegistrationEmailCode}
+                disabled={
+                  isSendingRegistrationEmailCode ||
+                  !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(registrationEmail.trim()) ||
+                  registrationEmailResendCountdown > 0
+                }
+              >
+                {isSendingRegistrationEmailCode
+                  ? 'Sending…'
+                  : registrationEmailResendCountdown > 0
+                    ? `${registrationEmailChallengeAddress ? 'Sent' : 'Try again'} (${registrationEmailResendCountdown}s)`
+                    : registrationEmailChallengeAddress
+                      ? 'Send new code'
+                      : 'Send Verification Code'}
+              </button>
+            </div>
+            {registrationEmailChallengeAddress && !registrationEmailVerificationToken && (
+              <div className="registration-email-code">
+                <label htmlFor="registration-email-code">6-digit verification code</label>
+                <input
+                  id="registration-email-code"
+                  type="text"
+                  inputMode="numeric"
+                  autoComplete="one-time-code"
+                  pattern="\d{6}"
+                  maxLength={6}
+                  value={registrationEmailCode}
+                  onChange={(event) => setRegistrationEmailCode(
+                    event.currentTarget.value.replace(/\D/g, '').slice(0, 6),
+                  )}
+                  aria-describedby="registration-email-message"
+                />
+                <div className="registration-email-actions">
+                  <button
+                    className="registration-email-button"
+                    type="button"
+                    onClick={verifyRegistrationEmailCode}
+                    disabled={isVerifyingRegistrationEmailCode || registrationEmailCode.length !== 6}
+                  >
+                    {isVerifyingRegistrationEmailCode ? 'Verifying…' : 'Verify'}
+                  </button>
+                  <button
+                    className="registration-email-resend"
+                    type="button"
+                    onClick={sendRegistrationEmailCode}
+                    disabled={isSendingRegistrationEmailCode || registrationEmailResendCountdown > 0}
+                  >
+                    {registrationEmailResendCountdown > 0
+                      ? `Resend Code (${registrationEmailResendCountdown}s)`
+                      : 'Resend Code'}
+                  </button>
+                </div>
+              </div>
+            )}
+            {registrationEmailVerificationToken && (
+              <p className="registration-email-status is-verified" role="status" aria-live="polite">
+                Email verified successfully.
+              </p>
+            )}
+            {registrationEmailStatus && !registrationEmailVerificationToken && (
+              <p id="registration-email-message" className="registration-email-status" role="status" aria-live="polite">
+                {registrationEmailStatus}
+              </p>
+            )}
+            {registrationEmailError && (
+              <p
+                id="registration-email-message"
+                className="registration-email-status is-error"
+                role="alert"
+                aria-live="assertive"
+              >
+                {registrationEmailError}
+              </p>
+            )}
           </div>
         ) : (
           <div className="field">
@@ -861,7 +1094,10 @@ function AuthForm({ mode, role, onMessage, onRegistrationSuccess }) {
               maxLength={30}
               title="Use 3–30 letters, numbers, dots, underscores, or hyphens."
               value={username}
-              aria-describedby="username-availability"
+              aria-invalid={Boolean(fieldErrors.username)}
+              aria-describedby={fieldErrors.username
+                ? 'username-availability username-field-error'
+                : 'username-availability'}
               required
               onChange={(event) => {
                 event.currentTarget.setCustomValidity('')
@@ -890,6 +1126,7 @@ function AuthForm({ mode, role, onMessage, onRegistrationSuccess }) {
               {usernameStatus === 'invalid' && 'Use 3–30 letters, numbers, dots, underscores, or hyphens.'}
               {usernameStatus === 'error' && 'Could not check availability. Please try again.'}
             </div>
+            {fieldErrors.username && <p id="username-field-error" className="field-error" role="alert">{fieldErrors.username}</p>}
             {usernameStatus === 'taken' && usernameSuggestions.length > 0 && (
               <div className="username-suggestions" aria-label="Available username suggestions">
                 <span>Try one of these:</span>
@@ -919,15 +1156,18 @@ function AuthForm({ mode, role, onMessage, onRegistrationSuccess }) {
           value={password}
           onChange={(event) => setPassword(event.target.value)}
           autoComplete={isRegistering ? 'new-password' : 'current-password'}
+          error={fieldErrors.password}
         />
 
         {isRegistering && (
           <PasswordField
             id="confirm-password"
+            name="confirmPassword"
             label="Confirm password"
             value={confirmPassword}
             onChange={(event) => setConfirmPassword(event.target.value)}
             autoComplete="new-password"
+            error={fieldErrors.confirmPassword}
           />
         )}
 
@@ -1045,14 +1285,14 @@ function AuthForm({ mode, role, onMessage, onRegistrationSuccess }) {
           </button>
         </div>
       )}
-
+      {fieldErrors.email && <p id="email-field-error" className="field-error" role="alert">{fieldErrors.email}</p>}
+      {fieldErrors.emailVerification && <p id="email-verification-error" className="field-error" role="alert">{fieldErrors.emailVerification}</p>}
       <button
         className="primary-button"
         type="submit"
         disabled={
           isSubmitting ||
-          isGoogleSubmitting ||
-          (isRegistering && usernameStatus !== 'available')
+          isGoogleSubmitting
         }
         aria-busy={isSubmitting || isGoogleSubmitting}
       >
@@ -1177,6 +1417,8 @@ function DashboardPage({ role, isDark, onToggleTheme, themePreference, onSetThem
   const location = useLocation()
   const [user, setUser] = useState(() => getCachedDashboardUser(role))
   const [error, setError] = useState('')
+  const [mainAdminSidebarOpen, setMainAdminSidebarOpen] = useState(false)
+  const [mainAdminSidebarCollapsed, setMainAdminSidebarCollapsed] = useState(true)
   const roleLabels = {
     student: 'Student',
     main_admin: 'Main Admin',
@@ -1271,52 +1513,20 @@ function DashboardPage({ role, isDark, onToggleTheme, themePreference, onSetThem
     )
   }
 
-  if (role === 'main_admin' && user && location.pathname.startsWith('/admin/support')) {
-    return (
-      <AdminSupport
-        user={user}
-        onLogout={signOut}
-        isDark={isDark}
-        onToggleTheme={onToggleTheme}
-        dashboardPath="/admin/dashboard"
-        supportPath="/admin/support"
-        settingsPath="/admin/settings"
-        roleLabel={roleLabels[role]}
-      />
-    )
-  }
-  if (role === 'main_admin' && user && location.pathname.startsWith('/admin/settings')) {
-    return (
-      <>
-        <WorkspaceTopbar
-          title="Settings"
-          name={user.fullName}
-          email={user.email}
-          roleLabel={roleLabels[role]}
-          dashboardPath="/admin/dashboard"
-          helpPath="/admin/support"
-          settingsPath="/admin/settings"
-          isDark={isDark}
-          onToggleTheme={onToggleTheme}
-          onLogout={signOut}
-        />
-        <SettingsPage
-          user={user}
-          onAccountUpdated={updateAccount}
-          themePreference={themePreference}
-          onSetTheme={onSetTheme}
-          standalone
-        />
-      </>
-    )
-  }
   if (role === 'main_admin' && user) {
     return (
       <AdminDashboard
         user={user}
+        onAccountUpdated={updateAccount}
         onLogout={signOut}
         isDark={isDark}
         onToggleTheme={onToggleTheme}
+        themePreference={themePreference}
+        onSetTheme={onSetTheme}
+        sidebarOpen={mainAdminSidebarOpen}
+        sidebarCollapsed={mainAdminSidebarCollapsed}
+        onSidebarOpenChange={setMainAdminSidebarOpen}
+        onSidebarCollapsedChange={setMainAdminSidebarCollapsed}
       />
     )
   }
@@ -1407,7 +1617,9 @@ function DashboardPage({ role, isDark, onToggleTheme, themePreference, onSetThem
 
 function App() {
   const location = useLocation()
-  const [mode, setMode] = useState('login')
+  const [mode, setMode] = useState(
+    () => new URLSearchParams(window.location.search).get('mode') === 'register' ? 'register' : 'login',
+  )
   const [message, setMessage] = useState(null)
   const [themePreference, setThemePreference] = useState(() => {
     const storedTheme = localStorage.getItem('lms.theme')

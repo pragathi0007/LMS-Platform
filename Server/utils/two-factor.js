@@ -4,7 +4,11 @@ import mongoose from 'mongoose'
 import { config } from '../config/env.js'
 import EmailOtpChallenge from '../models/EmailOtpChallenge.js'
 import { accountModelsByCollection } from '../models/account-models.js'
-import { assertResendConfigured, sendStudentTwoFactorCodeEmail } from './email.js'
+import {
+  assertResendConfigured,
+  logEmailDeliveryFailure,
+  sendStudentTwoFactorCodeEmail,
+} from './email.js'
 
 const otpLifetimeMs = 5 * 60 * 1000
 const challengeLifetime = '15m'
@@ -30,7 +34,7 @@ export function getOtpRateLimitDelay(req, action) {
     if (bucket.resetAt <= now) rateLimitBuckets.delete(key)
   }
 
-  const limit = action === 'verify' ? verifyRateLimit : requestRateLimit
+  const limit = action.includes('verify') ? verifyRateLimit : requestRateLimit
   const ip = req.ip || req.socket.remoteAddress || 'unknown'
   const key = `${action}:${ip}`
   let bucket = rateLimitBuckets.get(key)
@@ -132,12 +136,17 @@ async function deliverChallenge(challenge, user) {
       code,
     })
   } catch (error) {
+    logEmailDeliveryFailure({
+      event: 'notification.student_two_factor_email.failed',
+      accountId: user._id,
+      error,
+    })
     await EmailOtpChallenge.updateOne(
       { _id: challenge._id, verifiedAt: null },
       { $set: { attempts: maxOtpAttempts } },
     )
     if (error?.code === 'RESEND_NOT_CONFIGURED') {
-      throw new TwoFactorError(503, 'Email verification is not configured. Set RESEND_API_KEY and EMAIL_FROM in backend/.env.')
+      throw new TwoFactorError(503, 'Email verification is not configured. Set RESEND_API_KEY and EMAIL_FROM in Server/.env.')
     }
     throw new TwoFactorError(503, 'The security code could not be sent. Please try again later.')
   }

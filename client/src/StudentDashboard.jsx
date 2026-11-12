@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { Link, Navigate, Route, Routes, useLocation, useNavigate, useParams } from 'react-router-dom'
+import { API_BASE_URL } from './api-base-url.js'
 import {
   EmailSupportPage,
   HelpCenterHome,
@@ -15,7 +16,6 @@ import NotificationFeed from './NotificationFeed.jsx'
 import StudentQuizExperience from './StudentQuizPanel.jsx'
 import './StudentDashboard.css'
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000/api'
 const COURSE_NOTES_KEY = 'course-notes'
 const COURSE_RESOURCES_KEY = 'course-resources'
 

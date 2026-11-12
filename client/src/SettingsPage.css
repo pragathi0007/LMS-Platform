@@ -798,3 +798,154 @@
     transition: none;
   }
 }
+
+.main-admin-settings {
+  --admin-ink: #292f2c;
+  --admin-muted: #5d645c;
+  --admin-line: #dedace;
+  --admin-olive: #34796e;
+  --admin-sage: #e4eee5;
+  --admin-paper: #fffdf7;
+  --admin-canvas: #f3f0e7;
+  --admin-type-page: 28px;
+  --admin-type-section: 16px;
+  --admin-type-body: 14px;
+  --admin-type-secondary: 12px;
+  --admin-card-radius: 12px;
+  --admin-card-shadow: 0 3px 12px rgba(49, 61, 48, 0.045);
+  min-height: 100vh;
+  background: var(--admin-canvas);
+  color: var(--admin-ink);
+  font-size: var(--admin-type-body);
+}
+
+.main-admin-settings__shell .workspace-topbar {
+  min-width: 0;
+  flex: 1;
+}
+
+.main-admin-settings__shell .main-admin-settings {
+  min-height: calc(100vh - 66px);
+}
+
+.main-admin-settings .settings-page__standalone-heading {
+  padding: 20px 22px;
+  border: 1px solid var(--admin-line);
+  border-radius: var(--admin-card-radius);
+  background: linear-gradient(110deg, var(--admin-paper), var(--admin-sage));
+  box-shadow: var(--admin-card-shadow);
+}
+
+.main-admin-settings__content-card {
+  display: grid;
+  gap: 14px;
+  padding: 20px;
+  border: 1px solid var(--admin-line);
+  border-radius: var(--admin-card-radius);
+  background: var(--admin-paper);
+  box-shadow: var(--admin-card-shadow);
+}
+
+.main-admin-settings__content-card > .settings-section {
+  box-shadow: none;
+}
+
+.main-admin-settings .settings-page__standalone-heading h1 {
+  color: var(--admin-ink);
+}
+
+.main-admin-settings .settings-page__standalone-heading p,
+.main-admin-settings .settings-section__heading p {
+  color: var(--admin-muted);
+}
+
+.main-admin-settings .workspace-topbar__breadcrumb,
+.main-admin-settings .workspace-topbar__logout,
+.main-admin-settings .workspace-topbar__identity strong {
+  font-size: var(--admin-type-body);
+}
+
+.main-admin-settings .workspace-topbar__identity small {
+  font-size: var(--admin-type-secondary);
+}
+
+.main-admin-settings .settings-page__standalone-heading h1 {
+  font-size: var(--admin-type-page);
+}
+
+.main-admin-settings .settings-page__standalone-heading p,
+.main-admin-settings .settings-section__heading p,
+.main-admin-settings .settings-form input:not([type='checkbox']),
+.main-admin-settings .settings-form label:not(.settings-checkbox),
+.main-admin-settings .settings-field-group,
+.main-admin-settings .settings-account-summary span,
+.main-admin-settings .settings-connected-account > div > span,
+.main-admin-settings .settings-note,
+.main-admin-settings .settings-coming-soon,
+.main-admin-settings .settings-page .student-button {
+  font-size: var(--admin-type-body);
+}
+
+.main-admin-settings .settings-section__heading h2 {
+  font-size: var(--admin-type-section);
+}
+
+.main-admin-settings .settings-section,
+.main-admin-settings .settings-account-summary,
+.main-admin-settings .settings-two-factor__summary,
+.main-admin-settings .settings-two-factor__toggle,
+.main-admin-settings .settings-theme-option,
+.main-admin-settings .settings-connected-account {
+  border-radius: var(--admin-card-radius);
+  box-shadow: var(--admin-card-shadow);
+}
+
+.main-admin-settings .settings-section {
+  border-color: var(--admin-line);
+  background: var(--admin-paper);
+}
+
+:root[data-theme='dark'] .main-admin-settings {
+  --admin-ink: #f0ede4;
+  --admin-muted: #b7b4aa;
+  --admin-line: #4a4b43;
+  --admin-olive: #9cbeae;
+  --admin-sage: #35443b;
+  --admin-paper: #363731;
+  --admin-canvas: #2b2c28;
+  background: var(--theme-canvas);
+  color: var(--admin-ink);
+}
+
+:root[data-theme='dark'] .main-admin-settings .settings-page__standalone-heading {
+  border-color: var(--admin-line);
+  background: linear-gradient(110deg, var(--admin-paper), var(--admin-sage));
+}
+
+:root[data-theme='dark'] .main-admin-settings__content-card {
+  border-color: var(--admin-line);
+  background: var(--admin-paper);
+}
+
+:root[data-theme='dark'] .main-admin-settings .settings-page__standalone-heading h1,
+:root[data-theme='dark'] .main-admin-settings .settings-section__heading h2 {
+  color: var(--admin-ink);
+}
+
+:root[data-theme='dark'] .main-admin-settings .settings-section__heading p {
+  color: var(--admin-muted);
+}
+
+@media (max-width: 720px) {
+  .main-admin-settings {
+    --admin-type-page: 25px;
+  }
+
+  .main-admin-settings .settings-page__standalone-heading {
+    padding: 16px;
+  }
+
+  .main-admin-settings__content-card {
+    padding: 14px;
+  }
+}

@@ -45,12 +45,26 @@
 
 .notification-feed__action {
   flex: 0 0 auto;
-  border: 0;
-  background: transparent;
-  color: #60734c;
+  border: 1px solid var(--admin-olive, #34796e);
+  border-radius: 8px;
+  padding: 0.55rem 0.85rem;
+  background: var(--admin-sage, #e4eee5);
+  color: var(--admin-olive-deep, #335b50);
   cursor: pointer;
   font: inherit;
   font-weight: 700;
+  transition: background-color 150ms ease, color 150ms ease, border-color 150ms ease;
+}
+
+.notification-feed__action:hover {
+  border-color: var(--admin-olive-deep, #335b50);
+  background: var(--admin-olive, #34796e);
+  color: #fff;
+}
+
+.notification-feed__action:focus-visible {
+  outline: 3px solid var(--admin-gold, #d9b34d);
+  outline-offset: 2px;
 }
 
 @media (max-width: 720px) {

@@ -1,13 +1,43 @@
-import React, { useCallback, useEffect, useState } from 'react'
+import React, { useCallback, useEffect, useRef, useState } from 'react'
+import { API_BASE_URL } from './api-base-url.js'
 import './IndependentStudentApprovals.css'
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000/api'
 const filters = [
   ['pending', 'Pending'],
   ['approved', 'Approved'],
   ['rejected', 'Rejected'],
   ['all', 'All'],
 ]
+const registrationFieldDefaults = {
+  fullName: '',
+  email: '',
+  referralCode: '',
+  username: '',
+  educationQualification: '',
+  customQualification: '',
+  userExpectations: '',
+  location: '',
+  livingWithWhom: '',
+  customLivingArrangement: '',
+}
+
+function registrationFieldLabel(field) {
+  return field
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .replace(/[_-]+/g, ' ')
+    .replace(/\b\w/g, (character) => character.toUpperCase())
+}
+
+function registrationFieldValue(value) {
+  if (value === null || value === undefined || (typeof value === 'string' && !value.trim())) {
+    return 'Not provided'
+  }
+  if (Array.isArray(value)) {
+    return value.length ? value.map(registrationFieldValue).join(', ') : 'Not provided'
+  }
+  if (typeof value === 'object') return 'Not provided'
+  return String(value)
+}
 
 function formatDate(value) {
   if (!value) return 'Date unavailable'
@@ -28,6 +58,8 @@ export default function IndependentStudentApprovals({ onLogout }) {
   const [students, setStudents] = useState([])
   const [total, setTotal] = useState(0)
   const [page, setPage] = useState(1)
+  const loadMoreRef = useRef(null)
+  const loadingMoreRef = useRef(false)
   const [pendingCount, setPendingCount] = useState(0)
   const [selectedStudent, setSelectedStudent] = useState(null)
   const [detailsLoading, setDetailsLoading] = useState(false)
@@ -38,8 +70,12 @@ export default function IndependentStudentApprovals({ onLogout }) {
   const [error, setError] = useState('')
   const [message, setMessage] = useState('')
   const [retry, setRetry] = useState(0)
+  const registrationDetails = selectedStudent
+    ? { ...registrationFieldDefaults, ...(selectedStudent.registrationDetails || {}) }
+    : {}
 
   const loadStudents = useCallback(async (signal) => {
+    if (page === 1) loadingMoreRef.current = false
     setLoading(true)
     setError('')
     try {
@@ -63,15 +99,37 @@ export default function IndependentStudentApprovals({ onLogout }) {
         !Number.isInteger(result.pendingCount)) {
         throw new Error('The server returned invalid approval records.')
       }
-      setStudents(result.students)
+      if (page === 1) {
+        setStudents(result.students)
+      } else {
+        setStudents((current) => {
+          const next = [...current]
+          const seenIds = new Set(current.map((student) => String(student._id)))
+          for (const student of result.students) {
+            const id = String(student._id)
+            if (!seenIds.has(id)) {
+              seenIds.add(id)
+              next.push(student)
+            }
+          }
+          return next
+        })
+      }
       setTotal(result.total)
       setPendingCount(result.pendingCount)
     } catch (loadError) {
       if (loadError.name !== 'AbortError') {
         setError(loadError instanceof Error ? loadError.message : 'Unable to load applications.')
+        if (page === 1) {
+          setStudents([])
+          setTotal(0)
+        }
       }
     } finally {
-      if (!signal.aborted) setLoading(false)
+      if (!signal.aborted) {
+        setLoading(false)
+        loadingMoreRef.current = false
+      }
     }
   }, [onLogout, page, status])
 
@@ -80,6 +138,26 @@ export default function IndependentStudentApprovals({ onLogout }) {
     loadStudents(controller.signal)
     return () => controller.abort()
   }, [loadStudents, retry])
+
+  useEffect(() => {
+    const sentinel = loadMoreRef.current
+    if (
+      loading ||
+      error ||
+      students.length >= total ||
+      !sentinel ||
+      typeof IntersectionObserver === 'undefined'
+    ) return undefined
+
+    const observer = new IntersectionObserver(([entry]) => {
+      if (entry.isIntersecting && !loadingMoreRef.current) {
+        loadingMoreRef.current = true
+        setPage((current) => current + 1)
+      }
+    }, { rootMargin: '240px 0px' })
+    observer.observe(sentinel)
+    return () => observer.disconnect()
+  }, [error, loading, students.length, total])
 
   async function getAuthorization() {
     const savedAuth = sessionStorage.getItem('lms.auth')
@@ -154,6 +232,7 @@ export default function IndependentStudentApprovals({ onLogout }) {
       setRejecting(false)
       setStudents((current) => current.filter((entry) => entry._id !== student._id))
       setPendingCount((count) => Math.max(0, count - 1))
+      setPage(1)
       setRetry((current) => current + 1)
     } catch (actionError) {
       setError(actionError instanceof Error ? actionError.message : 'Unable to update the application.')
@@ -167,12 +246,8 @@ export default function IndependentStudentApprovals({ onLogout }) {
       <header className="independent-approvals__heading">
         <div>
           <p className="admin-eyebrow">USER MANAGEMENT</p>
-          <h1>Independent Student Approvals</h1>
+          <h1>Student Approval</h1>
           <p>Review external student account applications before granting LMS access.</p>
-        </div>
-        <div className="independent-approvals__count" aria-live="polite">
-          <strong>{pendingCount}</strong>
-          <span>Pending applications</span>
         </div>
       </header>
 
@@ -194,7 +269,7 @@ export default function IndependentStudentApprovals({ onLogout }) {
         </div>
         {message && <p className="admin-import-result" role="status">{message}</p>}
         {error && <div className="admin-alert" role="alert"><span>{error}</span><button type="button" onClick={() => setRetry((value) => value + 1)}>Retry</button></div>}
-        {loading ? <p className="admin-loading" role="status">Loading applications…</p> : students.length ? (
+        {loading && page === 1 ? <p className="admin-loading" role="status">Loading applications…</p> : students.length ? (
           <div className="admin-table-wrap">
             <table className="admin-table independent-approvals__table">
               <thead>
@@ -225,16 +300,11 @@ export default function IndependentStudentApprovals({ onLogout }) {
               </tbody>
             </table>
           </div>
-        ) : <p className="independent-approvals__empty">No {status === 'all' ? '' : `${status} `}independent student applications.</p>}
-        {!loading && total > 25 && (
-          <div className="independent-approvals__pagination">
-            <span>{(page - 1) * 25 + 1}–{Math.min(page * 25, total)} of {total}</span>
-            <div>
-              <button type="button" className="admin-button admin-button--secondary" disabled={page <= 1} onClick={() => setPage((value) => value - 1)}>Previous</button>
-              <button type="button" className="admin-button admin-button--secondary" disabled={page * 25 >= total} onClick={() => setPage((value) => value + 1)}>Next</button>
-            </div>
-          </div>
-        )}
+        ) : !loading && !error ? <p className="independent-approvals__empty">No {status === 'all' ? '' : `${status} `}independent student applications.</p> : null}
+        <div className="independent-approvals__load-more" ref={loadMoreRef} aria-live="polite">
+          {total > 0 && <span>{Math.min(students.length, total)} of {total} applications loaded</span>}
+          {loading && students.length > 0 && <span role="status">Loading more applications…</span>}
+        </div>
       </div>
 
       {selectedStudent && (
@@ -248,15 +318,38 @@ export default function IndependentStudentApprovals({ onLogout }) {
             </header>
             {detailsLoading ? <p className="admin-loading">Loading details…</p> : (
               <>
-                <dl>
-                  <div><dt>Full Name</dt><dd>{selectedStudent.fullName || 'Not provided'}</dd></div>
-                  <div><dt>Email</dt><dd>{selectedStudent.email}</dd></div>
-                  <div><dt>Username</dt><dd>{selectedStudent.username || 'Not provided'}</dd></div>
-                  <div><dt>Student ID</dt><dd>{selectedStudent.studentId || 'Not provided'}</dd></div>
-                  <div><dt>Registration Date</dt><dd>{formatDate(selectedStudent.createdAt)}</dd></div>
-                  <div><dt>Student Type</dt><dd>Independent</dd></div>
-                  <div><dt>Current Approval Status</dt><dd><span className={`admin-status admin-status--${selectedStudent.approvalStatus}`}>{selectedStudent.approvalStatus}</span></dd></div>
-                </dl>
+                <section className="independent-approvals__details-section">
+                  <h3>Registration details</h3>
+                  <dl>
+                    {Object.entries(registrationDetails).map(([field, value]) => (
+                      <div key={field}>
+                        <dt>{registrationFieldLabel(field)}</dt>
+                        <dd>{registrationFieldValue(value)}</dd>
+                      </div>
+                    ))}
+                  </dl>
+                  <p className="independent-approvals__security-note">
+                    Password and confirmation are intentionally hidden for security.
+                  </p>
+                </section>
+                <section className="independent-approvals__details-section">
+                  <h3>Application status</h3>
+                  <dl>
+                    <div><dt>Registration Date</dt><dd>{formatDate(selectedStudent.createdAt)}</dd></div>
+                    <div><dt>Approval Status</dt><dd><span className={`admin-status admin-status--${selectedStudent.approvalStatus}`}>{selectedStudent.approvalStatus}</span></dd></div>
+                    <div>
+                      <dt>Approval Date</dt>
+                      <dd>{selectedStudent.approvedAt
+                        ? formatDate(selectedStudent.approvedAt)
+                        : selectedStudent.approvalStatus === 'approved' ? 'Not recorded' : 'Not approved'}</dd>
+                    </div>
+                    {selectedStudent.rejectionReason && (
+                      <div className="independent-approvals__detail-wide">
+                        <dt>Rejection Reason</dt><dd>{selectedStudent.rejectionReason}</dd>
+                      </div>
+                    )}
+                  </dl>
+                </section>
                 {selectedStudent.approvalStatus === 'pending' && (
                   <>
                     {rejecting && (

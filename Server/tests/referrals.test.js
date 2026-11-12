@@ -11,6 +11,8 @@ const [
   { default: referralsRouter, dailyGenerationLimit, getUtcDayStart },
   { default: ReferralCode },
   { default: ReferralCodeDailyLimit },
+  { default: Notification },
+  { default: RegistrationEmailVerification },
   { Student, CollegeStudent, Admin, CollegeAdmin },
   { default: AccountIdentity },
 ] = await Promise.all([
@@ -18,6 +20,8 @@ const [
   import('../routes/referrals.js'),
   import('../models/ReferralCode.js'),
   import('../models/ReferralCodeDailyLimit.js'),
+  import('../models/Notification.js'),
+  import('../models/RegistrationEmailVerification.js'),
   import('../models/account-models.js'),
   import('../models/AccountIdentity.js'),
 ])
@@ -50,6 +54,7 @@ const students = new Map([
     _id: ownerId,
     role: 'student',
     studentType: 'independent',
+    approvalStatus: 'approved',
     status: 'active',
     isActive: true,
   }],
@@ -57,6 +62,7 @@ const students = new Map([
     _id: secondOwnerId,
     role: 'student',
     studentType: 'independent',
+    approvalStatus: 'approved',
     status: 'active',
     isActive: true,
   }],
@@ -74,6 +80,7 @@ const referralCodes = []
 const dailyLimits = []
 const savedAccounts = []
 const savedIdentities = []
+const emailVerifications = new Map()
 
 function valueMatches(actual, expected) {
   if (expected && typeof expected === 'object' && !(expected instanceof Date) && !mongoose.isValidObjectId(expected)) {
@@ -181,12 +188,23 @@ stub(AccountIdentity, 'create', async (documents) => {
   savedIdentities.push(...documents)
   return documents
 })
+stub(Notification, 'create', async (documents) => documents)
 stub(Student, 'findOne', () => queryResult(() => null))
 stub(Student, 'create', async (documents) => {
   savedAccounts.push(...documents)
   for (const account of documents) students.set(String(account._id), account)
   return documents
 })
+stub(RegistrationEmailVerification.prototype, 'save', async function saveVerification() {
+  emailVerifications.set(String(this._id), this)
+  return this
+})
+stub(RegistrationEmailVerification, 'findOneAndUpdate', (filter, update) => queryResult(() => {
+  const verification = emailVerifications.get(String(filter._id))
+  if (!verification || !matches(verification, filter)) return null
+  Object.assign(verification, update.$set || {})
+  return verification
+}))
 stub(Admin, 'findOne', () => queryResult(() => null))
 stub(CollegeAdmin, 'findOne', () => queryResult(() => null))
 stub(CollegeStudent, 'findOne', () => queryResult(() => null))
@@ -197,6 +215,26 @@ stub(mongoose, 'startSession', async () => ({
 
 function tokenFor(id, role = 'student', accountCollection = 'students') {
   return jwt.sign({ role, accountCollection }, process.env.JWT_SECRET, { subject: String(id), expiresIn: '20d' })
+}
+
+function verifiedRegistrationToken(email) {
+  const now = new ControlledDate()
+  const verification = new RegistrationEmailVerification({
+    email,
+    hashedOtp: 'test-only-registration-hash',
+    expiresAt: now,
+    verificationExpiresAt: new ControlledDate(now.getTime() + 30 * 60 * 1000),
+    cleanupAt: new ControlledDate(now.getTime() + 24 * 60 * 60 * 1000),
+    requestWindowStartedAt: now,
+    lastSentAt: now,
+    verifiedAt: now,
+  })
+  emailVerifications.set(String(verification._id), verification)
+  return jwt.sign(
+    { scope: 'registration_email_verified', email },
+    process.env.JWT_SECRET,
+    { subject: String(verification._id), expiresIn: '30m' },
+  )
 }
 
 async function request(path, { method, token, body } = {}) {
@@ -306,6 +344,7 @@ test('referral generation limits, UTC reset, redemption, history, and privacy', 
       username: 'referred-friend',
       password: 'a-strong-password',
       confirmPassword: 'a-strong-password',
+      emailVerificationToken: verifiedRegistrationToken('referred-friend@example.invalid'),
       role: 'student',
       accountType: 'independent',
       referralCode: codeToRedeem,
@@ -317,7 +356,7 @@ test('referral generation limits, UTC reset, redemption, history, and privacy', 
   assert.equal(String(redeemedDocument.usedBy), registeredAccountId)
   assert.equal(redeemedDocument.status, 'used')
   assert.ok(redeemedDocument.usedAt instanceof originalDate)
-  assert.equal(redeemedDocument.registrationStatus, 'approved')
+  assert.equal(redeemedDocument.registrationStatus, 'awaiting_approval')
 
   const repeatedValidation = await request('/referrals/validate', { body: { code: codeToRedeem } })
   assert.equal(repeatedValidation.response.status, 400)
@@ -337,13 +376,16 @@ test('referral generation limits, UTC reset, redemption, history, and privacy', 
 
   const referredAccount = students.get(registeredAccountId)
   referredAccount.status = 'pending'
+  referredAccount.approvalStatus = 'pending'
   let history = await request('/referrals/me', { token: ownerToken })
   const usedEntry = history.result.codes.find((entry) => entry.code === codeToRedeem)
   assert.equal(usedEntry.registrationStatus, 'awaiting_approval')
   referredAccount.status = 'active'
+  referredAccount.approvalStatus = 'approved'
   history = await request('/referrals/me', { token: ownerToken })
   assert.equal(history.result.codes.find((entry) => entry.code === codeToRedeem).registrationStatus, 'approved')
   referredAccount.status = 'rejected'
+  referredAccount.approvalStatus = 'rejected'
   history = await request('/referrals/me', { token: ownerToken })
   assert.equal(history.result.codes.find((entry) => entry.code === codeToRedeem).registrationStatus, 'rejected')
 

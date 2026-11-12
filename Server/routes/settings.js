@@ -9,7 +9,10 @@ import College from '../models/College.js'
 import { authenticate } from '../middleware/auth.js'
 import { config } from '../config/env.js'
 import { findTakenEmails, findTakenUsernames } from '../utils/account-identity-availability.js'
-import { sendStudentEmailChangeVerificationEmail } from '../utils/email.js'
+import {
+  logEmailDeliveryFailure,
+  sendStudentEmailChangeVerificationEmail,
+} from '../utils/email.js'
 import {
   cancelStudentOtp,
   getOtpRateLimitDelay,
@@ -468,6 +471,11 @@ router.post('/email-change/request', async (req, res, next) => {
         code,
       })
     } catch (emailError) {
+      logEmailDeliveryFailure({
+        event: 'notification.student_email_change_email.failed',
+        accountId: user._id,
+        error: emailError,
+      })
       await AccountIdentity.updateOne(
         { _id: identity._id, pendingEmailVerificationCodeHash: codeHash },
         {
@@ -481,7 +489,7 @@ router.post('/email-change/request', async (req, res, next) => {
         },
       )
       return res.status(503).json({
-        message: emailError?.code === 'SMTP_NOT_CONFIGURED'
+        message: emailError?.code === 'RESEND_NOT_CONFIGURED'
           ? 'Email verification is not configured. Contact support before changing your email.'
           : 'The verification email could not be sent. Check your email address and try again.',
       })

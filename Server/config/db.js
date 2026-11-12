@@ -9,8 +9,10 @@ import QuizAttempt from '../models/QuizAttempt.js'
 import AssignmentSubmission from '../models/AssignmentSubmission.js'
 import SupportTicket from '../models/SupportTicket.js'
 import EmailOtpChallenge from '../models/EmailOtpChallenge.js'
+import RegistrationEmailVerification from '../models/RegistrationEmailVerification.js'
 import ReferralCode from '../models/ReferralCode.js'
 import ReferralCodeDailyLimit from '../models/ReferralCodeDailyLimit.js'
+import Certificate from '../models/Certificate.js'
 
 const requiredModels = [
   Admin,
@@ -25,30 +27,62 @@ const requiredModels = [
   AssignmentSubmission,
   SupportTicket,
   EmailOtpChallenge,
+  RegistrationEmailVerification,
   ReferralCode,
   ReferralCodeDailyLimit,
+  Certificate,
 ]
+
+async function runDatabaseOperation(operation, collection, callback) {
+  try {
+    return await callback()
+  } catch (cause) {
+    const collectionContext = collection ? ` for collection "${collection}"` : ''
+    const error = new Error(`MongoDB ${operation}${collectionContext} failed.`)
+    error.name = 'MongoInitializationError'
+    error.cause = cause
+    error.operation = operation
+    if (collection) error.collection = collection
+    throw error
+  }
+}
 
 export async function connectToDatabase() {
   if (!config.mongoUri) {
     throw new Error('MONGO_URI is not set.')
   }
 
-  await mongoose.connect(
-    config.mongoUri,
-    config.mongoDbName ? { dbName: config.mongoDbName } : {},
+  await runDatabaseOperation(
+    'connect',
+    null,
+    () => mongoose.connect(
+      config.mongoUri,
+      config.mongoDbName ? { dbName: config.mongoDbName } : {},
+    ),
   )
   const database = mongoose.connection.db
   for (const model of requiredModels) {
-    const collectionExists = await database.listCollections({ name: model.collection.name }).hasNext()
+    const collectionExists = await runDatabaseOperation(
+      'listCollections',
+      model.collection.name,
+      async () => database.listCollections({ name: model.collection.name }).hasNext(),
+    )
     if (!collectionExists) {
       try {
-        await database.createCollection(model.collection.name)
+        await runDatabaseOperation(
+          'createCollection',
+          model.collection.name,
+          () => database.createCollection(model.collection.name),
+        )
       } catch (error) {
-        if (error?.code !== 48) throw error
+        if (error?.cause?.code !== 48) throw error
       }
     }
-    await model.createIndexes()
+    await runDatabaseOperation(
+      'createIndexes',
+      model.collection.name,
+      () => model.createIndexes(),
+    )
   }
   console.log('Connected to MongoDB Atlas.')
 }

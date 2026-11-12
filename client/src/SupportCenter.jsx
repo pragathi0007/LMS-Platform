@@ -1,8 +1,8 @@
 import React, { useEffect, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
+import { API_BASE_URL } from './api-base-url.js'
 import './SupportCenter.css'
 
-const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000/api').replace(/\/+$/, '')
 const supportEmail = import.meta.env.VITE_SUPPORT_EMAIL?.trim() || ''
 const ticketCategories = [
   'Account and Login',

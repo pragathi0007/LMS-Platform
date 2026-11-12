@@ -914,6 +914,88 @@
   gap: 8px;
 }
 
+.registration-email-entry {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+}
+
+.registration-email-entry input {
+  min-width: 0;
+}
+
+.registration-email-button,
+.registration-email-resend {
+  min-height: 38px;
+  padding: 0 12px;
+  border: 1px solid #d5e4d8;
+  border-radius: 8px;
+  background: #edf4ef;
+  color: #34796e;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 650;
+  transition: background 150ms ease, border-color 150ms ease, opacity 150ms ease;
+}
+
+.registration-email-button:hover:not(:disabled),
+.registration-email-resend:hover:not(:disabled) {
+  border-color: #9dc2b0;
+  background: #e2eee7;
+}
+
+.registration-email-button:disabled,
+.registration-email-resend:disabled {
+  cursor: not-allowed;
+  opacity: 0.62;
+}
+
+.registration-email-code {
+  display: grid;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.registration-email-code label {
+  color: #414640;
+  font-size: 11px;
+  font-weight: 620;
+}
+
+.registration-email-code input {
+  max-width: 220px;
+  text-align: center;
+  letter-spacing: 0.22em;
+}
+
+.registration-email-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.registration-email-resend {
+  border-color: transparent;
+  background: transparent;
+}
+
+.registration-email-status {
+  margin: 3px 0 0;
+  color: #527a6a;
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.registration-email-status.is-verified {
+  color: #347b5c;
+  font-weight: 650;
+}
+
+.registration-email-status.is-error {
+  color: #a64e40;
+}
+
 .referral-code-input input {
   min-width: 0;
   flex: 1;
@@ -1225,6 +1307,7 @@
   background: #e8c460;
   color: #303328;
   box-shadow: 0 3px 8px rgba(181, 145, 58, 0.12);
+  cursor: pointer;
 }
 
 .primary-button:hover {
@@ -1234,9 +1317,12 @@
 }
 
 .primary-button:disabled {
-  cursor: wait;
   opacity: 0.72;
   transform: none;
+}
+
+.primary-button:disabled[aria-busy='true'] {
+  cursor: wait;
 }
 
 .primary-button:active,
@@ -1517,6 +1603,32 @@
   background: #2b3d34;
 }
 
+.auth-page[data-theme='dark'] .registration-email-code label,
+.auth-page[data-theme='dark'] .registration-email-status {
+  color: #a9b5ab;
+}
+
+.auth-page[data-theme='dark'] .registration-email-status.is-verified {
+  color: #8ed1a7;
+}
+
+.auth-page[data-theme='dark'] .registration-email-status.is-error {
+  color: #f0a397;
+}
+
+.auth-page[data-theme='dark'] .registration-email-button,
+.auth-page[data-theme='dark'] .registration-email-resend {
+  border-color: #40564b;
+  background: #25342d;
+  color: #a9d8bd;
+}
+
+.auth-page[data-theme='dark'] .registration-email-button:hover:not(:disabled),
+.auth-page[data-theme='dark'] .registration-email-resend:hover:not(:disabled) {
+  border-color: #668d7b;
+  background: #2b3d34;
+}
+
 .auth-page[data-theme='dark'] .field input,
 .auth-page[data-theme='dark'] .field textarea,
 .auth-page[data-theme='dark'] .field select,
@@ -1534,6 +1646,16 @@
 .auth-page[data-theme='dark'] .field input::placeholder,
 .auth-page[data-theme='dark'] .field textarea::placeholder {
   color: #8d9890;
+}
+
+@media (max-width: 520px) {
+  .registration-email-entry {
+    grid-template-columns: 1fr;
+  }
+
+  .registration-email-button {
+    width: 100%;
+  }
 }
 
 .auth-page[data-theme='dark'] .secure-note,

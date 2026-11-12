@@ -1,12 +1,8 @@
 import React, { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
+import { API_BASE_URL } from './api-base-url.js'
 import './SettingsPage.css'
 
-const API_BASE_URL = (
-  import.meta.env.VITE_API_URL ||
-  import.meta.env.VITE_API_BASE_URL ||
-  'http://localhost:5000/api'
-).replace(/\/+$/, '')
 const usernamePattern = /^[a-zA-Z0-9._-]{3,30}$/
 
 function maskEmail(email) {
@@ -452,13 +448,18 @@ function SettingsPage({
   return (
     <div className={`settings-page${standalone ? ' settings-page--standalone' : ''}`}>
       {standalone && (
-        <header className="settings-page__standalone-heading">
-          <Link to={dashboardPath}>← Back to dashboard</Link>
+        <>
+          <Link className="admin-back-dashboard" to={dashboardPath}>
+            <span aria-hidden="true">←</span> Back to Dashboard
+          </Link>
+          <header className="settings-page__standalone-heading">
           <span className="student-eyebrow">ACCOUNT PREFERENCES</span>
           <h1>Settings</h1>
           <p>Manage your account, security, and appearance.</p>
-        </header>
+          </header>
+        </>
       )}
+      <div className={standalone ? 'main-admin-settings__content-card' : undefined}>
       {isLoading ? <p className="settings-loading" role="status">Loading account settings…</p> : !account ? (
         <p className="settings-message is-error" role="alert">
           {pageError || 'Account details could not be loaded. Refresh the page or sign in again before changing settings.'}
@@ -692,6 +693,7 @@ function SettingsPage({
           </SettingsSection>
         </>
       )}
+      </div>
     </div>
   )
 }

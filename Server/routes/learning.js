@@ -1,18 +1,36 @@
+import bcrypt from 'bcryptjs'
+import { createHash, randomBytes } from 'node:crypto'
 import mongoose from 'mongoose'
 import multer from 'multer'
 import path from 'node:path'
 import { Router } from 'express'
+import AccountIdentity from '../models/AccountIdentity.js'
 import College from '../models/College.js'
 import Course from '../models/Course.js'
+import Certificate from '../models/Certificate.js'
 import Enrollment from '../models/Enrollment.js'
 import AssignmentSubmission from '../models/AssignmentSubmission.js'
 import QuizAttempt from '../models/QuizAttempt.js'
-import { CollegeStudent, Student } from '../models/account-models.js'
+import {
+  CollegeAdmin,
+  CollegeStudent,
+  Student,
+  accountModelsByCollection,
+} from '../models/account-models.js'
 import { authenticate, requireRoles } from '../middleware/auth.js'
+import {
+  assertCollegeStudentCapacity,
+  countCollegeStudents,
+  getCollegeStudentLimit,
+} from '../utils/college-student-capacity.js'
+import { parseStudentCsv } from '../utils/student-csv.js'
+import { toMongoBuffer } from '../utils/mongo-binary.js'
 
 const router = Router()
 const requireStudent = [authenticate, requireRoles('student')]
 const requireCollegeAdmin = [authenticate, requireRoles('college_admin')]
+const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+const usernamePattern = /^[a-zA-Z0-9._-]{3,30}$/
 const maxAssignmentSubmissionBytes = 10 * 1024 * 1024
 const assignmentFileTypes = new Map([
   ['.pdf', 'application/pdf'],
@@ -36,6 +54,38 @@ const assignmentUpload = multer({
 
 function isValidObjectId(value) {
   return typeof value === 'string' && mongoose.isValidObjectId(value)
+}
+
+async function getAssignedCollegeAdmin(req) {
+  const collegeId = req.auth.user.collegeId
+  if (!isValidObjectId(collegeId)) return null
+  const account = await CollegeAdmin.findById(req.auth.id)
+    .select('collegeId studentLimit')
+    .lean()
+  return account && String(account.collegeId) === collegeId
+    ? { ...account, collegeId: new mongoose.Types.ObjectId(collegeId) }
+    : null
+}
+
+async function accountIdentifierExists(field, value) {
+  if (await AccountIdentity.exists({ [field]: value })) return true
+  for (const AccountModel of Object.values(accountModelsByCollection)) {
+    if (await AccountModel.exists({ [field]: value })) return true
+  }
+  return false
+}
+
+function makeImportUsername(studentId) {
+  const digest = createHash('sha256').update(studentId.toLowerCase()).digest('hex').slice(0, 20)
+  return `college-${digest}`
+}
+
+function isDuplicateStudentId(studentId, model, session) {
+  let query = model.findOne({ studentId })
+    .collation({ locale: 'en', strength: 2 })
+    .select('_id')
+  if (session) query = query.session(session)
+  return query.lean()
 }
 
 function canonicalObjectId(value) {
@@ -90,6 +140,68 @@ function getCourseLessonIds(course) {
     const lessons = videoItems.length ? videoItems : module.lessons || []
     return lessons.map((lesson) => String(lesson._id)).filter(Boolean)
   })
+}
+
+async function issueCourseCertificate(req, enrollment) {
+  const course = enrollment.courseId
+  const lessonIds = [...new Set(getCourseLessonIds(course))]
+  const completedIds = new Set((enrollment.completedLessonIds || []).map(String))
+  if (!lessonIds.length || !lessonIds.every((lessonId) => completedIds.has(lessonId))) return null
+
+  const studentType = req.auth.accountCollection === 'clg_students' ? 'college' : 'independent'
+  const studentName = req.auth.user.fullName || req.auth.user.username || req.auth.user.email
+  const courseName = course?.title?.trim()
+  if (!studentName || !courseName) {
+    throw new Error('A student name and course name are required to issue a certificate.')
+  }
+
+  const studentId = new mongoose.Types.ObjectId(req.auth.id)
+  const courseId = new mongoose.Types.ObjectId(course._id)
+  const legacyCertificate = await Certificate.findOne({
+    userId: studentId,
+    courseId,
+    $or: [{ studentId: { $exists: false } }, { studentId: null }],
+  }).lean()
+  if (legacyCertificate) {
+    const legacyEnrollment = await Enrollment.findOne({
+      _id: legacyCertificate.enrollmentId,
+      userId: studentId,
+      courseId,
+      ...(studentType === 'college'
+        ? { collegeId: req.auth.user.collegeId }
+        : { $or: [{ collegeId: { $exists: false } }, { collegeId: null }] }),
+    }).select('_id').lean()
+    if (legacyEnrollment) return legacyCertificate
+  }
+
+  const certificateId = `AIH-${randomBytes(16).toString('hex').toUpperCase()}`
+  const identity = { studentType, studentId, courseId }
+  const certificateData = {
+    ...identity,
+    userId: studentId,
+    ...(studentType === 'college' ? { collegeId: req.auth.user.collegeId } : {}),
+    studentName,
+    courseName,
+    enrollmentId: enrollment._id,
+    certificateId,
+    name: `${courseName} Certificate of Completion`,
+    issuedAt: new Date(),
+    viewUrl: `/certificates/${certificateId}/view`,
+    downloadUrl: `/certificates/${certificateId}/download`,
+  }
+
+  try {
+    return await Certificate.findOneAndUpdate(
+      identity,
+      { $setOnInsert: certificateData },
+      { upsert: true, new: true, setDefaultsOnInsert: true },
+    ).lean()
+  } catch (error) {
+    if (error?.code !== 11000) throw error
+    const existing = await Certificate.findOne(identity).lean()
+    if (existing) return existing
+    throw error
+  }
 }
 
 function getCourseAssignmentCount(course) {
@@ -312,6 +424,226 @@ function receiveAssignmentSubmission(req, res, next) {
     return next(error)
   })
 }
+
+router.post('/college/students', ...requireCollegeAdmin, async (req, res, next) => {
+  try {
+    const subAdmin = await getAssignedCollegeAdmin(req)
+    if (!subAdmin) {
+      return res.status(403).json({ message: 'Your Sub-Admin account is not assigned to a valid college.' })
+    }
+
+    const { fullName, email, username, password, studentId, department, batch } = req.body ?? {}
+    if (typeof fullName !== 'string' || !fullName.trim() || fullName.trim().length > 120) {
+      return res.status(400).json({ message: 'Enter a student name between 1 and 120 characters.' })
+    }
+    if (typeof email !== 'string' || email.trim().length > 254 || !emailPattern.test(email.trim())) {
+      return res.status(400).json({ message: 'Enter a valid email address.' })
+    }
+    if (typeof username !== 'string' || !usernamePattern.test(username.trim())) {
+      return res.status(400).json({ message: 'Use a username with 3–30 letters, numbers, dots, underscores, or hyphens.' })
+    }
+    if (typeof password !== 'string' || password.length < 8 || Buffer.byteLength(password, 'utf8') > 72) {
+      return res.status(400).json({ message: 'Use a password of at least 8 characters.' })
+    }
+    if (typeof studentId !== 'string' || !studentId.trim() || studentId.trim().length > 100) {
+      return res.status(400).json({ message: 'Enter a student ID of up to 100 characters.' })
+    }
+    if (department !== undefined && (typeof department !== 'string' || department.trim().length > 120)) {
+      return res.status(400).json({ message: 'Department must be 120 characters or fewer.' })
+    }
+    if (batch !== undefined && (typeof batch !== 'string' || batch.trim().length > 80)) {
+      return res.status(400).json({ message: 'Batch must be 80 characters or fewer.' })
+    }
+
+    const normalizedEmail = email.trim().toLowerCase()
+    const normalizedUsername = username.trim().toLowerCase()
+    const normalizedStudentId = studentId.trim()
+    const [existingEmail, existingUsername, existingStudentId] = await Promise.all([
+      accountIdentifierExists('email', normalizedEmail),
+      accountIdentifierExists('username', normalizedUsername),
+      Promise.all([
+        isDuplicateStudentId(normalizedStudentId, Student),
+        isDuplicateStudentId(normalizedStudentId, CollegeStudent),
+      ]).then((matches) => matches.some(Boolean)),
+    ])
+    if (existingEmail) return res.status(409).json({ message: 'An account with this email already exists.' })
+    if (existingUsername) return res.status(409).json({ message: 'This username is already taken.' })
+    if (existingStudentId) return res.status(409).json({ message: 'This student ID already exists.' })
+
+    const accountId = new mongoose.Types.ObjectId()
+    const passwordHash = await bcrypt.hash(password, 12)
+    const session = await mongoose.startSession()
+    let student
+    try {
+      await session.withTransaction(async () => {
+        await assertCollegeStudentCapacity(subAdmin.collegeId, session)
+        const duplicate = await AccountIdentity.findOne({
+          $or: [{ email: normalizedEmail }, { username: normalizedUsername }],
+        }).session(session)
+        if (duplicate) {
+          const error = new Error('Email or username already belongs to an LMS account.')
+          error.statusCode = 409
+          throw error
+        }
+        if ((await Promise.all([
+          isDuplicateStudentId(normalizedStudentId, Student, session),
+          isDuplicateStudentId(normalizedStudentId, CollegeStudent, session),
+        ])).some(Boolean)) {
+          const error = new Error('This student ID already exists.')
+          error.statusCode = 409
+          throw error
+        }
+        await AccountIdentity.create([{
+          email: normalizedEmail,
+          username: normalizedUsername,
+          accountCollection: CollegeStudent.collection.name,
+          accountId,
+        }], { session })
+        ;[student] = await CollegeStudent.create([{
+          _id: accountId,
+          fullName: fullName.trim(),
+          email: normalizedEmail,
+          username: normalizedUsername,
+          studentId: normalizedStudentId,
+          department: department?.trim() || undefined,
+          batch: batch?.trim() || undefined,
+          passwordHash,
+          role: 'student',
+          studentType: 'college',
+          collegeId: subAdmin.collegeId,
+          status: 'active',
+          isActive: true,
+          permissions: [],
+        }], { session })
+      })
+    } finally {
+      await session.endSession()
+    }
+    return res.status(201).json({
+      message: 'College student created.',
+      student: {
+        id: String(student._id),
+        fullName: student.fullName,
+        email: student.email,
+        studentId: student.studentId,
+        department: student.department || '',
+        batch: student.batch || '',
+      },
+    })
+  } catch (error) {
+    if (error?.statusCode === 409) {
+      return res.status(409).json({ message: error.message })
+    }
+    return next(error)
+  }
+})
+
+router.post('/college/students/import', ...requireCollegeAdmin, async (req, res, next) => {
+  try {
+    const subAdmin = await getAssignedCollegeAdmin(req)
+    if (!subAdmin) {
+      return res.status(403).json({ message: 'Your Sub-Admin account is not assigned to a valid college.' })
+    }
+    let rows
+    try {
+      rows = parseStudentCsv(req.body?.csvText)
+    } catch (error) {
+      return res.status(400).json({ message: error.message })
+    }
+    if (rows.length > 500) {
+      return res.status(400).json({ message: 'Import is limited to 500 students per CSV.' })
+    }
+
+    const imported = []
+    const failures = []
+    const seenEmails = new Set()
+    const seenStudentIds = new Set()
+    const seenUsernames = new Set()
+    for (const row of rows) {
+      if (row.error) {
+        failures.push({ row: row.rowNumber, reason: row.error })
+        continue
+      }
+
+      const { fullName, studentId, email, department, batch } = row
+      const username = makeImportUsername(studentId)
+      const errors = []
+      if (!fullName || fullName.length > 120) errors.push('Full Name is required and must be 120 characters or fewer.')
+      if (!studentId || studentId.length > 100) errors.push('Student ID is required and must be 100 characters or fewer.')
+      if (!emailPattern.test(email) || email.length > 254) errors.push('Enter a valid email address.')
+      if (!department || department.length > 120) errors.push('Department is required and must be 120 characters or fewer.')
+      if (!batch || batch.length > 80) errors.push('Batch is required and must be 80 characters or fewer.')
+      if (seenEmails.has(email)) errors.push('Email is duplicated in this CSV.')
+      if (seenStudentIds.has(studentId.toLowerCase())) errors.push('Student ID is duplicated in this CSV.')
+      if (seenUsernames.has(username)) errors.push('Generated username is duplicated in this CSV.')
+      seenEmails.add(email)
+      seenStudentIds.add(studentId.toLowerCase())
+      seenUsernames.add(username)
+      if (!errors.length) {
+        const [existingEmail, existingStudentId, existingUsername] = await Promise.all([
+          accountIdentifierExists('email', email),
+          isDuplicateStudentId(studentId, CollegeStudent),
+          accountIdentifierExists('username', username),
+        ])
+        if (existingEmail) errors.push('Email already belongs to an LMS account.')
+        if (existingStudentId) errors.push('Student ID already exists.')
+        if (existingUsername) errors.push('Generated username conflicts with an LMS account.')
+      }
+      if (errors.length) {
+        failures.push({ row: row.rowNumber, email, studentId, reason: errors.join(' ') })
+        continue
+      }
+
+      const accountId = new mongoose.Types.ObjectId()
+      const passwordHash = await bcrypt.hash(randomBytes(48).toString('base64url'), 12)
+      const session = await mongoose.startSession()
+      try {
+        await session.withTransaction(async () => {
+          await assertCollegeStudentCapacity(subAdmin.collegeId, session)
+          await AccountIdentity.create([{
+            email,
+            username,
+            accountCollection: CollegeStudent.collection.name,
+            accountId,
+          }], { session })
+          await CollegeStudent.create([{
+            _id: accountId,
+            fullName,
+            email,
+            username,
+            studentId,
+            department,
+            batch,
+            passwordHash,
+            role: 'student',
+            studentType: 'college',
+            collegeId: subAdmin.collegeId,
+            status: 'active',
+            isActive: true,
+            permissions: [],
+          }], { session })
+        })
+        imported.push({ row: row.rowNumber, email, studentId })
+      } catch (error) {
+        if (error?.statusCode === 409 || error?.code === 11000) {
+          failures.push({ row: row.rowNumber, email, studentId, reason: error.message || 'Email, username, or Student ID already exists.' })
+        } else {
+          throw error
+        }
+      } finally {
+        await session.endSession()
+      }
+    }
+    return res.json({
+      message: 'College student import completed. No invitation emails were sent.',
+      summary: { total: rows.length, imported: imported.length, failed: failures.length },
+      imported,
+      failures,
+    })
+  } catch (error) {
+    return next(error)
+  }
+})
 
 router.get('/courses', ...requireStudent, async (req, res, next) => {
   try {
@@ -729,13 +1061,17 @@ router.get('/assignment-submissions/:submissionId/download', ...requireStudent, 
       status: { $ne: 'cancelled' },
     }).select('_id').lean()
     if (!enrollment) return res.status(404).json({ message: 'The submission was not found.' })
+    const fileData = toMongoBuffer(submission.fileData)
+    if (!fileData || fileData.length < 1 || fileData.length > maxAssignmentSubmissionBytes) {
+      return res.status(404).json({ message: 'The submission file is unavailable.' })
+    }
     res.set({
       'Content-Type': submission.contentType,
-      'Content-Length': String(submission.fileSize),
+      'Content-Length': String(fileData.length),
       'Content-Disposition': `attachment; filename="${submission.fileName}"`,
       'X-Content-Type-Options': 'nosniff',
     })
-    return res.send(submission.fileData)
+    return res.send(fileData)
   } catch (error) {
     return next(error)
   }
@@ -790,7 +1126,7 @@ router.patch('/enrollments/:enrollmentId/progress', ...requireStudent, async (re
       status: { $ne: 'cancelled' },
     }
     const enrollment = await Enrollment.findOne(enrollmentQuery)
-      .populate('courseId', 'modules')
+      .populate('courseId', 'title modules')
       .lean()
     if (!enrollment) return res.status(404).json({ message: 'The enrollment was not found.' })
     if (!courseHasLesson(enrollment.courseId, lessonId)) {
@@ -818,6 +1154,12 @@ router.patch('/enrollments/:enrollmentId/progress', ...requireStudent, async (re
     startedLessonIds.add(lessonId)
     if (completed === true) completedLessonIds.add(lessonId)
     if (completed === false) completedLessonIds.delete(lessonId)
+    if (completed === true) {
+      const currentEnrollment = await Enrollment.findOne(enrollmentQuery)
+        .populate('courseId', 'title modules')
+        .lean()
+      if (currentEnrollment) await issueCourseCertificate(req, currentEnrollment)
+    }
     return res.json({
       completedLessonIds: [...completedLessonIds],
       startedLessonIds: [...startedLessonIds],
@@ -870,8 +1212,12 @@ router.get('/college/dashboard', ...requireCollegeAdmin, async (req, res, next) 
     if (!isValidObjectId(collegeId)) {
       return res.status(403).json({ message: 'This sub-admin is not assigned to a valid college.' })
     }
+    const subAdmin = await getAssignedCollegeAdmin(req)
+    if (!subAdmin) {
+      return res.status(403).json({ message: 'Your Sub-Admin account is not assigned to a valid college.' })
+    }
 
-    const [college, students, courses, enrollments] = await Promise.all([
+    const [college, students, courses, enrollments, totalStudents, studentLimit] = await Promise.all([
       College.findById(collegeId).select('name').lean(),
       CollegeStudent.find({ role: 'student', studentType: 'college', collegeId })
         .select('fullName username email studentId department batch')
@@ -889,9 +1235,19 @@ router.get('/college/dashboard', ...requireCollegeAdmin, async (req, res, next) 
         .sort({ createdAt: -1 })
         .limit(1000)
         .lean(),
+      countCollegeStudents(subAdmin.collegeId),
+      getCollegeStudentLimit(subAdmin.collegeId),
     ])
     if (!college) return res.status(403).json({ message: 'The assigned college no longer exists.' })
-    return res.json({ college, students, courses, enrollments })
+    return res.json({
+      college,
+      students,
+      courses,
+      enrollments,
+      studentLimit,
+      totalStudents,
+      remainingSlots: studentLimit === null ? null : Math.max(0, studentLimit - totalStudents),
+    })
   } catch (error) {
     return next(error)
   }

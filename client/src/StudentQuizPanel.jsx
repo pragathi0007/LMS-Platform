@@ -1,8 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { isInvalidSessionResponse } from './auth-session.js'
 import { buildQuizSubmissionAnswers, getQuestionKey } from './student-quiz-answers.js'
-
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000/api'
+import { API_BASE_URL } from './api-base-url.js'
 
 function getQuizAttempts(quizId, attempts) {
   return attempts.filter((attempt) => String(attempt.quizId) === String(quizId))

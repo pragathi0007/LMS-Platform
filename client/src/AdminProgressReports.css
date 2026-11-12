@@ -1,0 +1,903 @@
+.admin-progress-reports {
+  display: grid;
+  gap: 20px;
+}
+
+.admin-progress-reports__toolbar,
+.admin-progress-students__heading,
+.admin-progress-course__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.admin-progress-reports__toolbar h2,
+.admin-progress-students__heading h3,
+.admin-progress-chart h3,
+.admin-progress-detail-section h3 {
+  margin: 0;
+  color: var(--admin-ink);
+  font-size: 15px;
+}
+
+.admin-progress-reports__toolbar p,
+.admin-progress-students__heading span,
+.admin-progress-course__header span,
+.admin-progress-course__counts {
+  margin: 5px 0 0;
+  color: var(--admin-muted);
+  font-size: 12px;
+}
+
+.admin-progress-chart,
+.admin-progress-course {
+  min-width: 0;
+  padding: 16px;
+  border: 1px solid var(--admin-line);
+  border-radius: var(--admin-card-radius, 14px);
+  background: var(--admin-paper);
+  box-shadow: var(--admin-card-shadow, 0 8px 24px rgba(37, 46, 38, 0.06));
+}
+
+.admin-progress-students {
+  display: grid;
+  gap: 12px;
+}
+
+.admin-progress-table-wrap {
+  width: 100%;
+  overflow-x: auto;
+  border: 1px solid var(--admin-line);
+  border-radius: 12px;
+}
+
+.admin-progress-table {
+  width: 100%;
+  border-collapse: collapse;
+  background: var(--admin-paper);
+  color: var(--admin-ink);
+  font-size: 14px;
+}
+
+.admin-progress-table th,
+.admin-progress-table td {
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--admin-line);
+  text-align: left;
+  vertical-align: middle;
+}
+
+.admin-progress-table th {
+  color: var(--admin-muted);
+  font-size: 11px;
+  font-weight: 650;
+  white-space: nowrap;
+}
+
+.admin-progress-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.admin-progress-table a {
+  color: var(--admin-olive-deep);
+  font-weight: 650;
+  text-underline-offset: 3px;
+}
+
+.admin-app[data-theme="dark"] .admin-progress-table a {
+  color: var(--admin-olive);
+}
+
+.admin-progress-table code {
+  display: inline-block;
+  max-width: 220px;
+  overflow-wrap: anywhere;
+  color: var(--admin-muted);
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 11px;
+}
+
+.admin-progress-student-type {
+  display: block;
+  margin-top: 3px;
+  color: var(--admin-muted);
+  font-size: 11px;
+}
+
+.admin-app[data-theme="dark"] .admin-progress-link {
+  color: var(--admin-olive);
+}
+
+.admin-progress-link {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--admin-olive-deep);
+  cursor: pointer;
+  font: inherit;
+  font-weight: 650;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.admin-progress-link:hover,
+.admin-progress-link:focus-visible {
+  color: var(--admin-olive);
+}
+
+.admin-progress-load-more {
+  display: flex;
+  justify-content: center;
+  padding: 4px 0 8px;
+}
+
+.admin-progress-empty,
+.admin-progress-error {
+  margin: 12px 0;
+  color: var(--admin-muted);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.admin-progress-error {
+  color: #a64e43;
+}
+
+.admin-progress-dialog-backdrop {
+  position: fixed;
+  z-index: 80;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(20, 25, 21, 0.58);
+}
+
+.admin-progress-dialog {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  width: min(100%, 980px);
+  max-height: min(92vh, 900px);
+  overflow: hidden;
+  border: 1px solid var(--admin-line);
+  border-radius: var(--admin-card-radius, 14px);
+  background: var(--admin-paper);
+  color: var(--admin-ink);
+  box-shadow: 0 24px 70px rgba(12, 16, 13, 0.3);
+}
+
+.admin-progress-dialog__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 20px 24px;
+  border-bottom: 1px solid var(--admin-line);
+}
+
+.admin-progress-dialog__header > div {
+  min-width: 0;
+  flex: 1;
+}
+
+.admin-progress-print {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.admin-progress-dialog__header h2 {
+  margin: 0;
+  color: var(--admin-ink);
+  font-size: 20px;
+}
+
+.admin-progress-dialog__header p:not(.admin-eyebrow) {
+  margin: 6px 0 0;
+  color: var(--admin-muted);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.admin-progress-dialog__close {
+  width: 34px;
+  height: 34px;
+  flex: 0 0 auto;
+  border: 1px solid var(--admin-line);
+  border-radius: 10px;
+  background: var(--admin-paper);
+  color: var(--admin-ink);
+  cursor: pointer;
+  font-size: 22px;
+  line-height: 1;
+}
+
+.admin-progress-dialog__body {
+  display: grid;
+  gap: 20px;
+  overflow-y: auto;
+  padding: 20px 24px 24px;
+}
+
+.admin-progress-detail-summary {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.admin-progress-detail-summary > div {
+  display: grid;
+  gap: 6px;
+  padding: 12px;
+  border: 1px solid var(--admin-line);
+  border-radius: 10px;
+  background: rgba(93, 100, 92, 0.06);
+}
+
+.admin-progress-detail-summary span {
+  color: var(--admin-muted);
+  font-size: 11px;
+}
+
+.admin-progress-detail-summary strong {
+  color: var(--admin-ink);
+  font-size: 18px;
+}
+
+.admin-progress-detail-section {
+  display: grid;
+  gap: 12px;
+}
+
+.admin-progress-course-list {
+  display: grid;
+  gap: 12px;
+}
+
+.admin-progress-course {
+  padding: 0;
+  overflow: hidden;
+}
+
+.admin-progress-course__summary {
+  display: block;
+  padding: 16px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.admin-progress-course__summary::-webkit-details-marker {
+  display: none;
+}
+
+.admin-progress-course__summary:focus-visible,
+.admin-progress-quiz__answers summary:focus-visible,
+.admin-progress-evaluation-history summary:focus-visible {
+  outline: 2px solid var(--admin-olive);
+  outline-offset: -2px;
+}
+
+.admin-progress-course__header {
+  align-items: center;
+}
+
+.admin-progress-course__header h4 {
+  margin: 0;
+  color: var(--admin-ink);
+  font-size: 14px;
+}
+
+.admin-progress-course__header > strong {
+  color: var(--admin-olive-deep);
+  white-space: nowrap;
+}
+
+.admin-progress-course__view {
+  margin: 0;
+  padding: 8px 12px;
+  border: 1px solid #d5b94c;
+  border-radius: 9px;
+  background: #f0d26c;
+  color: #3a3420;
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.admin-progress-course__metrics {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.admin-progress-course__metrics > span {
+  display: grid;
+  gap: 4px;
+  color: var(--admin-muted);
+  font-size: 11px;
+}
+
+.admin-progress-course__metrics strong {
+  color: var(--admin-ink);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.admin-progress-course__summary-progress {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  margin-top: 12px;
+  color: var(--admin-muted);
+  font-size: 12px;
+}
+
+.admin-progress-course__progress-track {
+  height: 6px;
+  overflow: hidden;
+  border: 1px solid #c9c8c2;
+  border-radius: 999px;
+  background: #e7e6e1;
+}
+
+.admin-progress-course__progress-track > span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--admin-olive);
+  transition: width 180ms ease;
+}
+
+.admin-progress-course__summary-progress strong {
+  min-width: 42px;
+  color: var(--admin-olive-deep);
+  font-size: 12px;
+  text-align: right;
+}
+
+.admin-progress-course__details {
+  display: grid;
+  gap: 18px;
+  padding: 16px;
+  border-top: 1px solid var(--admin-line);
+  background: rgba(93, 100, 92, 0.035);
+}
+
+.admin-progress-course-section {
+  display: grid;
+  gap: 10px;
+}
+
+.admin-progress-course-section > h5,
+.admin-progress-evaluation-form h5 {
+  margin: 0;
+  color: var(--admin-ink);
+  font-size: 13px;
+}
+
+.admin-progress-assignment-summary {
+  margin: 0;
+  color: var(--admin-muted);
+  font-size: 12px;
+}
+
+.admin-progress-course-certificates {
+  display: grid;
+  gap: 10px;
+}
+
+.admin-progress-course-certificate {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 12px;
+  border: 1px solid var(--admin-line);
+  border-radius: 10px;
+  background: var(--admin-paper);
+}
+
+.admin-progress-course-certificate > div:first-child {
+  display: grid;
+  justify-items: start;
+  gap: 5px;
+  min-width: 0;
+}
+
+.admin-progress-certificate-badge {
+  display: inline-flex;
+  padding: 4px 8px;
+  border: 1px solid rgba(52, 121, 110, 0.28);
+  border-radius: 999px;
+  background: rgba(52, 121, 110, 0.1);
+  color: var(--admin-olive-deep);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.admin-progress-course-certificate strong {
+  color: var(--admin-ink);
+  font-size: 12px;
+}
+
+.admin-progress-course-certificate > div:first-child > span:not(.admin-progress-certificate-badge),
+.admin-progress-course-certificate code {
+  color: var(--admin-muted);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
+.admin-progress-course-certificate__actions {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 12px;
+}
+
+.admin-progress-lessons {
+  display: grid;
+  gap: 0;
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--admin-line);
+  border-radius: 10px;
+  background: var(--admin-paper);
+  list-style: none;
+}
+
+.admin-progress-lessons li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(130px, auto);
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--admin-line);
+  color: var(--admin-ink);
+  font-size: 12px;
+}
+
+.admin-progress-lessons li:last-child {
+  border-bottom: 0;
+}
+
+.admin-progress-lessons time,
+.admin-progress-submission__header span,
+.admin-progress-quiz__header span {
+  color: var(--admin-muted);
+  font-size: 11px;
+}
+
+.admin-progress-status {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  padding: 4px 8px;
+  border: 1px solid var(--admin-line);
+  border-radius: 999px;
+  background: rgba(93, 100, 92, 0.08);
+  color: var(--admin-muted);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.admin-progress-status--completed,
+.admin-progress-status--evaluated {
+  border-color: rgba(52, 121, 110, 0.28);
+  background: rgba(52, 121, 110, 0.1);
+  color: var(--admin-olive-deep);
+}
+
+.admin-progress-status--re_evaluation_required {
+  border-color: rgba(186, 139, 43, 0.35);
+  background: rgba(240, 210, 108, 0.22);
+  color: #826214;
+}
+
+.admin-progress-quiz,
+.admin-progress-submission {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid var(--admin-line);
+  border-radius: 11px;
+  background: var(--admin-paper);
+}
+
+.admin-progress-quiz__header,
+.admin-progress-submission__header,
+.admin-progress-submission__file {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.admin-progress-quiz__header > div,
+.admin-progress-submission__header > div {
+  display: grid;
+  gap: 4px;
+}
+
+.admin-progress-quiz__header > strong,
+.admin-progress-submission__result strong {
+  color: var(--admin-ink);
+  white-space: nowrap;
+}
+
+.admin-progress-quiz > p,
+.admin-progress-submission__instructions,
+.admin-progress-submission__answer p,
+.admin-progress-submission__result p,
+.admin-progress-evaluation-history p {
+  margin: 0;
+  color: var(--admin-muted);
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.admin-progress-quiz__answers,
+.admin-progress-evaluation-history {
+  padding-top: 9px;
+  border-top: 1px solid var(--admin-line);
+}
+
+.admin-progress-quiz__answers summary,
+.admin-progress-evaluation-history summary {
+  color: var(--admin-olive-deep);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.admin-progress-quiz__answers ol,
+.admin-progress-evaluation-history ol {
+  display: grid;
+  gap: 10px;
+  margin: 10px 0 0;
+  padding-left: 22px;
+}
+
+.admin-progress-quiz__answers li,
+.admin-progress-evaluation-history li {
+  display: grid;
+  gap: 4px;
+  color: var(--admin-muted);
+  font-size: 12px;
+}
+
+.admin-progress-quiz__answers li strong {
+  color: var(--admin-ink);
+}
+
+.admin-progress-submission__instructions {
+  padding: 10px;
+  border-radius: 8px;
+  background: rgba(93, 100, 92, 0.06);
+}
+
+.admin-progress-submission__answer,
+.admin-progress-submission__result {
+  display: grid;
+  gap: 6px;
+  color: var(--admin-ink);
+  font-size: 12px;
+}
+
+.admin-progress-submission__file {
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-start;
+  padding: 10px;
+  border: 1px solid var(--admin-line);
+  border-radius: 8px;
+  font-size: 12px;
+}
+
+.admin-progress-submission__file > span {
+  min-width: 0;
+  flex: 1 1 220px;
+  overflow-wrap: anywhere;
+}
+
+.admin-progress-evaluation-form {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: start;
+  gap: 10px;
+  padding-top: 12px;
+  border-top: 1px solid var(--admin-line);
+}
+
+.admin-progress-evaluation-form h5,
+.admin-progress-evaluation-form > label:nth-of-type(3),
+.admin-progress-evaluation-form > .admin-progress-error,
+.admin-progress-evaluation-form > button {
+  grid-column: 1 / -1;
+}
+
+.admin-progress-evaluation-form label {
+  display: grid;
+  gap: 5px;
+  color: var(--admin-muted);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.admin-progress-evaluation-form input,
+.admin-progress-evaluation-form select,
+.admin-progress-evaluation-form textarea {
+  width: 100%;
+  min-width: 0;
+  padding: 9px 10px;
+  border: 1px solid var(--admin-line);
+  border-radius: 8px;
+  background: var(--admin-paper);
+  color: var(--admin-ink);
+  font: inherit;
+}
+
+.admin-progress-evaluation-form textarea {
+  resize: vertical;
+}
+
+.admin-progress-evaluation-form > button {
+  justify-self: start;
+}
+
+.admin-progress-evaluation-history li code {
+  width: fit-content;
+  color: var(--admin-muted);
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 10px;
+  overflow-wrap: anywhere;
+}
+
+.admin-progress-course progress {
+  width: 100%;
+  height: 8px;
+  margin: 12px 0 0;
+  accent-color: var(--admin-olive);
+}
+
+.admin-progress-course__counts {
+  margin-top: 8px;
+}
+
+.admin-progress-lesson-columns {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+  margin-top: 12px;
+}
+
+.admin-progress-lesson-columns h5 {
+  margin: 0 0 6px;
+  color: var(--admin-ink);
+  font-size: 12px;
+}
+
+.admin-progress-lesson-columns ul {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding-left: 18px;
+  color: var(--admin-muted);
+  font-size: 12px;
+}
+
+.admin-progress-lesson-columns p {
+  margin: 0;
+  color: var(--admin-muted);
+  font-size: 12px;
+}
+
+.admin-progress-timeline {
+  display: grid;
+  gap: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.admin-progress-timeline li {
+  display: grid;
+  grid-template-columns: 12px minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 10px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--admin-line);
+}
+
+.admin-progress-timeline__marker {
+  width: 8px;
+  height: 8px;
+  margin-top: 5px;
+  border-radius: 50%;
+  background: var(--admin-olive);
+}
+
+.admin-progress-timeline li > div {
+  display: grid;
+  gap: 3px;
+}
+
+.admin-progress-timeline strong {
+  color: var(--admin-ink);
+  font-size: 12px;
+}
+
+.admin-progress-timeline li span:not(.admin-progress-timeline__marker),
+.admin-progress-timeline time {
+  color: var(--admin-muted);
+  font-size: 11px;
+}
+
+@media (max-width: 760px) {
+  .admin-progress-detail-summary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .admin-progress-course__metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .admin-progress-dialog-backdrop {
+    padding: 8px;
+  }
+
+  .admin-progress-dialog {
+    max-height: 96vh;
+  }
+
+  .admin-progress-dialog__header,
+  .admin-progress-dialog__body {
+    padding-right: 16px;
+    padding-left: 16px;
+  }
+}
+
+@media (max-width: 520px) {
+  .admin-progress-reports__toolbar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .admin-progress-reports__toolbar .admin-button {
+    width: 100%;
+  }
+
+  .admin-progress-lesson-columns {
+    grid-template-columns: 1fr;
+  }
+
+  .admin-progress-lessons li {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .admin-progress-lessons time {
+    grid-column: 1 / -1;
+  }
+
+  .admin-progress-dialog__header {
+    flex-wrap: wrap;
+  }
+
+  .admin-progress-dialog__header > div {
+    flex-basis: calc(100% - 52px);
+  }
+
+  .admin-progress-print {
+    order: 1;
+  }
+
+  .admin-progress-dialog__close {
+    order: 2;
+  }
+
+  .admin-progress-course-certificate {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .admin-progress-timeline li {
+    grid-template-columns: 12px minmax(0, 1fr);
+  }
+
+  .admin-progress-timeline time {
+    grid-column: 2;
+  }
+}
+
+.admin-app[data-theme="dark"] .admin-progress-reports__toolbar p,
+.admin-app[data-theme="dark"] .admin-progress-students__heading span,
+.admin-app[data-theme="dark"] .admin-progress-table th,
+.admin-app[data-theme="dark"] .admin-progress-table code,
+.admin-app[data-theme="dark"] .admin-progress-student-type,
+.admin-app[data-theme="dark"] .admin-progress-empty,
+.admin-app[data-theme="dark"] .admin-progress-course__header span,
+.admin-app[data-theme="dark"] .admin-progress-course__counts,
+.admin-app[data-theme="dark"] .admin-progress-lesson-columns ul,
+.admin-app[data-theme="dark"] .admin-progress-lesson-columns p,
+.admin-app[data-theme="dark"] .admin-progress-timeline li span:not(.admin-progress-timeline__marker),
+.admin-app[data-theme="dark"] .admin-progress-timeline time,
+.admin-app[data-theme="dark"] .admin-progress-dialog__header p:not(.admin-eyebrow),
+.admin-app[data-theme="dark"] .admin-progress-detail-summary span {
+  color: var(--admin-muted);
+}
+
+.admin-app[data-theme="dark"] .admin-progress-course__view {
+  border-color: #9c8240;
+  background: #725e29;
+  color: #fff3c4;
+}
+
+.admin-app[data-theme="dark"] .admin-progress-course__progress-track {
+  border-color: #676860;
+  background: #282a26;
+}
+
+.admin-app[data-theme="dark"] .admin-progress-course__summary-progress strong {
+  color: #c3d8c6;
+}
+
+.admin-app[data-theme="dark"] .admin-progress-status--completed,
+.admin-app[data-theme="dark"] .admin-progress-status--evaluated {
+  color: #c3d8c6;
+}
+
+.admin-app[data-theme="dark"] .admin-progress-status--re_evaluation_required {
+  color: #f0d26c;
+}
+
+.admin-app[data-theme="dark"] .admin-progress-certificate-badge {
+  color: #c3d8c6;
+}
+
+.admin-app[data-theme="dark"] .admin-progress-error {
+  color: #e0a297;
+}
+
+@media print {
+  body * {
+    visibility: hidden !important;
+  }
+
+  .admin-progress-dialog-backdrop,
+  .admin-progress-dialog-backdrop * {
+    visibility: visible !important;
+  }
+
+  .admin-progress-dialog-backdrop {
+    position: absolute;
+    inset: 0;
+    display: block;
+    padding: 0;
+    background: transparent;
+  }
+
+  .admin-progress-dialog {
+    width: 100%;
+    max-height: none;
+    overflow: visible;
+    border: 0;
+    box-shadow: none;
+  }
+
+  .admin-progress-dialog__body {
+    overflow: visible;
+  }
+
+  .admin-progress-dialog__close,
+  .admin-progress-print,
+  .admin-progress-evaluation-form,
+  .admin-progress-submission__file button,
+  .admin-progress-course-certificate__actions {
+    display: none !important;
+  }
+
+  .admin-progress-course:not([open]) > :not(summary) {
+    display: block !important;
+  }
+}

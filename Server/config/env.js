@@ -25,12 +25,8 @@ export const config = Object.freeze({
   adminEmail: process.env.ADMIN_EMAIL,
   adminPassword: process.env.ADMIN_PASSWORD,
   clientOrigin: process.env.CLIENT_ORIGIN,
-  smtpHost: process.env.SMTP_HOST,
-  smtpPort: Number(process.env.SMTP_PORT || 587),
-  smtpSecure: process.env.SMTP_SECURE === 'true',
-  smtpUser: process.env.SMTP_USER,
-  smtpPassword: process.env.SMTP_PASSWORD,
-  smtpFrom: process.env.SMTP_FROM,
+  emailUser: process.env.EMAIL_USER,
+  emailPass: process.env.EMAIL_PASS,
   resendApiKey: process.env.RESEND_API_KEY,
   emailFrom: process.env.EMAIL_FROM,
   geminiApiKey: process.env.GEMINI_API_KEY?.trim(),
@@ -45,7 +41,7 @@ export const config = Object.freeze({
 
 export function requireJwtSecret() {
   if (typeof config.jwtSecret !== 'string' || !config.jwtSecret.trim()) {
-    throw new Error('JWT_SECRET is not configured in backend/.env or the process environment.')
+    throw new Error('JWT_SECRET is not configured in Server/.env or the process environment.')
   }
   return config.jwtSecret
 }

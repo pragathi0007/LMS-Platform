@@ -1,28 +1,34 @@
 import assert from 'node:assert/strict'
 import { randomBytes } from 'node:crypto'
 import express from 'express'
+import jwt from 'jsonwebtoken'
 import mongoose from 'mongoose'
 
 process.env.MONGO_DB_NAME = 'LMS_TEST'
 process.env.ADMIN_EMAIL = 'initial-admin@lms-test.invalid'
 process.env.ADMIN_PASSWORD = randomBytes(24).toString('base64url')
 process.env.JWT_SECRET = randomBytes(48).toString('hex')
-process.env.SMTP_HOST = ''
-process.env.SMTP_USER = ''
-process.env.SMTP_PASSWORD = ''
-process.env.SMTP_FROM = ''
-process.env.CLIENT_ORIGIN = ''
+process.env.CLIENT_ORIGIN = 'https://lms-test.invalid'
+process.env.EMAIL_USER = ''
+process.env.EMAIL_PASS = ''
 
 const integrationDatabaseName = 'LMS_TEST'
 const expectedCollections = [
   'accountidentities',
   'admin',
   'clg_students',
+  'certificates',
   'colleges',
   'courses',
+  'emailotpchallenges',
   'enrollment',
+  'notifications',
+  'referralCodeDailyLimits',
+  'referralCodes',
+  'registrationemailverifications',
   'students',
   'sub_admins',
+  'supporttickets',
 ]
 const { config } = await import('../config/env.js')
 if (!config.mongoUri) throw new Error('MONGO_URI is not configured.')
@@ -43,6 +49,7 @@ if (existingCollections.length) {
 }
 
 let server
+let nativeFetch
 let testDatabaseOwned = true
 try {
   const [
@@ -56,6 +63,7 @@ try {
     { default: College },
     { default: Course },
     { default: Enrollment },
+    { default: RegistrationEmailVerification },
   ] = await Promise.all([
     import('../config/db.js'),
     import('./seed-admin.js'),
@@ -67,6 +75,7 @@ try {
     import('../models/College.js'),
     import('../models/Course.js'),
     import('../models/Enrollment.js'),
+    import('../models/RegistrationEmailVerification.js'),
   ])
   await connectToDatabase()
   assert.equal(mongoose.connection.db.databaseName, integrationDatabaseName)
@@ -113,6 +122,25 @@ try {
     return result.token
   }
 
+  async function createVerifiedEmailToken(email) {
+    const now = new Date()
+    const verification = await RegistrationEmailVerification.create({
+      email: email.trim().toLowerCase(),
+      hashedOtp: 'integration-test-hash',
+      expiresAt: now,
+      verificationExpiresAt: new Date(now.getTime() + 30 * 60 * 1000),
+      cleanupAt: new Date(now.getTime() + 24 * 60 * 60 * 1000),
+      requestWindowStartedAt: now,
+      lastSentAt: now,
+      verifiedAt: now,
+    })
+    return jwt.sign(
+      { scope: 'registration_email_verified', email: verification.email },
+      config.jwtSecret,
+      { subject: String(verification._id), expiresIn: '30m' },
+    )
+  }
+
   const adminEmail = process.env.ADMIN_EMAIL
   const adminPassword = process.env.ADMIN_PASSWORD
   const adminToken = await login(adminEmail, adminPassword, 'main_admin')
@@ -121,6 +149,18 @@ try {
   assert.equal(await (await import('bcryptjs')).default.compare(adminPassword, admin.passwordHash), true)
   assert.equal((await AccountIdentity.findOne({ accountId: admin._id }).lean()).accountCollection, 'admin')
   console.log('PASS Main Admin seed, bcrypt hash, login, and admin/accountidentities persistence')
+
+  nativeFetch = globalThis.fetch
+  globalThis.fetch = async (input, options) => {
+    if (String(input) === 'https://api.resend.com/emails') {
+      return {
+        ok: false,
+        status: 503,
+        text: async () => JSON.stringify({ message: 'Integration test email suppressed.' }),
+      }
+    }
+    return nativeFetch(input, options)
+  }
 
   const collegeResponse = await request('/admin/colleges', {
     token: adminToken,
@@ -142,14 +182,51 @@ try {
 
   const subAdminResponse = await request(`/admin/colleges/${collegeId}/sub-admins`, {
     token: adminToken,
-    body: { fullName: 'LMS_TEST Sub Admin', email: 'subadmin@lms-test.invalid', username: 'test-subadmin' },
+    body: {
+      fullName: 'LMS_TEST Sub Admin',
+      email: 'subadmin@lms-test.invalid',
+      username: 'test-subadmin',
+      studentLimit: 50,
+    },
   })
   assert.equal(subAdminResponse.response.status, 503)
   assert.equal(subAdminResponse.result.activationEmailSent, false)
   const subAdmin = await CollegeAdmin.findById(subAdminResponse.result.accountId).select('+passwordHash').lean()
   assert.ok(subAdmin)
   assert.equal(String(subAdmin.collegeId), collegeId)
+  assert.equal(subAdmin.studentLimit, 50)
   assert.equal(subAdmin.role, 'college_admin')
+  const collegeDetails = await request(`/admin/colleges/${collegeId}/details`, {
+    method: 'GET',
+    token: adminToken,
+  })
+  assert.equal(collegeDetails.response.status, 200, collegeDetails.result.message)
+  assert.equal(collegeDetails.result.college.studentLimit, 50)
+  assert.equal(collegeDetails.result.college.studentLimitSubAdminId, String(subAdmin._id))
+  assert.equal(collegeDetails.result.college.subAdmins.length, 1)
+  console.log('PASS College Details resolves the persisted Sub-Admin ObjectId and displays its 50 student limit')
+
+  const limitUpdate = await request(
+    `/admin/colleges/${collegeId}/sub-admins/${subAdmin._id}/student-limit`,
+    { method: 'PATCH', token: adminToken, body: { studentLimit: 100 } },
+  )
+  assert.equal(limitUpdate.response.status, 200, limitUpdate.result.message)
+  assert.equal(limitUpdate.result.subAdmin.studentLimit, 100)
+  const updatedSubAdmin = await CollegeAdmin.findById(subAdmin._id).lean()
+  assert.equal(updatedSubAdmin.studentLimit, 100)
+  const refreshedCollegeDetails = await request(`/admin/colleges/${collegeId}/details`, {
+    method: 'GET',
+    token: adminToken,
+  })
+  assert.equal(refreshedCollegeDetails.response.status, 200, refreshedCollegeDetails.result.message)
+  assert.equal(refreshedCollegeDetails.result.college.studentLimit, 100)
+  assert.equal(refreshedCollegeDetails.result.college.totalStudents, 0)
+  assert.equal(
+    Math.max(0, refreshedCollegeDetails.result.college.studentLimit - refreshedCollegeDetails.result.college.totalStudents),
+    100,
+  )
+  console.log('PASS Main Admin updates the stored limit and College Details returns the refreshed value')
+
   const subAdminPassword = randomBytes(24).toString('base64url')
   const bcrypt = (await import('bcryptjs')).default
   await CollegeAdmin.updateOne(
@@ -161,8 +238,162 @@ try {
   assert.equal(subAdminIdentity.accountCollection, 'sub_admins')
   console.log('PASS College Sub-Admin creation, collegeId, identity mapping, and login')
 
+  const secondCollegeResponse = await request('/admin/colleges', {
+    token: adminToken,
+    body: {
+      name: 'LMS_TEST Second College',
+      code: 'LMS-TEST-2',
+      status: 'active',
+    },
+  })
+  assert.equal(secondCollegeResponse.response.status, 201, secondCollegeResponse.result.message)
+  const secondCollegeId = secondCollegeResponse.result.college.id
+  const secondSubAdminResponse = await request(`/admin/colleges/${secondCollegeId}/sub-admins`, {
+    token: adminToken,
+    body: {
+      fullName: 'LMS_TEST Second Sub Admin',
+      email: 'second-subadmin@lms-test.invalid',
+      username: 'test-subadmin-two',
+      studentLimit: 1,
+    },
+  })
+  assert.equal(secondSubAdminResponse.response.status, 503)
+  const secondSubAdmin = await CollegeAdmin.findById(secondSubAdminResponse.result.accountId).lean()
+  assert.ok(secondSubAdmin)
+  assert.equal(String(secondSubAdmin.collegeId), secondCollegeId)
+  assert.equal(secondSubAdmin.studentLimit, 1)
+  const secondCollegeDetails = await request(`/admin/colleges/${secondCollegeId}/details`, {
+    method: 'GET',
+    token: adminToken,
+  })
+  assert.equal(secondCollegeDetails.response.status, 200, secondCollegeDetails.result.message)
+  assert.equal(secondCollegeDetails.result.college.studentLimit, 1)
+  assert.equal(secondCollegeDetails.result.college.studentLimitSubAdminId, String(secondSubAdmin._id))
+  const originalCollegeDetails = await request(`/admin/colleges/${collegeId}/details`, {
+    method: 'GET',
+    token: adminToken,
+  })
+  assert.equal(originalCollegeDetails.response.status, 200, originalCollegeDetails.result.message)
+  assert.equal(originalCollegeDetails.result.college.studentLimit, 100)
+
+  const secondSubAdminPassword = randomBytes(24).toString('base64url')
+  await CollegeAdmin.updateOne(
+    { _id: secondSubAdmin._id },
+    { $set: { passwordHash: await bcrypt.hash(secondSubAdminPassword, 12), status: 'active', isActive: true } },
+  )
+  const secondSubAdminToken = await login(secondSubAdmin.username, secondSubAdminPassword, 'college_admin')
+  const secondStudentPassword = randomBytes(24).toString('base64url')
+  const secondStudentResponse = await request('/college/students', {
+    token: secondSubAdminToken,
+    body: {
+      fullName: 'LMS_TEST Second College Student',
+      email: 'second-student@lms-test.invalid',
+      username: 'second-college-student',
+      password: secondStudentPassword,
+      studentId: 'SECOND-001',
+    },
+  })
+  assert.equal(secondStudentResponse.response.status, 201, secondStudentResponse.result.message)
+  const secondCollegeStudent = await CollegeStudent.findById(secondStudentResponse.result.student.id).lean()
+  assert.equal(String(secondCollegeStudent.collegeId), secondCollegeId)
+
+  const cappedSingleStudent = await request('/college/students', {
+    token: secondSubAdminToken,
+    body: {
+      fullName: 'LMS_TEST Capped Second Student',
+      email: 'capped-second-student@lms-test.invalid',
+      username: 'capped-second-student',
+      password: randomBytes(24).toString('base64url'),
+      studentId: 'SECOND-002',
+    },
+  })
+  assert.equal(cappedSingleStudent.response.status, 409)
+  assert.match(cappedSingleStudent.result.message, /configured student limit of 1/)
+
+  const secondCollegeCsv = 'Full Name,Student ID,Email,Department,Batch\nLMS_TEST Second Bulk Student,SECOND-003,second-bulk@lms-test.invalid,Testing,2026\n'
+  const cappedBulkImport = await request('/college/students/import', {
+    token: secondSubAdminToken,
+    body: { csvText: secondCollegeCsv },
+  })
+  assert.equal(cappedBulkImport.response.status, 200, cappedBulkImport.result.message)
+  assert.equal(cappedBulkImport.result.summary.imported, 0)
+  assert.match(cappedBulkImport.result.failures[0].reason, /configured student limit of 1/)
+
+  const secondCollegeLimitUpdate = await request(
+    `/admin/colleges/${secondCollegeId}/sub-admins/${secondSubAdmin._id}/student-limit`,
+    { method: 'PATCH', token: adminToken, body: { studentLimit: 2 } },
+  )
+  assert.equal(secondCollegeLimitUpdate.response.status, 200, secondCollegeLimitUpdate.result.message)
+  assert.equal((await CollegeAdmin.findById(secondSubAdmin._id).lean()).studentLimit, 2)
+  assert.equal((await CollegeAdmin.findById(subAdmin._id).lean()).studentLimit, 100)
+  const secondBulkImport = await request('/college/students/import', {
+    token: secondSubAdminToken,
+    body: { csvText: secondCollegeCsv },
+  })
+  assert.equal(secondBulkImport.response.status, 200, secondBulkImport.result.message)
+  assert.equal(secondBulkImport.result.summary.imported, 1)
+  const secondBulkStudent = await CollegeStudent.findOne({ studentId: 'SECOND-003' }).lean()
+  assert.equal(String(secondBulkStudent.collegeId), secondCollegeId)
+
+  const firstCollegeStudentResponse = await request('/college/students', {
+    token: subAdminToken,
+    body: {
+      fullName: 'LMS_TEST First College Student',
+      email: 'first-college-student@lms-test.invalid',
+      username: 'first-college-student',
+      password: randomBytes(24).toString('base64url'),
+      studentId: 'FIRST-001',
+    },
+  })
+  assert.equal(firstCollegeStudentResponse.response.status, 201, firstCollegeStudentResponse.result.message)
+  const firstCollegeStudent = await CollegeStudent.findById(firstCollegeStudentResponse.result.student.id).lean()
+  assert.equal(String(firstCollegeStudent.collegeId), collegeId)
+  const refreshedFirstCollegeDetails = await request(`/admin/colleges/${collegeId}/details`, {
+    method: 'GET',
+    token: adminToken,
+  })
+  const refreshedSecondCollegeDetails = await request(`/admin/colleges/${secondCollegeId}/details`, {
+    method: 'GET',
+    token: adminToken,
+  })
+  assert.equal(refreshedFirstCollegeDetails.result.college.studentLimit, 100)
+  assert.equal(refreshedFirstCollegeDetails.result.college.totalStudents, 1)
+  assert.equal(refreshedSecondCollegeDetails.result.college.studentLimit, 2)
+  assert.equal(refreshedSecondCollegeDetails.result.college.totalStudents, 2)
+  assert.equal(
+    Math.max(
+      0,
+      refreshedFirstCollegeDetails.result.college.studentLimit -
+        refreshedFirstCollegeDetails.result.college.totalStudents,
+    ),
+    99,
+  )
+  assert.equal(
+    Math.max(
+      0,
+      refreshedSecondCollegeDetails.result.college.studentLimit -
+        refreshedSecondCollegeDetails.result.college.totalStudents,
+    ),
+    0,
+  )
+  console.log('PASS Two colleges retain independent Sub-Admin limits, updates, details, and single/bulk registration caps')
+
   const studentEmail = 'independent@lms-test.invalid'
   const studentPassword = randomBytes(24).toString('base64url')
+  const unverifiedRegistration = await request('/auth/register', {
+    body: {
+      fullName: 'LMS_TEST Unverified Student',
+      email: studentEmail,
+      username: 'unverified-independent',
+      password: studentPassword,
+      confirmPassword: studentPassword,
+      role: 'student',
+      accountType: 'independent',
+    },
+  })
+  assert.equal(unverifiedRegistration.response.status, 400)
+  assert.match(unverifiedRegistration.result.message, /verify your email/i)
+  const emailVerificationToken = await createVerifiedEmailToken(studentEmail)
   const registration = await request('/auth/register', {
     body: {
       fullName: 'LMS_TEST Independent Student',
@@ -170,6 +401,7 @@ try {
       username: 'test-independent',
       password: studentPassword,
       confirmPassword: studentPassword,
+      emailVerificationToken,
       role: 'student',
       accountType: 'independent',
     },
@@ -253,7 +485,7 @@ try {
   const actualNames = (await database.listCollections({}, { nameOnly: true }).toArray())
     .map(({ name }) => name).sort()
   assert.deepEqual(actualNames, expectedCollections)
-  assert.equal(await AccountIdentity.countDocuments({}), 4)
+  assert.equal(await AccountIdentity.countDocuments({}), 8)
   assert.equal(await database.collection('users').countDocuments({}), 0)
   for (const collectionName of expectedCollections) {
     const indexes = await database.collection(collectionName).listIndexes().toArray()
@@ -272,8 +504,13 @@ try {
       assert.ok(indexes.some((index) => index.key.email === 1 && index.unique), 'accountidentities missing unique email index')
       assert.ok(indexes.some((index) => index.key.accountCollection === 1 && index.key.accountId === 1 && index.unique), 'accountidentities missing unique account target index')
     }
+    if (collectionName === 'registrationemailverifications') {
+      assert.ok(indexes.some((index) => index.key.email === 1 && index.unique), 'registrationemailverifications missing unique email index')
+      assert.ok(indexes.some((index) => index.key.cleanupAt === 1 && index.expireAfterSeconds === 0), 'registrationemailverifications missing TTL cleanup index')
+    }
   }
   const duplicatePassword = randomBytes(24).toString('base64url')
+  const duplicateEmailVerificationToken = await createVerifiedEmailToken(adminEmail)
   const duplicateRegistration = await request('/auth/register', {
     body: {
       fullName: 'Duplicate Account',
@@ -281,16 +518,28 @@ try {
       username: 'duplicate-admin',
       password: duplicatePassword,
       confirmPassword: duplicatePassword,
+      emailVerificationToken: duplicateEmailVerificationToken,
       role: 'student',
       accountType: 'independent',
     },
   })
   assert.equal(duplicateRegistration.response.status, 409)
-  console.log(JSON.stringify({ database: database.databaseName, verifiedCollections: actualNames, persistedAccounts: { admin: 1, sub_admins: 1, students: 1, clg_students: 1 }, enrollments: enrollments.length }))
+  console.log(JSON.stringify({
+    database: database.databaseName,
+    verifiedCollections: actualNames,
+    persistedAccounts: {
+      admin: await Admin.countDocuments({}),
+      sub_admins: await CollegeAdmin.countDocuments({}),
+      students: await Student.countDocuments({}),
+      clg_students: await CollegeStudent.countDocuments({}),
+    },
+    enrollments: enrollments.length,
+  }))
 } finally {
   if (server) {
     await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()))
   }
+  if (typeof nativeFetch === 'function') globalThis.fetch = nativeFetch
   if (testDatabaseOwned && mongoose.connection.readyState === 1 && mongoose.connection.db.databaseName === integrationDatabaseName) {
     await mongoose.connection.db.dropDatabase()
     const remaining = await mongoose.connection.db.listCollections({}, { nameOnly: true }).toArray()

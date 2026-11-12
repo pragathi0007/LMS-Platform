@@ -32,6 +32,19 @@ const independentStudentFields = {
   studentType: { type: String, enum: ['independent'], default: 'independent', required: true },
   twoFactorEnabled: { type: Boolean, default: false },
   twoFactorEnabledAt: { type: Date },
+  studentId: { type: String, trim: true, maxlength: 100 },
+  registrationDetails: { type: mongoose.Schema.Types.Mixed, default: () => ({}) },
+  approvalStatus: {
+    type: String,
+    enum: ['pending', 'approved', 'rejected'],
+    default: 'pending',
+    required: true,
+  },
+  approvedAt: { type: Date },
+  approvedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'Admin' },
+  rejectedAt: { type: Date },
+  rejectedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'Admin' },
+  rejectionReason: { type: String, trim: true, maxlength: 1000 },
 }
 
 const collegeStudentFields = {
@@ -50,6 +63,7 @@ const collegeAdminFields = {
     ref: 'College',
     required: true,
   },
+  studentLimit: { type: Number, min: 0, validate: Number.isSafeInteger },
   activationTokenHash: { type: String, select: false },
   activationTokenExpiresAt: { type: Date, select: false },
 }

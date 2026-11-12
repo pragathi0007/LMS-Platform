@@ -5,6 +5,10 @@ import mongoose from 'mongoose'
 import SupportTicket, { ticketCategories, ticketPriorities, ticketStatuses } from '../models/SupportTicket.js'
 import { Admin, CollegeStudent, Student } from '../models/account-models.js'
 import { authenticate } from '../middleware/auth.js'
+import {
+  logEmailDeliveryFailure,
+  sendSupportTicketComplaintEmail,
+} from '../utils/email.js'
 
 const router = Router()
 const maxAttachmentBytes = 5 * 1024 * 1024
@@ -213,6 +217,19 @@ router.post('/tickets', async (req, res, next) => {
         changedByRole: 'student',
       }],
     })
+    try {
+      await sendSupportTicketComplaintEmail({
+        email: user.email,
+        fullName: user.fullName,
+        ticket,
+      })
+    } catch (emailError) {
+      logEmailDeliveryFailure({
+        event: 'notification.support_ticket_complaint_email.failed',
+        accountId: req.auth.id,
+        error: emailError,
+      })
+    }
     return res.status(201).json({ ticket: ticketJson(ticket) })
   } catch (error) {
     if (error?.statusCode) return res.status(error.statusCode).json({ message: error.message })
@@ -330,7 +347,6 @@ router.get('/admin/tickets', async (req, res, next) => {
     const tickets = await SupportTicket.find({ ...scope, ...filters })
       .select('-attachment.data')
       .sort({ updatedAt: -1 })
-      .limit(100)
       .lean()
     return res.json({ tickets: await includeRequesterDetails(tickets) })
   } catch (error) {
@@ -401,6 +417,31 @@ router.patch('/admin/tickets/:ticketId/status', async (req, res, next) => {
         changedByRole: 'admin',
       })
       ticket.status = status
+      await ticket.save()
+    }
+    return res.json({ ticket: ticketJson(ticket) })
+  } catch (error) {
+    return next(error)
+  }
+})
+
+router.patch('/admin/tickets/:ticketId/priority', async (req, res, next) => {
+  try {
+    if (!requireAdmin(req, res)) return
+    const { priority } = req.body ?? {}
+    if (!ticketPriorities.includes(priority)) {
+      return res.status(400).json({ message: 'Choose a valid ticket priority.' })
+    }
+    const ticket = await findScopedTicket(getTicketScope(req), req.params.ticketId)
+    if (!ticket) return res.status(404).json({ message: 'Support request not found.' })
+    if (ticket.priority !== priority) {
+      ticket.priorityHistory.push({
+        from: ticket.priority,
+        to: priority,
+        changedBy: req.auth.id,
+        changedByRole: 'admin',
+      })
+      ticket.priority = priority
       await ticket.save()
     }
     return res.json({ ticket: ticketJson(ticket) })

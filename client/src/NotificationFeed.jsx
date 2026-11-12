@@ -1,7 +1,6 @@
 import React, { useEffect, useState } from 'react'
+import { API_BASE_URL } from './api-base-url.js'
 import './NotificationFeed.css'
-
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000/api'
 
 function formatNotificationDate(value) {
   if (!value) return 'Date unavailable'

@@ -41,6 +41,16 @@ const statusHistorySchema = new mongoose.Schema(
   { timestamps: { createdAt: true, updatedAt: false } },
 )
 
+const priorityHistorySchema = new mongoose.Schema(
+  {
+    from: { type: String, enum: ticketPriorities },
+    to: { type: String, enum: ticketPriorities, required: true },
+    changedBy: { type: mongoose.Schema.Types.ObjectId, required: true },
+    changedByRole: { type: String, enum: ['admin'], required: true },
+  },
+  { timestamps: { createdAt: true, updatedAt: false } },
+)
+
 const supportTicketSchema = new mongoose.Schema(
   {
     ticketId: { type: String, required: true, unique: true, trim: true },
@@ -57,6 +67,7 @@ const supportTicketSchema = new mongoose.Schema(
     assignedTo: { type: mongoose.Schema.Types.ObjectId, ref: 'Admin' },
     replies: { type: [replySchema], default: [] },
     statusHistory: { type: [statusHistorySchema], default: [] },
+    priorityHistory: { type: [priorityHistorySchema], default: [] },
   },
   { autoCreate: false, autoIndex: false, timestamps: true, collection: 'supporttickets' },
 )

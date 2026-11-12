@@ -2,7 +2,7 @@
 
 ## Main Admin account
 
-Add these values to `backend/.env` without committing the file:
+Add these values to `Server/.env` without committing the file:
 
 ```env
 ADMIN_EMAIL=the-admin-email@example.com
@@ -28,8 +28,21 @@ npm run dev
 
 The seed command creates a `main_admin` account in `admin`, reserves its login
 identity in `accountidentities`, and bcrypt-hashes the password. It leaves an
-existing account unchanged. Public registration is available only to
-independent students.
+existing account unchanged. Public registration is available only to independent students. New independent
+student registrations remain pending
+until approved by a Main Admin; the existing college onboarding flow is unchanged.
+Independent-student registration requires a server-verified email address before
+the account is created. The registration code is a six-digit Resend OTP; codes
+expire after 10 minutes, are stored as keyed hashes, and can be requested once
+per minute. Verification is bound to the exact normalized email and is consumed
+in the registration transaction.
+After a pending independent student is approved and the database transaction
+commits, the backend sends an AIHustle-branded confirmation to the student's
+registered email. The message links to the frontend at `CLIENT_ORIGIN` and uses
+its `/logo.png` asset. Approval-email delivery errors are logged without undoing
+approval; only a successful pending-to-approved transition initiates that email.
+Rejection email delivery uses the same Resend service and is also attempted
+only after the decision is saved.
 
 ## Account collections and roles
 
@@ -73,16 +86,17 @@ The referral API is:
 
 `POST /api/auth/register` accepts an optional `referralCode`. Registration,
 identity creation, and one-time referral redemption happen in the same MongoDB
-transaction. The `referralCodes` collection has unique code and per-user
-idempotency indexes, owner/date history and expiry indexes. The daily-counter
-collection has a unique owner/UTC-day index. Referral history is retained; no
-TTL index is used. Referral history returns only whether the friend registered
-and their registration status, not their account identifiers or profile data.
+transaction.
+The `referralCodes` collection has unique code and per-user idempotency indexes,
+owner/date history and expiry indexes. The daily-counter collection has a
+unique owner/UTC-day index. Referral history is retained; no TTL index is used.
+Referral history returns only whether the friend registered and their
+registration status, not their account identifiers or profile data.
 
-The current public External User registration flow activates accounts
-immediately. Referral registration status is derived from the referred
-account's current approval/account status and is refreshed when the creator
-loads referral history; the referral feature does not alter account approval.
+Independent-student referral registration remains pending until approved.
+Referral registration status is derived from the referred account's current
+approval/account status and is refreshed when the creator loads referral
+history; the referral feature does not alter account approval.
 
 ## Database backup, integration tests, and reset
 
@@ -118,42 +132,82 @@ link. The sub-admin sets a password; only its bcrypt hash is stored. Tokens
 expire after 24 hours and are invalidated on use. A pending invite can be
 resent from the Colleges page.
 
-Configure outbound SMTP and the public frontend origin in `backend/.env`:
+Configure both email providers and the public frontend origin in `Server/.env`
+(or as environment variables on Render):
 
 ```env
 CLIENT_ORIGIN=https://your-frontend.example
-SMTP_HOST=smtp.example
-SMTP_PORT=587
-SMTP_SECURE=false
-SMTP_USER=your-smtp-user
-SMTP_PASSWORD=your-smtp-password
-SMTP_FROM=LMS <no-reply@example.com>
+RESEND_API_KEY=your-resend-api-key
+EMAIL_FROM="AIHustle LMS <onboarding@resend.dev>"
+EMAIL_USER=lmsp702@gmail.com
+EMAIL_PASS=your-gmail-app-password
+ADMIN_EMAIL=main-admin@example.com
 ```
 
-Keep SMTP credentials private and never commit `.env`. If mail delivery fails,
-the account remains pending and the Main Admin can retry after fixing SMTP.
+In Render, set `RESEND_API_KEY` and `EMAIL_FROM`; also set `CLIENT_ORIGIN` to
+the deployed frontend URL because the branded registration and decision emails
+build links and logo URLs from it. `onboarding@resend.dev` is a temporary
+Resend sender for testing. A custom production sender must use a domain verified
+in Resend. Do not put the API key in source control or print it in logs.
+
+Run `npm run test:email` locally to send a safe test message to Resend's
+`delivered@resend.dev` test recipient. The command refuses to run when
+`NODE_ENV=production` and reports the API response without exposing credentials.
+
+`EMAIL_USER` must be the Gmail mailbox that owns the `EMAIL_PASS` Google App Password; enable
+2-Step Verification before creating the App Password. Never use your regular
+Gmail password. Configure the App Password without spaces.
+
+Resend sends registration email verification codes, independent-student
+approval/rejection notifications, college administrator activation,
+support-ticket complaint alerts to `ADMIN_EMAIL`, email-change verification,
+and two-factor/security messages. Gmail currently sends student registration
+receipt confirmations. Each provider has independent credentials, and decision
+email failures are logged without undoing the saved approval/rejection. Keep all
+credentials private and never commit `.env`.
 
 ## Student email changes
 
 Student email changes require an 8-digit verification code sent to the new
 address. The current email remains active until the code is verified; codes
-expire after 15 minutes. This uses the SMTP settings above. Account identity
+expire after 15 minutes. This uses the Resend settings above. Account identity
 and student email records are updated together after verification.
 
 ## Student email two-factor authentication
 
-Set `RESEND_API_KEY` and `EMAIL_FROM` in `backend/.env`; see `.env.example` for
+Set `RESEND_API_KEY` and `EMAIL_FROM` in `Server/.env`; see `.env.example` for
 the variable names. Keep the Resend API key private. Email OTPs are random
 six-digit values, stored only as keyed hashes, expire after five minutes, and
 are limited to five verification attempts. Resending is limited to once per
 minute.
 
 Students enable or disable two-factor authentication from Settings after
-verifying a code sent to their registered email. When enabled, password and
-Google sign-in return a short-lived login challenge instead of an access token.
+verifying a code sent to their registered email using Resend. When enabled,
+password and Google sign-in return a short-lived login challenge instead of an access token.
 The normal JWT is issued only after successful OTP verification. The
 `emailotpchallenges` collection uses a TTL index to remove expired challenge
 records.
+
+## Registration email verification
+
+| Method | Endpoint | Access |
+|---|---|---|
+| `POST` | `/api/auth/registration/email/send` | Public, rate-limited |
+| `POST` | `/api/auth/registration/email/verify` | Public, rate-limited |
+| `POST` | `/api/auth/register` | Public; requires a verified-email token |
+
+The public registration form sends a code to `/api/auth/registration/email/send`
+with `{ "email": "..." }`, then verifies it at
+`/api/auth/registration/email/verify` with the email and six-digit code. A
+successful response contains a short-lived signed
+`emailVerificationToken`; the registration endpoint validates that token and
+atomically consumes its verified database record. A changed email requires a
+new verification. Registration OTPs expire after 10 minutes, allow five
+incorrect attempts and five requests per email per hour, and have a 60-second
+resend cooldown plus IP-based rate limits. The
+`registrationemailverifications` collection has a TTL cleanup index.
+The existing optional referral code is still redeemed in the same registration
+transaction.
 
 ## Main Admin course media
 
@@ -195,9 +249,22 @@ returns structured question data, including answer indexes, without saving it
 to a course or publishing it. Admins can review and edit the response before
 using it in a quiz.
 
+## Course certificates
+
+When a student completes every trackable lesson in an enrolled course, the
+learning API stores one certificate record in MongoDB. A unique student/course
+index prevents duplicate awards. Independent and college student records are
+scoped separately; existing completions are not backfilled.
+
+Main Admin progress reports read earned certificate records for each student.
+Authenticated certificate documents are available at
+`GET /api/certificates/:certificateId/view` and
+`GET /api/certificates/:certificateId/download`; students can access only their
+own certificates, while Main Admins can access certificates in reports.
+
 ## Google sign-in
 
-Set `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` in `backend/.env`, and set the
+Set `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` in `Server/.env`, and set the
 matching `VITE_GOOGLE_CLIENT_ID` in `client/.env`. Keep the client secret only
 on the backend. Configure the OAuth client with the frontend origin as an
 authorized JavaScript origin and redirect URI.

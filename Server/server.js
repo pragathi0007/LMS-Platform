@@ -9,6 +9,8 @@ import learningRouter from './routes/learning.js'
 import supportRouter from './routes/support.js'
 import settingsRouter from './routes/settings.js'
 import referralsRouter from './routes/referrals.js'
+import notificationsRouter from './routes/notifications.js'
+import certificatesRouter from './routes/certificates.js'
 
 const app = express()
 app.use(
@@ -32,6 +34,8 @@ app.use('/api', learningRouter)
 app.use('/api/support', supportRouter)
 app.use('/api/settings', settingsRouter)
 app.use('/api/referrals', referralsRouter)
+app.use('/api/notifications', notificationsRouter)
+app.use('/api/certificates', certificatesRouter)
 app.use('/api', (req, res) => {
   res.status(404).json({ message: 'API route not found.' })
 })
@@ -99,6 +103,38 @@ async function verifyCloudinaryConnection() {
   }
 }
 
+function redactMongoUris(value) {
+  return String(value).replace(/mongodb(?:\+srv)?:\/\/[^\s"'<>]+/gi, (uri) => {
+    try {
+      const parsed = new URL(uri)
+      const port = parsed.port ? `:${parsed.port}` : ''
+      return `${parsed.protocol}//${parsed.hostname}${port}${parsed.pathname}`
+    } catch {
+      return '[MongoDB connection string redacted]'
+    }
+  })
+}
+
+function logStartupFailure(error) {
+  const cause = error?.cause instanceof Error ? error.cause : error
+  const message = cause instanceof Error ? cause.message : String(cause)
+  const indexName = message.match(/\bindex:\s+([^\s]+)/i)?.[1]
+  const diagnostic = {
+    event: 'backend.startup.failed',
+    errorName: cause instanceof Error ? cause.name : 'UnknownError',
+    errorMessage: redactMongoUris(message).slice(0, 1200),
+    jwtSecretConfigured: Boolean(config.jwtSecret),
+    mongoUriConfigured: Boolean(config.mongoUri),
+    ...(error?.operation ? { operation: error.operation } : {}),
+    ...(error?.collection ? { collection: error.collection } : {}),
+    ...(cause?.code !== undefined ? { errorCode: cause.code } : {}),
+    ...(cause?.codeName ? { errorCodeName: cause.codeName } : {}),
+    ...(indexName ? { indexName } : {}),
+    ...(cause?.keyPattern ? { keyFields: Object.keys(cause.keyPattern) } : {}),
+  }
+  console.error(JSON.stringify(diagnostic))
+}
+
 async function startServer() {
   try {
     requireJwtSecret()
@@ -111,10 +147,7 @@ async function startServer() {
     if (error instanceof Error && error.message.startsWith('JWT_SECRET is not configured')) {
       console.error('JWT_SECRET is not configured; the backend was not started.')
     } else {
-      const errorName = error instanceof Error ? error.name : 'Unknown error'
-      console.error(
-        `Backend startup failed (${errorName}). Check JWT_SECRET, MONGO_URI, and Atlas network access.`,
-      )
+      logStartupFailure(error)
     }
     process.exit(1)
   }

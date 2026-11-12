@@ -13,7 +13,7 @@ export async function createAdminAccount({
 } = {}) {
   const email = configuredEmail?.trim().toLowerCase()
   if (!email || !password) {
-    throw new Error('Set ADMIN_EMAIL and ADMIN_PASSWORD in backend/.env before seeding.')
+    throw new Error('Set ADMIN_EMAIL and ADMIN_PASSWORD in Server/.env before seeding.')
   }
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
     throw new Error('ADMIN_EMAIL must be a valid email address.')

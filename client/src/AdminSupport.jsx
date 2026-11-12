@@ -1,10 +1,11 @@
 import React, { useEffect, useMemo, useState } from 'react'
-import { Link, useLocation, useNavigate } from 'react-router-dom'
+import { Link, useLocation } from 'react-router-dom'
+import { API_BASE_URL } from './api-base-url.js'
 import WorkspaceTopbar from './WorkspaceTopbar.jsx'
+import './AdminDashboard.css'
 import './AdminSupport.css'
 import './SupportCenter.css'
 
-const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000/api').replace(/\/+$/, '')
 const statuses = ['Open', 'In Progress', 'Waiting for User', 'Resolved', 'Closed']
 const categories = [
   'Account and Login',
@@ -15,6 +16,19 @@ const categories = [
   'Other',
 ]
 const priorities = ['Low', 'Medium', 'High']
+const adminNavigation = [
+  { label: 'Overview', group: 'WORKSPACE', icon: '◫' },
+  { label: 'Students', group: 'USER MANAGEMENT', icon: '♙' },
+  { label: 'Student Approval', icon: '✓' },
+  { label: 'Colleges', icon: '▦' },
+  { label: 'Courses', group: 'COURSE MANAGEMENT', icon: '▤' },
+  { label: 'Enrollments', icon: '⇄' },
+  { label: 'Reports & Analytics', icon: '⌁' },
+  { label: 'Notifications', group: 'COMMUNICATION & SUPPORT', icon: '♧' },
+  { label: 'Feedback & Complaints', icon: '☷' },
+  { label: 'Support Tickets', icon: '✉', active: true },
+  { label: 'Settings', group: 'SYSTEM', icon: '⚙' },
+]
 
 function getToken() {
   const storedAuth = sessionStorage.getItem('lms.auth')
@@ -58,14 +72,25 @@ function AdminSupport({
   settingsPath = '/admin/settings',
   user,
   roleLabel = 'Main Admin',
+  sidebarOpen: controlledSidebarOpen,
+  sidebarCollapsed: controlledSidebarCollapsed,
+  onSidebarOpenChange,
+  onSidebarCollapsedChange,
+  embedded = false,
 }) {
   const location = useLocation()
-  const navigate = useNavigate()
+  const [localSidebarOpen, setLocalSidebarOpen] = useState(false)
+  const [localSidebarCollapsed, setLocalSidebarCollapsed] = useState(roleLabel === 'Main Admin')
+  const sidebarOpen = controlledSidebarOpen ?? localSidebarOpen
+  const sidebarCollapsed = controlledSidebarCollapsed ?? localSidebarCollapsed
+  const setSidebarOpen = onSidebarOpenChange || setLocalSidebarOpen
+  const setSidebarCollapsed = onSidebarCollapsedChange || setLocalSidebarCollapsed
   const ticketId = useMemo(() => {
     const parts = location.pathname.split('/').filter(Boolean)
     return parts.length > 2 ? decodeURIComponent(parts[2]) : ''
   }, [location.pathname])
   const [filters, setFilters] = useState({ status: '', category: '', priority: '' })
+  const [ticketSearch, setTicketSearch] = useState('')
   const [tickets, setTickets] = useState([])
   const [ticket, setTicket] = useState(null)
   const [handlers, setHandlers] = useState([])
@@ -73,7 +98,23 @@ function AdminSupport({
   const [error, setError] = useState('')
   const [reply, setReply] = useState('')
   const [notice, setNotice] = useState('')
+  const isDrawerViewport = window.matchMedia(
+    roleLabel === 'Main Admin' ? '(max-width: 1024px)' : '(max-width: 760px)',
+  ).matches
   const [isSaving, setIsSaving] = useState(false)
+  const visibleTickets = useMemo(() => {
+    const query = ticketSearch.trim().toLocaleLowerCase()
+    if (!query) return tickets
+    return tickets.filter((item) => [
+      item.ticketId,
+      item.subject,
+      item.category,
+      item.priority,
+      item.status,
+      item.requester?.fullName,
+      item.requester?.email,
+    ].some((value) => String(value || '').toLocaleLowerCase().includes(query)))
+  }, [ticketSearch, tickets])
 
   useEffect(() => {
     let active = true
@@ -125,7 +166,7 @@ function AdminSupport({
     setNotice('')
     try {
       const result = await adminSupportRequest(`/admin/tickets/${encodeURIComponent(ticketId)}${path}`, {
-        method: path === '/status' || path === '/assignment' ? 'PATCH' : 'POST',
+        method: ['/status', '/assignment', '/priority'].includes(path) ? 'PATCH' : 'POST',
         body: JSON.stringify(body),
       })
       setTicket((current) => ({ ...current, ...result.ticket, requester: current?.requester }))
@@ -165,28 +206,106 @@ function AdminSupport({
   }
 
   return (
-    <div className={`admin-support${isDark ? ' is-dark' : ''}`}>
-      <WorkspaceTopbar
-        title="Support"
-        name={user?.fullName}
-        email={user?.email}
-        roleLabel={roleLabel}
-        dashboardPath={dashboardPath}
-        helpPath={supportPath}
-        settingsPath={settingsPath}
-        isDark={isDark}
-        onToggleTheme={onToggleTheme}
-        onLogout={onLogout}
-      />
-      <main className="admin-support__main">
-        <div className="admin-support__heading">
+    <div className={`admin-app admin-support${embedded ? ' admin-support--embedded' : ''}${isDark ? ' is-dark' : ''}${roleLabel === 'Main Admin' ? ' is-main-admin' : ''}${sidebarCollapsed ? ' admin-app--sidebar-collapsed' : ''}`} data-theme={isDark ? 'dark' : 'light'}>
+      {!embedded && sidebarOpen && <button className="admin-backdrop" type="button" aria-label="Close navigation" onClick={() => {
+        setSidebarOpen(false)
+        if (roleLabel === 'Main Admin') setSidebarCollapsed(true)
+      }} />}
+      {!embedded && <aside className={`admin-sidebar${sidebarOpen ? ' admin-sidebar--open' : ''}`}>
+        <Link className="admin-brand" to={dashboardPath} aria-label="AIHustle Admin Dashboard">
+          <img className="admin-brand__image" src="/logo.png" alt="LMS logo" />
+        </Link>
+        <nav className="admin-nav" aria-label="Admin navigation">
+          {adminNavigation.map((item) => (
+            <React.Fragment key={item.label}>
+              {item.group && <div className="admin-nav__group">{item.group}</div>}
+              <Link
+                className={`admin-nav__item${item.active ? ' is-active' : ''}`}
+                to={item.active ? supportPath : item.label === 'Settings' ? settingsPath : dashboardPath}
+                aria-current={item.active ? 'page' : undefined}
+                onClick={() => {
+                  if (roleLabel !== 'Main Admin') setSidebarOpen(false)
+                }}
+              >
+                <span className="admin-nav__icon" aria-hidden="true">{item.icon}</span>
+                <span>{item.label}</span>
+              </Link>
+            </React.Fragment>
+          ))}
+        </nav>
+        <div className="admin-sidebar__bottom">
+          <div className="admin-sidebar__help"><span>✦</span><strong>Need a hand?</strong><small>Help center and support</small></div>
+        </div>
+      </aside>}
+      <div
+        className={embedded ? 'admin-support__embedded-shell' : 'admin-main admin-support__main-shell'}
+        onClick={(event) => {
+          if (
+            !embedded &&
+            roleLabel === 'Main Admin' &&
+            !sidebarCollapsed &&
+            !event.target.closest('.admin-support__menu-toggle')
+          ) {
+            setSidebarOpen(false)
+            setSidebarCollapsed(true)
+          }
+        }}
+      >
+        {!embedded && <div className="admin-support__topbar-wrap">
+          <button
+            type="button"
+            className="admin-support__menu-toggle"
+            aria-label={isDrawerViewport
+              ? sidebarOpen ? 'Close navigation' : 'Open navigation'
+              : sidebarCollapsed ? 'Open sidebar' : 'Close sidebar'}
+            aria-expanded={isDrawerViewport ? sidebarOpen : !sidebarCollapsed}
+            onClick={() => {
+              if (isDrawerViewport) {
+                const nextOpen = !sidebarOpen
+                setSidebarCollapsed(roleLabel === 'Main Admin' ? !nextOpen : false)
+                setSidebarOpen(nextOpen)
+              } else {
+                setSidebarOpen(false)
+                setSidebarCollapsed((collapsed) => !collapsed)
+              }
+            }}
+          >☰</button>
+          <WorkspaceTopbar
+            title="Support"
+            name={user?.fullName}
+            email={user?.email}
+            roleLabel={roleLabel}
+            dashboardPath={dashboardPath}
+            helpPath={supportPath}
+            settingsPath={settingsPath}
+            isDark={isDark}
+            onToggleTheme={onToggleTheme}
+            onLogout={onLogout}
+          />
+        </div>}
+        <main className={`admin-support__main${embedded ? ' admin-support__main--embedded' : ''}`}>
+        {!embedded && <Link className="admin-back-dashboard admin-support__back-link admin-support__back-link--dashboard" to={dashboardPath}>
+          <span aria-hidden="true">←</span> Back to Dashboard
+        </Link>}
+        {embedded ? <section className="admin-page-heading admin-page-heading--compact">
+          <div>
+            <p className="admin-eyebrow">COMMUNICATION &amp; SUPPORT</p>
+            <h1>{ticketId ? 'Review Support Request' : 'Support Tickets'}</h1>
+            <p>Review, organize and respond to submitted support requests.</p>
+          </div>
+        </section> : <div className="admin-support__heading">
           <div>
             <span className="student-eyebrow">SUPPORT MANAGEMENT</span>
             <h1>{ticketId ? 'Review Support Request' : 'Support Tickets'}</h1>
           </div>
-          {ticketId && <button className="student-button student-button--quiet" type="button" onClick={() => navigate(supportPath)}>Back to all tickets</button>}
-        </div>
+        </div>}
 
+        <div className="admin-support__content-card">
+        {ticketId && (
+          <Link className="admin-support__back-link admin-support__back-link--tickets" to={supportPath}>
+            <span aria-hidden="true">←</span> Back to Support Tickets
+          </Link>
+        )}
         {error && <div className="support-notice is-error" role="alert">{error}</div>}
         {notice && <div className="support-notice is-success" role="status">{notice}</div>}
 
@@ -213,6 +332,11 @@ function AdminSupport({
                     {statuses.map((status) => <option key={status}>{status}</option>)}
                   </select>
                 </label>
+                <label>Priority
+                  <select value={ticket.priority} disabled={isSaving} onChange={(event) => updateTicket('/priority', { priority: event.currentTarget.value }, 'Ticket priority updated.')}>
+                    {priorities.map((priority) => <option key={priority}>{priority}</option>)}
+                  </select>
+                </label>
                 <label>Assigned support handler
                   <select value={ticket.assignedTo || ''} disabled={isSaving} onChange={(event) => updateTicket('/assignment', { assignedTo: event.currentTarget.value || null }, 'Ticket assignment updated.')}>
                     <option value="">Unassigned</option>
@@ -235,6 +359,14 @@ function AdminSupport({
                   <li key={entry._id}><span>{entry.from ? `${entry.from} → ` : ''}{entry.to}</span><time>{new Date(entry.createdAt).toLocaleString()}</time></li>
                 ))}</ol>
               </section>
+              {ticket.priorityHistory?.length > 0 && (
+                <section className="support-status-history">
+                  <h3>Priority history</h3>
+                  <ol>{ticket.priorityHistory.map((entry) => (
+                    <li key={entry._id}><span>{entry.from ? `${entry.from} → ` : ''}{entry.to}</span><time>{new Date(entry.createdAt).toLocaleString()}</time></li>
+                  ))}</ol>
+                </section>
+              )}
               {!['Resolved', 'Closed'].includes(ticket.status) && (
                 <form className="support-form support-reply-form" onSubmit={(event) => {
                   event.preventDefault()
@@ -250,13 +382,14 @@ function AdminSupport({
         ) : (
           <>
             <div className="admin-support__filters">
+              <label className="admin-support__search">Search tickets<input type="search" value={ticketSearch} onChange={(event) => setTicketSearch(event.currentTarget.value)} placeholder="ID, subject, requester or category" /></label>
               <label>Status<select value={filters.status} onChange={(event) => setFilters((current) => ({ ...current, status: event.currentTarget.value }))}><option value="">All statuses</option>{statuses.map((status) => <option key={status}>{status}</option>)}</select></label>
               <label>Category<select value={filters.category} onChange={(event) => setFilters((current) => ({ ...current, category: event.currentTarget.value }))}><option value="">All categories</option>{categories.map((category) => <option key={category}>{category}</option>)}</select></label>
               <label>Priority<select value={filters.priority} onChange={(event) => setFilters((current) => ({ ...current, priority: event.currentTarget.value }))}><option value="">All priorities</option>{priorities.map((priority) => <option key={priority}>{priority}</option>)}</select></label>
             </div>
-            {loading ? <p className="support-loading" role="status">Loading support tickets…</p> : tickets.length ? (
+            {loading ? <p className="support-loading" role="status">Loading support tickets…</p> : visibleTickets.length ? (
               <div className="support-ticket-list">
-                {tickets.map((item) => (
+                {visibleTickets.map((item) => (
                   <Link className="support-ticket-row" to={`${supportPath}/${encodeURIComponent(item.ticketId)}`} key={item.ticketId}>
                     <span className="support-ticket-row__main">
                       <strong>{item.subject}</strong>
@@ -264,15 +397,17 @@ function AdminSupport({
                     </span>
                     <span className="support-ticket-row__meta">
                       <span className={`support-status is-${item.status.toLowerCase().replaceAll(' ', '-')}`}>{item.status}</span>
-                      <small>{item.priority} · {new Date(item.updatedAt).toLocaleDateString()}</small>
+                      <small>{item.priority} · Submitted {new Date(item.createdAt).toLocaleDateString()}</small>
                     </span>
                   </Link>
                 ))}
               </div>
-            ) : !error ? <div className="support-empty-state"><h3>No support tickets found</h3><p>Tickets matching these filters will appear here.</p></div> : null}
+            ) : !error ? <div className="support-empty-state"><h3>{ticketSearch ? 'No matching support tickets' : 'No support tickets found'}</h3><p>{ticketSearch ? 'Try another search or adjust the filters.' : 'Tickets matching these filters will appear here.'}</p></div> : null}
           </>
         )}
+        </div>
       </main>
+      </div>
     </div>
   )
 }

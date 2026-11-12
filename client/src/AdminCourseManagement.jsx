@@ -1,12 +1,8 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { isInvalidSessionResponse } from './auth-session.js'
+import { API_BASE_URL } from './api-base-url.js'
 import './AdminCourseManagement.css'
 
-const API_BASE_URL = (
-  import.meta.env.VITE_API_URL ||
-  import.meta.env.VITE_API_BASE_URL ||
-  'http://localhost:5000/api'
-).replace(/\/+$/, '')
 const defaultCourseCategories = [
   'Python',
   'Prompt Engineering',
