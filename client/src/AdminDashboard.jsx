@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import { CollegesManagement, CourseManagement, EnrollmentManagement } from './AdminDataViews.jsx'
+import { CollegesManagement, EnrollmentManagement } from './AdminDataViews.jsx'
+import AdminCourseManagement from './AdminCourseManagement.jsx'
 import { isInvalidSessionResponse } from './auth-session.js'
 import IndependentStudentApprovals from './IndependentStudentApprovals.jsx'
 import NotificationFeed from './NotificationFeed.jsx'
@@ -2271,7 +2272,7 @@ function AdminDashboard({ user, email = user?.email, onLogout, isDark, onToggleT
           )}
 
           {activeView === 'colleges' && <CollegesManagement onLogout={onLogout} />}
-          {activeView === 'courses' && <CourseManagement onLogout={onLogout} />}
+          {activeView === 'courses' && <AdminCourseManagement onLogout={onLogout} />}
           {activeView === 'enrollments' && <EnrollmentManagement onLogout={onLogout} />}
           {activeView === 'independent-approvals' && <IndependentStudentApprovals onLogout={onLogout} />}
 

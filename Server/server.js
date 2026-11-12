@@ -2,13 +2,13 @@ import { config, requireJwtSecret } from './config/env.js'
 import cors from 'cors'
 import express from 'express'
 import { connectToDatabase } from './config/db.js'
+import cloudinary from './config/cloudinary.js'
 import authRouter from './routes/auth.js'
 import adminRouter from './routes/admin.js'
 import learningRouter from './routes/learning.js'
 import supportRouter from './routes/support.js'
 import settingsRouter from './routes/settings.js'
 import referralsRouter from './routes/referrals.js'
-import notificationsRouter from './routes/notifications.js'
 
 const app = express()
 app.use(
@@ -32,7 +32,6 @@ app.use('/api', learningRouter)
 app.use('/api/support', supportRouter)
 app.use('/api/settings', settingsRouter)
 app.use('/api/referrals', referralsRouter)
-app.use('/api/notifications', notificationsRouter)
 app.use('/api', (req, res) => {
   res.status(404).json({ message: 'API route not found.' })
 })
@@ -67,11 +66,45 @@ app.use((error, req, res, next) => {
   res.status(500).json({ message: 'Something went wrong. Please try again.' })
 })
 
+async function verifyCloudinaryConnection() {
+  if (
+    !config.cloudinaryCloudName ||
+    !config.cloudinaryApiKey ||
+    !config.cloudinaryApiSecret
+  ) {
+    console.error('Cloudinary verification failed (CLOUDINARY_* settings are missing).')
+    return
+  }
+
+  let timeoutId
+  try {
+    await Promise.race([
+      cloudinary.api.resources({ resource_type: 'video', type: 'upload', max_results: 1 }),
+      new Promise((_, reject) => {
+        timeoutId = setTimeout(() => {
+          const error = new Error('Cloudinary verification timed out.')
+          error.code = 'CLOUDINARY_TIMEOUT'
+          reject(error)
+        }, 5000)
+      }),
+    ])
+    console.log('Connected to Cloudinary.')
+  } catch (error) {
+    const result = Number.isInteger(error?.http_code)
+      ? `HTTP ${error.http_code}`
+      : error?.code === 'CLOUDINARY_TIMEOUT' ? 'timed out' : 'request failed'
+    console.error(`Cloudinary verification failed (${result}).`)
+  } finally {
+    if (timeoutId) clearTimeout(timeoutId)
+  }
+}
+
 async function startServer() {
   try {
     requireJwtSecret()
     await connectToDatabase()
-    app.listen(config.port, () => {
+    app.listen(config.port, async () => {
+      await verifyCloudinaryConnection()
       console.log(`LMS backend listening on port ${config.port}.`)
     })
   } catch (error) {

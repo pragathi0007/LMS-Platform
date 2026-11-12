@@ -7,7 +7,7 @@ const accountFields = {
   passwordHash: { type: String, select: false },
   status: {
     type: String,
-    enum: ['active', 'pending', 'inactive', 'suspended', 'invitation_pending', 'rejected'],
+    enum: ['active', 'pending', 'inactive', 'suspended', 'invitation_pending'],
     default: 'active',
     lowercase: true,
   },
@@ -32,18 +32,6 @@ const independentStudentFields = {
   studentType: { type: String, enum: ['independent'], default: 'independent', required: true },
   twoFactorEnabled: { type: Boolean, default: false },
   twoFactorEnabledAt: { type: Date },
-  studentId: { type: String, trim: true, maxlength: 100 },
-  approvalStatus: {
-    type: String,
-    enum: ['pending', 'approved', 'rejected'],
-    default: 'pending',
-    required: true,
-  },
-  approvedAt: { type: Date },
-  approvedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'Admin' },
-  rejectedAt: { type: Date },
-  rejectedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'Admin' },
-  rejectionReason: { type: String, trim: true, maxlength: 1000 },
 }
 
 const collegeStudentFields = {

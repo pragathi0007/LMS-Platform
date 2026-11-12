@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react'
-import { Link, Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
+import { Link, Navigate, Route, Routes, useLocation, useNavigate, useParams } from 'react-router-dom'
 import {
   EmailSupportPage,
   HelpCenterHome,
@@ -12,9 +12,12 @@ import SettingsPage from './SettingsPage.jsx'
 import ThemeToggle from './ThemeToggle.jsx'
 import { isInvalidSessionResponse } from './auth-session.js'
 import NotificationFeed from './NotificationFeed.jsx'
+import StudentQuizExperience from './StudentQuizPanel.jsx'
 import './StudentDashboard.css'
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000/api'
+const COURSE_NOTES_KEY = 'course-notes'
+const COURSE_RESOURCES_KEY = 'course-resources'
 
 const navigation = [
   { label: 'Dashboard', icon: 'grid', path: '/student/dashboard' },
@@ -40,76 +43,31 @@ const secondaryPages = {
 }
 
 const stats = [
-  { label: 'Enrolled courses', icon: 'book', tone: 'gold' },
-  { label: 'Pending assignments', icon: 'check', tone: 'peach' },
-  { label: 'Completed courses', icon: 'award', tone: 'mint' },
-  { label: 'Learning streak', icon: 'spark', tone: 'blue' },
+  { label: 'Enrolled courses', value: 'enrolledCourses', caption: 'courses in your learning plan', icon: 'book', tone: 'gold' },
+  { label: 'Pending assignments', value: 'pendingAssignments', caption: 'assignments awaiting submission', icon: 'check', tone: 'peach' },
+  { label: 'Completed courses', value: 'completedCourses', caption: 'courses with every lesson complete', icon: 'award', tone: 'mint' },
+  { label: 'Learning streak', value: 'learningStreak', caption: 'consecutive active days', icon: 'spark', tone: 'blue' },
 ]
+
+const emptyLearningSummary = {
+  enrolledCourses: 0,
+  pendingAssignments: 0,
+  completedCourses: 0,
+  learningStreak: 0,
+  completedLessons: 0,
+  inProgressLessons: 0,
+  notStartedLessons: 0,
+  totalLessons: 0,
+  completionPercentage: 0,
+}
 
 const categories = [
-  { label: 'Business', icon: 'briefcase' },
-  { label: 'Artificial Intelligence', icon: 'spark' },
-  { label: 'Data Science', icon: 'chart' },
-  { label: 'Computer Science', icon: 'code' },
-  { label: 'Information Technology', icon: 'laptop' },
-  { label: 'Personal Development', icon: 'rocket' },
-  { label: 'Healthcare', icon: 'health' },
-  { label: 'Language Learning', icon: 'globe' },
-  { label: 'Social Sciences', icon: 'users' },
-  { label: 'Arts and Humanities', icon: 'pen' },
-  { label: 'Physical Science and Engineering', icon: 'flask' },
-  { label: 'Math and Logic', icon: 'calculator' },
-]
-
-const recommendedResources = [
-  {
-    title: 'Python Fundamentals',
-    description: 'Get comfortable with core Python concepts, syntax, and simple programs.',
-    category: 'Computer Science',
-    difficulty: 'Beginner',
-    icon: 'code',
-    tone: 'gold',
-  },
-  {
-    title: 'Web Development Basics',
-    description: 'Explore how HTML, CSS, and JavaScript work together to build websites.',
-    category: 'Information Technology',
-    difficulty: 'Beginner',
-    icon: 'laptop',
-    tone: 'teal',
-  },
-  {
-    title: 'Introduction to Data Science',
-    description: 'See how data is collected, explored, and used to answer real questions.',
-    category: 'Data Science',
-    difficulty: 'Beginner',
-    icon: 'chart',
-    tone: 'mint',
-  },
-  {
-    title: 'SQL for Beginners',
-    description: 'Learn the basics of querying tables and working with structured data.',
-    category: 'Information Technology',
-    difficulty: 'Beginner',
-    icon: 'database',
-    tone: 'cyan',
-  },
-  {
-    title: 'JavaScript Essentials',
-    description: 'Start writing interactive code with variables, functions, and events.',
-    category: 'Computer Science',
-    difficulty: 'Beginner',
-    icon: 'code',
-    tone: 'peach',
-  },
-  {
-    title: 'Database Management',
-    description: 'Understand how databases organize, store, and retrieve information.',
-    category: 'Information Technology',
-    difficulty: 'Intermediate',
-    icon: 'database',
-    tone: 'lavender',
-  },
+  { label: 'Digital Marketing', icon: 'chart' },
+  { label: 'Python', icon: 'code' },
+  { label: 'Prompt Engineering', icon: 'spark' },
+  { label: 'UI/UX Design', icon: 'pen' },
+  { label: 'Full Stack Development', icon: 'laptop' },
+  { label: 'Web Development', icon: 'laptop' },
 ]
 
 const tools = [
@@ -125,6 +83,7 @@ function Icon({ name, size = 19 }) {
   const paths = {
     layoutDashboard: <><rect x="3" y="3" width="7" height="9" rx="1" /><rect x="14" y="3" width="7" height="5" rx="1" /><rect x="14" y="12" width="7" height="9" rx="1" /><rect x="3" y="16" width="7" height="5" rx="1" /></>,
     bookOpen: <><path d="M12 7v14" /><path d="M3 18V5a1 1 0 0 1 1-1h4a4 4 0 0 1 4 4 4 4 0 0 1 4-4h4a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1h-4a4 4 0 0 0-4 2 4 4 0 0 0-4-2H4a1 1 0 0 1-1-1Z" /></>,
+    play: <><circle cx="12" cy="12" r="9" /><path d="m10 8 6 4-6 4z" /></>,
     clipboardCheck: <><rect x="8" y="4" width="8" height="4" rx="1" /><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2" /><path d="m9 14 2 2 4-4" /></>,
     chartNoAxesCombined: <><path d="M3 3v18h18" /><path d="m19 9-5 5-4-4-5 5" /></>,
     messageCircle: <><path d="M20 11.5a7.5 7.5 0 0 1-7.5 7.5 8 8 0 0 1-3.5-.8L4 20l1.5-4A7.5 7.5 0 1 1 20 11.5Z" /><path d="M8 11h.01M12 11h.01M16 11h.01" /></>,
@@ -132,6 +91,7 @@ function Icon({ name, size = 19 }) {
     circleHelp: <><circle cx="12" cy="12" r="9" /><path d="M9.6 9a2.5 2.5 0 1 1 4.5 1.5c-.9 1.1-2.1 1.3-2.1 3m0 3h.01" /></>,
     grid: <><rect x="3" y="3" width="7" height="7" rx="1.5" /><rect x="14" y="3" width="7" height="7" rx="1.5" /><rect x="3" y="14" width="7" height="7" rx="1.5" /><rect x="14" y="14" width="7" height="7" rx="1.5" /></>,
     book: <><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H20v16H6.5A2.5 2.5 0 0 0 4 21.5z" /><path d="M4 5.5v16M8 7h8m-8 4h8" /></>,
+    link: <><path d="M10 13a5 5 0 0 0 7.1 0l2-2a5 5 0 0 0-7.1-7.1l-1.1 1.1" /><path d="M14 11a5 5 0 0 0-7.1 0l-2 2A5 5 0 0 0 12 20l1.1-1.1" /></>,
     check: <><rect x="4" y="4" width="16" height="17" rx="2" /><path d="M8 3v3m8-3v3M4 9h16m-11 5 2 2 4-4" /></>,
     chart: <><path d="M4 19V5m0 14h17" /><path d="m7 15 4-4 3 2 5-6m-4 0h4v4" /></>,
     folder: <><path d="M3 6.5A2.5 2.5 0 0 1 5.5 4H10l2 2h6.5A2.5 2.5 0 0 1 21 8.5v9a2.5 2.5 0 0 1-2.5 2.5h-13A2.5 2.5 0 0 1 3 17.5z" /><path d="M3 9h18" /></>,
@@ -207,44 +167,10 @@ function EmptyState({ icon, title, description }) {
   )
 }
 
-function RecommendedResourceCard({ resource }) {
-  return (
-    <article className="student-recommendation-card">
-      <div
-        className={`student-recommendation-card__thumbnail is-${resource.tone}`}
-        aria-hidden="true"
-      >
-        <span className="student-recommendation-card__thumbnail-orbit" />
-        <span className="student-recommendation-card__thumbnail-icon">
-          <Icon name={resource.icon} size={34} />
-        </span>
-        <span className="student-recommendation-card__placeholder">Sample resource</span>
-      </div>
-      <div className="student-recommendation-card__body">
-        <div className="student-recommendation-card__meta">
-          <span>{resource.category}</span>
-          <span>{resource.difficulty}</span>
-        </div>
-        <h3>{resource.title}</h3>
-        <p>{resource.description}</p>
-        <button
-          className="student-recommendation-card__button"
-          type="button"
-          disabled
-          title="This sample resource does not have a YouTube link yet."
-        >
-          Watch on YouTube
-          <Icon name="arrow" size={15} />
-        </button>
-      </div>
-    </article>
-  )
-}
-
-function StudentRoutePage({ title, children, to, showHeading = false }) {
+function StudentRoutePage({ title, children, to, showHeading = false, className = '' }) {
   const Element = to ? Link : 'section'
   return (
-    <Element className="student-panel student-route-page" {...(to ? { to } : {})}>
+    <Element className={`student-panel student-route-page ${className}`.trim()} {...(to ? { to } : {})}>
       {showHeading && (
         <div className="student-section-heading">
           <div>
@@ -276,6 +202,1027 @@ async function fetchMyEnrollments(onLogout, signal) {
   if (!response.ok) throw new Error(result.message || 'Your learning data could not be loaded.')
   if (!Array.isArray(result.enrollments)) throw new Error('The server returned invalid enrollment data.')
   return result.enrollments
+}
+
+async function fetchStudentLearningSummary(onLogout, signal) {
+  const savedAuth = sessionStorage.getItem('lms.auth')
+  const auth = savedAuth ? JSON.parse(savedAuth) : null
+  if (typeof auth?.token !== 'string') {
+    onLogout()
+    throw new Error('Your session has ended. Please sign in again.')
+  }
+  const response = await fetch(`${API_BASE_URL}/learning/summary`, {
+    headers: { Authorization: `Bearer ${auth.token}` },
+    signal,
+  })
+  const result = await response.json()
+  if (isInvalidSessionResponse(response, result)) {
+    onLogout()
+    throw new Error('Your session has ended. Please sign in again.')
+  }
+  if (!response.ok) throw new Error(result.message || 'Learning statistics could not be loaded.')
+  if (!result.summary || Object.keys(emptyLearningSummary).some((key) => !Number.isFinite(result.summary[key]))) {
+    throw new Error('The server returned invalid learning statistics.')
+  }
+  return result.summary
+}
+
+async function fetchStudentCourseContent(courseId, onLogout, signal) {
+  const savedAuth = sessionStorage.getItem('lms.auth')
+  const auth = savedAuth ? JSON.parse(savedAuth) : null
+  if (typeof auth?.token !== 'string') {
+    onLogout()
+    throw new Error('Your session has ended. Please sign in again.')
+  }
+  const response = await fetch(`${API_BASE_URL}/courses/${encodeURIComponent(courseId)}/learning-content`, {
+    headers: { Authorization: `Bearer ${auth.token}` },
+    signal,
+  })
+  const result = await response.json()
+  if (isInvalidSessionResponse(response, result)) {
+    onLogout()
+    throw new Error('Your session has ended. Please sign in again.')
+  }
+  if (!response.ok) throw new Error(result.message || 'Your course content could not be loaded.')
+  if (!result.enrollment?._id || !result.enrollment.courseId || !Array.isArray(result.assignmentSubmissions) || !Array.isArray(result.quizAttempts)) {
+    throw new Error('The server returned invalid course content.')
+  }
+  return result
+}
+
+async function fetchPublishedCourses(onLogout, signal) {
+  const savedAuth = sessionStorage.getItem('lms.auth')
+  const auth = savedAuth ? JSON.parse(savedAuth) : null
+  if (typeof auth?.token !== 'string') {
+    onLogout()
+    throw new Error('Your session has ended. Please sign in again.')
+  }
+  const response = await fetch(`${API_BASE_URL}/courses`, {
+    headers: { Authorization: `Bearer ${auth.token}` },
+    signal,
+  })
+  const result = await response.json()
+  if (isInvalidSessionResponse(response, result)) {
+    onLogout()
+    throw new Error('Your session has ended. Please sign in again.')
+  }
+  if (!response.ok) throw new Error(result.message || 'Available courses could not be loaded.')
+  if (!Array.isArray(result.courses)) throw new Error('The server returned invalid course data.')
+  return result.courses
+}
+
+function getCourseCounts(course) {
+  const lessonCount = (course.modules || []).reduce((count, module) => {
+    const items = module.contentItems || []
+    return count + (items.length
+      ? items.filter((item) => item.type === 'video-lesson').length
+      : (module.lessons || []).length)
+  }, 0)
+  return { modules: course.modules?.length || 0, lessons: lessonCount }
+}
+
+function formatCourseDuration(minutes) {
+  const value = Number(minutes) || 0
+  if (value < 60) return `${value} min`
+  const hours = Math.floor(value / 60)
+  const remainder = value % 60
+  return remainder ? `${hours} hr ${remainder} min` : `${hours} hr`
+}
+
+function getCourseLessons(course) {
+  return (course?.modules || []).flatMap((module, moduleIndex) => {
+    const videoItems = (module.contentItems || []).filter((item) => item.type === 'video-lesson')
+    const lessons = videoItems.length ? videoItems : module.lessons || []
+    return lessons.map((lesson, lessonIndex) => ({
+      module,
+      lesson,
+      moduleKey: String(module._id || `${module.title}-${moduleIndex}`),
+      lessonKey: String(lesson._id || `${moduleIndex}-${lessonIndex}`),
+    }))
+  })
+}
+
+function getCourseProgress(enrollment) {
+  const lessons = getCourseLessons(enrollment.courseId)
+  const completedIds = new Set((enrollment.completedLessonIds || []).map(String))
+  const completedCount = lessons.filter(({ lesson }) => completedIds.has(String(lesson._id))).length
+  return {
+    completedCount,
+    totalCount: lessons.length,
+    percentage: lessons.length ? Math.round((completedCount / lessons.length) * 100) : 0,
+  }
+}
+
+function getModuleLearningItems(module, moduleIndex) {
+  const moduleKey = String(module._id || `${module.title}-${moduleIndex}`)
+  const contentItems = module.contentItems?.length
+    ? module.contentItems
+      .map((item, index) => ({ item, index }))
+      .sort((left, right) => (left.item.order ?? left.index) - (right.item.order ?? right.index))
+      .map(({ item, index }) => ({
+        ...item,
+        _learningKey: String(item._id || `${moduleKey}-item-${index}`),
+        _moduleKey: moduleKey,
+      }))
+    : (module.lessons || []).map((lesson, index) => ({
+      ...lesson,
+      type: 'video-lesson',
+      _learningKey: String(lesson._id || `${moduleKey}-lesson-${index}`),
+      _moduleKey: moduleKey,
+    }))
+  const items = [...contentItems]
+  if (module.quiz?.questions?.length && !contentItems.some((item) => item.type === 'quiz')) {
+    items.push({
+      type: 'quiz',
+      title: module.quiz.title || 'Module quiz',
+      quiz: module.quiz,
+      _learningKey: String(module.quiz._id || `${moduleKey}-quiz`),
+      _moduleKey: moduleKey,
+    })
+  }
+  return items
+}
+
+function getStudentContentLabel(type) {
+  return {
+    'video-lesson': 'Video',
+    quiz: 'Quiz',
+    assignment: 'Assignment',
+    note: 'Notes / resources',
+  }[type] || 'Course content'
+}
+
+function StudentAssignmentPanel({ courseId, enrollmentId, assignment, submissions, onSubmitted, onLearningDataChanged, onLogout, showHeader = true }) {
+  const [file, setFile] = useState(null)
+  const [submitting, setSubmitting] = useState(false)
+  const [error, setError] = useState('')
+  const assignmentSubmissions = submissions.filter((submission) => (
+    String(submission.assignmentId) === String(assignment._id)
+  ))
+
+  async function submitAssignment(event) {
+    event.preventDefault()
+    const form = event.currentTarget
+    if (!file) {
+      setError('Choose a PDF, DOCX, or TXT file to submit.')
+      return
+    }
+    setSubmitting(true)
+    setError('')
+    try {
+      const savedAuth = sessionStorage.getItem('lms.auth')
+      const auth = savedAuth ? JSON.parse(savedAuth) : null
+      if (typeof auth?.token !== 'string') {
+        onLogout()
+        return
+      }
+      const formData = new FormData()
+      formData.append('file', file)
+      const response = await fetch(`${API_BASE_URL}/courses/${encodeURIComponent(courseId)}/assignments/${encodeURIComponent(assignment._id)}/submissions`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${auth.token}` },
+        body: formData,
+      })
+      const result = await response.json()
+      if (isInvalidSessionResponse(response, result)) {
+        onLogout()
+        return
+      }
+      if (!response.ok) throw new Error(result.message || 'Your assignment could not be submitted.')
+      if (!result.submission?._id) throw new Error('The server did not confirm your assignment submission.')
+      onSubmitted(result.submission)
+      setFile(null)
+      form.reset()
+      onLearningDataChanged()
+    } catch (submitError) {
+      setError(submitError instanceof Error ? submitError.message : 'Your assignment could not be submitted.')
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  return (
+    <section className="student-course-activity">
+      {showHeader && (
+        <header>
+          <span className="student-eyebrow">{getStudentContentLabel('assignment')}</span>
+          <h2>{assignment.title}</h2>
+        </header>
+      )}
+      {assignment.description && <p className="student-course-activity__instructions">{assignment.description}</p>}
+      <div className="student-course-activity__details">
+        <span>Due {assignment.dueDate ? new Date(assignment.dueDate).toLocaleDateString() : 'No due date'}</span>
+        <span>{Number(assignment.points) || 0} points</span>
+      </div>
+      {error && <p className="student-courses__message is-error" role="alert">{error}</p>}
+      <form className="student-assignment-submit" onSubmit={submitAssignment}>
+        <label>
+          <span>Upload your work (PDF, DOCX, or TXT · max 10 MB)</span>
+          <input type="file" accept=".pdf,.docx,.txt,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain" onChange={(event) => setFile(event.currentTarget.files?.[0] || null)} />
+        </label>
+        <button className="student-button" type="submit" disabled={submitting || !assignment._id}>
+          {submitting ? 'Submitting…' : 'Submit assignment'}
+        </button>
+      </form>
+      {assignmentSubmissions.length > 0 && (
+        <div className="student-assignment-submissions">
+          <h3>Submissions</h3>
+          {assignmentSubmissions.map((submission) => (
+            <a key={submission._id} href={`${API_BASE_URL}/assignment-submissions/${encodeURIComponent(submission._id)}/download`} onClick={async (event) => {
+              event.preventDefault()
+              try {
+                const savedAuth = sessionStorage.getItem('lms.auth')
+                const auth = savedAuth ? JSON.parse(savedAuth) : null
+                if (typeof auth?.token !== 'string') {
+                  onLogout()
+                  return
+                }
+                const response = await fetch(event.currentTarget.href, { headers: { Authorization: `Bearer ${auth.token}` } })
+                if (isInvalidSessionResponse(response, {})) {
+                  onLogout()
+                  return
+                }
+                if (!response.ok) throw new Error('The submitted file could not be downloaded.')
+                const blob = await response.blob()
+                const url = URL.createObjectURL(blob)
+                const link = document.createElement('a')
+                link.href = url
+                link.download = submission.fileName
+                link.click()
+                URL.revokeObjectURL(url)
+              } catch (downloadError) {
+                setError(downloadError instanceof Error ? downloadError.message : 'The submitted file could not be downloaded.')
+              }
+            }}>
+              {submission.fileName} · Submitted {new Date(submission.submittedAt).toLocaleString()}
+            </a>
+          ))}
+        </div>
+      )}
+    </section>
+  )
+}
+
+function StudentNotePanel({ item }) {
+  return (
+    <section className="student-course-activity">
+      <header>
+        <span className="student-eyebrow">{getStudentContentLabel('note')}</span>
+        <h2>{item.title}</h2>
+      </header>
+      {item.description && <p className="student-course-activity__instructions">{item.description}</p>}
+      {item.content && <div className="student-course-note__content">{item.content}</div>}
+      {item.resources?.length > 0 ? (
+        <ul className="student-course-note__resources">
+          {item.resources.map((resource, index) => (
+            <li key={resource._id || `${resource.url}-${index}`}>
+              <a href={resource.url} target="_blank" rel="noreferrer" download={resource.resourceType === 'raw' || resource.format === 'pdf' ? resource.title : undefined}>
+                {resource.title || `Resource ${index + 1}`}
+              </a>
+              {resource.format && <small>{resource.format.toUpperCase()}</small>}
+            </li>
+          ))}
+        </ul>
+      ) : <p>No downloadable resources were added to this note.</p>}
+    </section>
+  )
+}
+
+function EnrollmentCourseCard({ enrollment }) {
+  const course = enrollment.courseId
+  const courseId = String(course._id)
+  const counts = getCourseCounts(course)
+  const { completedCount, totalCount, percentage } = getCourseProgress(enrollment)
+  const difficultyLabels = {
+    beginner: 'Beginner',
+    intermediate: 'Intermediate',
+    advanced: 'Advanced',
+    'all-levels': 'All levels',
+  }
+  const coursePath = `/student/course/${encodeURIComponent(courseId)}/learn`
+
+  return (
+    <article className="student-available-course student-enrolled-course">
+      {course.thumbnailUrl
+        ? <img className="student-available-course__thumbnail" src={course.thumbnailUrl} alt={`${course.title} course thumbnail`} />
+        : <div className="student-available-course__thumbnail student-available-course__thumbnail--empty" aria-label="No course thumbnail"><Icon name="book" size={28} /></div>}
+      <div className="student-available-course__body student-enrolled-course__body">
+        <div className="student-available-course__heading">
+          <div>
+            <p className="student-available-course__category">
+              {course.category || 'Other'} <span>·</span> {difficultyLabels[course.difficulty] || 'Not specified'}
+            </p>
+            <h3>{course.title}</h3>
+          </div>
+          <span className="student-available-course__status">
+            {course.status === 'published' ? 'Published' : 'Enrolled'}
+          </span>
+        </div>
+        <p className="student-available-course__description">{course.description || course.detailedDescription || 'No course description is available.'}</p>
+        <div className="student-available-course__meta">
+          <span>{counts.modules} modules</span>
+          <span>{counts.lessons} lessons</span>
+          <span>{formatCourseDuration(course.estimatedDurationMinutes)}</span>
+        </div>
+        <div className="student-enrolled-course__progress">
+          <div className="student-enrolled-course__progress-copy">
+            <span>Learning progress</span>
+            <strong>{completedCount} of {totalCount} lessons · {percentage}%</strong>
+          </div>
+          <div className="student-enrolled-course__progress-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow={percentage} aria-label={`${course.title} progress`}>
+            <span style={{ width: `${percentage}%` }} />
+          </div>
+        </div>
+        <Link className="student-enrolled-course__continue" to={coursePath}>
+          Continue Learning
+          <Icon name="arrow" size={16} />
+        </Link>
+      </div>
+    </article>
+  )
+}
+
+function EnrollmentCourseCards({
+  enrollments,
+  emptyTitle = 'No enrolled courses yet',
+  emptyDescription = 'Courses assigned or enrolled for your account will appear here.',
+}) {
+  const availableEnrollments = enrollments.filter((entry) => entry.courseId && typeof entry.courseId === 'object')
+  if (!availableEnrollments.length) {
+    return enrollments.length
+      ? <p className="student-courses__message is-error" role="alert">Your enrollment exists, but its course details are unavailable. Please contact your administrator.</p>
+      : <EmptyState icon="book" title={emptyTitle} description={emptyDescription} />
+  }
+  return (
+    <div className="student-enrolled-courses">
+      {availableEnrollments.map((entry) => <EnrollmentCourseCard key={entry._id} enrollment={entry} />)}
+    </div>
+  )
+}
+
+function StudentDashboardCourses({ onLogout, selectedCategory }) {
+  const [enrollments, setEnrollments] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    const controller = new AbortController()
+    fetchMyEnrollments(onLogout, controller.signal)
+      .then(setEnrollments)
+      .catch((loadError) => {
+        if (loadError.name !== 'AbortError') {
+          setError(loadError instanceof Error ? loadError.message : 'Your courses could not be loaded.')
+        }
+      })
+      .finally(() => { if (!controller.signal.aborted) setLoading(false) })
+    return () => controller.abort()
+  }, [onLogout])
+
+  const categoryEnrollments = selectedCategory
+    ? enrollments.filter((entry) => (
+      typeof entry.courseId === 'object'
+      && entry.courseId
+      && entry.courseId.category?.trim().toLowerCase() === selectedCategory.toLowerCase()
+    ))
+    : enrollments.slice(0, 3)
+
+  return loading
+    ? <p role="status">Loading your courses…</p>
+    : error
+      ? <p className="student-courses__message is-error" role="alert">{error}</p>
+      : <EnrollmentCourseCards
+        enrollments={categoryEnrollments}
+        emptyTitle={selectedCategory ? `No ${selectedCategory} courses yet` : 'No enrolled courses yet'}
+        emptyDescription={selectedCategory
+          ? `Enrolled courses in ${selectedCategory} will appear here.`
+          : 'Courses assigned or enrolled for your account will appear here.'}
+      />
+}
+
+function StudentAvailableCourseCard({ course, enrollment, onEnroll, enrolling, error }) {
+  const counts = getCourseCounts(course)
+  const difficultyLabels = {
+    beginner: 'Beginner',
+    intermediate: 'Intermediate',
+    advanced: 'Advanced',
+    'all-levels': 'All levels',
+  }
+  return (
+    <article className="student-available-course">
+      {course.thumbnailUrl
+        ? <img className="student-available-course__thumbnail" src={course.thumbnailUrl} alt={`${course.title} course thumbnail`} />
+        : <div className="student-available-course__thumbnail student-available-course__thumbnail--empty" aria-label="No course thumbnail"><Icon name="book" size={28} /></div>}
+      <div className="student-available-course__body">
+        <div className="student-available-course__heading">
+          <div>
+            <p className="student-available-course__category">
+              {course.category || 'Other'} <span>·</span> {difficultyLabels[course.difficulty] || 'Beginner'}
+            </p>
+            <h3>{course.title}</h3>
+          </div>
+          <span className="student-available-course__status">{enrollment ? 'Enrolled' : 'Not Enrolled'}</span>
+        </div>
+        <p className="student-available-course__description">{course.description || course.detailedDescription || 'No course description added yet.'}</p>
+        <div className="student-available-course__meta">
+          <span>{counts.modules} modules</span>
+          <span>{counts.lessons} lessons</span>
+          <span>{formatCourseDuration(course.estimatedDurationMinutes)}</span>
+        </div>
+        {error && <p className="student-courses__message is-error" role="alert">{error}</p>}
+        {enrollment
+          ? <Link className="student-available-course__action" to={`/student/course/${encodeURIComponent(course._id)}/learn`}>
+            Continue Learning <Icon name="arrow" size={15} />
+          </Link>
+          : <button className="student-available-course__action" type="button" onClick={() => onEnroll(course)} disabled={enrolling}>
+            {enrolling ? 'Enrolling…' : 'Enroll Now'} <Icon name="arrow" size={15} />
+          </button>}
+      </div>
+    </article>
+  )
+}
+
+function StudentAvailableCourses({ user, onLogout, onLearningDataChanged }) {
+  const [courses, setCourses] = useState([])
+  const [enrollments, setEnrollments] = useState([])
+  const [enrollingCourseId, setEnrollingCourseId] = useState('')
+  const [enrollmentErrors, setEnrollmentErrors] = useState({})
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    const controller = new AbortController()
+    Promise.all([
+      fetchPublishedCourses(onLogout, controller.signal),
+      fetchMyEnrollments(onLogout, controller.signal),
+    ])
+      .then(([publishedCourses, currentEnrollments]) => {
+        setCourses(publishedCourses)
+        setEnrollments(currentEnrollments)
+      })
+      .catch((loadError) => {
+        if (loadError.name !== 'AbortError') {
+          setError(loadError instanceof Error ? loadError.message : 'Available courses could not be loaded.')
+        }
+      })
+      .finally(() => { if (!controller.signal.aborted) setLoading(false) })
+    return () => controller.abort()
+  }, [onLogout, user?.id])
+
+  const enrollmentsByCourseId = new Map()
+  for (const entry of enrollments) {
+    if (!entry.courseId || entry.status === 'cancelled') continue
+    const enrolledCourseId = String(entry.courseId?._id || entry.courseId)
+    if (!enrollmentsByCourseId.has(enrolledCourseId)) enrollmentsByCourseId.set(enrolledCourseId, entry)
+  }
+
+  async function enrollInCourse(course) {
+    const courseId = String(course._id)
+    setEnrollingCourseId(courseId)
+    setEnrollmentErrors((current) => ({ ...current, [courseId]: '' }))
+    try {
+      const savedAuth = sessionStorage.getItem('lms.auth')
+      const auth = savedAuth ? JSON.parse(savedAuth) : null
+      if (typeof auth?.token !== 'string') {
+        onLogout()
+        return
+      }
+      const response = await fetch(`${API_BASE_URL}/enrollments`, {
+        method: 'POST',
+        headers: {
+          Authorization: `******`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ courseId }),
+      })
+      const result = await response.json()
+      if (isInvalidSessionResponse(response, result)) {
+        onLogout()
+        return
+      }
+      if (!response.ok) throw new Error(result.message || 'You could not be enrolled in this course.')
+      if (!result.enrollment?._id) throw new Error('The server did not confirm your enrollment.')
+      setEnrollments((current) => [
+        { ...result.enrollment, courseId: course },
+        ...current.filter((entry) => String(entry.courseId?._id || entry.courseId) !== courseId),
+      ])
+      onLearningDataChanged()
+    } catch (enrollError) {
+      setEnrollmentErrors((current) => ({
+        ...current,
+        [courseId]: enrollError instanceof Error ? enrollError.message : 'You could not be enrolled in this course.',
+      }))
+    } finally {
+      setEnrollingCourseId('')
+    }
+  }
+
+  return (
+    <section className="student-panel student-available-courses" aria-labelledby="student-available-courses-title">
+      <div className="student-section-heading">
+        <div><span className="student-eyebrow">KEEP LEARNING</span><h2 id="student-available-courses-title">All Courses</h2></div>
+      </div>
+      {error && <p className="student-courses__message is-error" role="alert">{error}</p>}
+      {loading ? <p role="status">Loading courses…</p> : !error && (
+        courses.length
+          ? <div className="student-available-courses__grid">
+            {courses.map((course) => (
+              <StudentAvailableCourseCard
+                key={course._id}
+                course={course}
+                enrollment={enrollmentsByCourseId.get(String(course._id))}
+                onEnroll={enrollInCourse}
+                enrolling={enrollingCourseId === String(course._id)}
+                error={enrollmentErrors[String(course._id)]}
+              />
+            ))}
+          </div>
+          : <EmptyState
+            icon="book"
+            title="No published courses yet"
+            description="Published courses will appear here when the administrator adds them."
+          />
+      )}
+    </section>
+  )
+}
+
+function StudentCourseLearning({
+  enrollment,
+  onEnrollmentUpdated,
+  onLearningDataChanged,
+  onLogout,
+  requestedLessonId,
+  contentSearch,
+}) {
+  const location = useLocation()
+  const navigate = useNavigate()
+  const course = enrollment.courseId
+  const lessons = getCourseLessons(course)
+  const moduleItems = (course.modules || []).map((module, index) => ({
+    module,
+    moduleKey: String(module._id || `${module.title}-${index}`),
+    items: getModuleLearningItems(module, index),
+  }))
+  const courseLevelItems = [
+    ...(course.quizzes || []).map((quiz, index) => ({
+      type: 'quiz',
+      title: quiz.title || `Course quiz ${index + 1}`,
+      quiz,
+      _learningKey: String(quiz._id || `course-quiz-${index}`),
+      _moduleKey: '',
+    })),
+    ...(course.assignments || []).map((assignment, index) => ({
+      ...assignment,
+      type: 'assignment',
+      _learningKey: String(assignment._id || `course-assignment-${index}`),
+      _moduleKey: '',
+    })),
+  ]
+  const allContentItems = [...moduleItems.flatMap(({ items }) => items), ...courseLevelItems]
+  const [activeLessonId, setActiveLessonId] = useState(() => (
+    lessons.some(({ lesson }) => String(lesson._id) === requestedLessonId)
+      ? requestedLessonId
+      : lessons[0]?.lessonKey || ''
+  ))
+  const [activeContentItemId, setActiveContentItemId] = useState('')
+  const [detailsTab, setDetailsTab] = useState('overview')
+  const [expandedModules, setExpandedModules] = useState(() => new Set(
+    course.modules?.length ? [String(course.modules[0]._id || `${course.modules[0].title}-0`)] : [],
+  ))
+  const [savingLessonId, setSavingLessonId] = useState('')
+  const [progressError, setProgressError] = useState('')
+  const [assignmentSubmissions, setAssignmentSubmissions] = useState(enrollment.assignmentSubmissions || [])
+  const [quizAttempts, setQuizAttempts] = useState(enrollment.quizAttempts || [])
+  const videoPlayerRef = useRef(null)
+  const startedLessonIds = useRef(new Set([
+    ...(enrollment.startedLessonIds || []).map(String),
+    ...(enrollment.completedLessonIds || []).map(String),
+  ]))
+  const activeIndex = Math.max(0, lessons.findIndex(({ lesson, lessonKey }) => (
+    String(lesson._id || lessonKey) === activeLessonId
+  )))
+  const activeEntry = lessons[activeIndex]
+  const activeContentItem = allContentItems.find((item) => item._learningKey === activeContentItemId)
+  const completedLessonIds = new Set((enrollment.completedLessonIds || []).map(String))
+  const filteredModuleItems = moduleItems.map((group) => ({
+    ...group,
+    items: group.items.filter((item) => (
+      !contentSearch || item.title?.toLowerCase().includes(contentSearch.trim().toLowerCase())
+    )),
+  }))
+  const filteredCourseLevelItems = courseLevelItems.filter((item) => (
+    !contentSearch || item.title?.toLowerCase().includes(contentSearch.trim().toLowerCase())
+  ))
+  const courseResources = [
+    ...lessons.flatMap(({ lesson }) => lesson.resources || []),
+    ...allContentItems.flatMap((item) => item.resources || []),
+  ].filter((resource) => resource.url)
+    .filter((resource, index, resources) => resources.findIndex((entry) => entry.url === resource.url) === index)
+  const courseNotes = allContentItems.filter((item) => item.type === 'note')
+  const activeContentIndex = allContentItems.findIndex((item) => (
+    item._learningKey === activeContentItemId
+    || (!activeContentItemId && item.type === 'video-lesson' && item._learningKey === activeEntry?.lessonKey)
+  ))
+  const showVideoPlayer = detailsTab === 'overview'
+    && (!activeContentItem || activeContentItem.type === 'video-lesson')
+
+  useEffect(() => {
+    const matchedLesson = lessons.find(({ lesson }) => String(lesson._id) === requestedLessonId)
+    if (matchedLesson) {
+      setActiveLessonId(String(matchedLesson.lesson._id))
+      setExpandedModules((current) => new Set(current).add(matchedLesson.moduleKey))
+    } else if (lessons.length && !lessons.some(({ lesson, lessonKey }) => String(lesson._id || lessonKey) === activeLessonId)) {
+      setActiveLessonId(lessons[0].lessonKey)
+    }
+  }, [requestedLessonId, course._id])
+
+  useEffect(() => {
+    if (activeEntry) void setLessonStarted(activeEntry)
+  }, [activeLessonId, enrollment._id])
+
+  function selectLesson(entry) {
+    const id = String(entry.lesson._id || entry.lessonKey)
+    setActiveContentItemId('')
+    setDetailsTab('overview')
+    setActiveLessonId(id)
+    setExpandedModules((current) => new Set(current).add(entry.moduleKey))
+    const params = new URLSearchParams(location.search)
+    params.set('lesson', id)
+    navigate(`${location.pathname}?${params.toString()}`, { replace: true })
+  }
+
+  function selectContentItem(item) {
+    if (item.type === 'video-lesson') {
+      const lesson = lessons.find((entry) => String(entry.lesson._id || entry.lessonKey) === item._learningKey)
+      if (lesson) selectLesson(lesson)
+      return
+    }
+    videoPlayerRef.current?.pause()
+    setActiveContentItemId(item._learningKey)
+    setDetailsTab(item.type === 'note' ? 'notes' : 'overview')
+    if (item._moduleKey) {
+      setExpandedModules((current) => new Set(current).add(item._moduleKey))
+    }
+  }
+
+  function addAssignmentSubmission(submission) {
+    setAssignmentSubmissions((current) => [submission, ...current])
+  }
+
+  function addQuizAttempt(attempt) {
+    setQuizAttempts((current) => [attempt, ...current.filter((entry) => String(entry._id) !== String(attempt._id))])
+  }
+
+  async function setLessonStarted(entry) {
+    const lessonId = String(entry.lesson._id || '')
+    if (!lessonId || startedLessonIds.current.has(lessonId)) return
+    startedLessonIds.current.add(lessonId)
+    setProgressError('')
+    try {
+      const savedAuth = sessionStorage.getItem('lms.auth')
+      const auth = savedAuth ? JSON.parse(savedAuth) : null
+      if (typeof auth?.token !== 'string') {
+        startedLessonIds.current.delete(lessonId)
+        onLogout()
+        return
+      }
+      const response = await fetch(`${API_BASE_URL}/enrollments/${encodeURIComponent(enrollment._id)}/progress`, {
+        method: 'PATCH',
+        headers: {
+          Authorization: `Bearer ${auth.token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ lessonId, started: true }),
+      })
+      const result = await response.json()
+      if (isInvalidSessionResponse(response, result)) {
+        startedLessonIds.current.delete(lessonId)
+        onLogout()
+        return
+      }
+      if (!response.ok) throw new Error(result.message || 'Lesson progress could not be saved.')
+      onLearningDataChanged()
+    } catch (saveError) {
+      startedLessonIds.current.delete(lessonId)
+      setProgressError(saveError instanceof Error ? saveError.message : 'Lesson progress could not be saved.')
+    }
+  }
+
+  async function setLessonCompleted(entry, completed) {
+    const lessonId = String(entry.lesson._id || '')
+    if (!lessonId) {
+      setProgressError('This lesson cannot be tracked because it has no saved lesson ID.')
+      return
+    }
+    setSavingLessonId(lessonId)
+    setProgressError('')
+    try {
+      const savedAuth = sessionStorage.getItem('lms.auth')
+      const auth = savedAuth ? JSON.parse(savedAuth) : null
+      if (typeof auth?.token !== 'string') {
+        onLogout()
+        return
+      }
+      const response = await fetch(`${API_BASE_URL}/enrollments/${encodeURIComponent(enrollment._id)}/progress`, {
+        method: 'PATCH',
+        headers: {
+          Authorization: `Bearer ${auth.token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ lessonId, completed }),
+      })
+      const result = await response.json()
+      if (isInvalidSessionResponse(response, result)) {
+        onLogout()
+        return
+      }
+      if (!response.ok) throw new Error(result.message || 'Lesson progress could not be saved.')
+      onEnrollmentUpdated({ ...enrollment, completedLessonIds: result.completedLessonIds || [] })
+      startedLessonIds.current.add(lessonId)
+      onLearningDataChanged()
+    } catch (saveError) {
+      setProgressError(saveError instanceof Error ? saveError.message : 'Lesson progress could not be saved.')
+    } finally {
+      setSavingLessonId('')
+    }
+  }
+
+  function moveLesson(offset) {
+    const nextEntry = lessons[activeIndex + offset]
+    if (nextEntry) selectLesson(nextEntry)
+  }
+
+  function moveContent(offset) {
+    const nextItem = allContentItems[activeContentIndex + offset]
+    if (nextItem) selectContentItem(nextItem)
+  }
+
+  return (
+    <div className="student-course-learning">
+      {progressError && <p className="student-courses__message is-error" role="alert">{progressError}</p>}
+      {allContentItems.length ? (
+        <div className="student-course-learning__layout">
+          <aside className="student-course-learning__sidebar" aria-label="Course modules and lessons">
+            <header className="student-course-learning__sidebar-header">
+              <h2 className={course.title?.trim().toLowerCase() === 'python' ? 'is-python' : undefined}>{course.title}</h2>
+            </header>
+            {filteredModuleItems.map(({ module, moduleKey, items }) => {
+              const expanded = expandedModules.has(moduleKey) || Boolean(contentSearch.trim())
+              return (
+                <section className={`student-course-learning__module${expanded ? ' is-expanded' : ''}`} key={moduleKey}>
+                  <button type="button" aria-expanded={expanded} onClick={() => {
+                    setExpandedModules((current) => {
+                      const next = new Set(current)
+                      if (next.has(moduleKey)) next.delete(moduleKey)
+                      else next.add(moduleKey)
+                      return next
+                    })
+                  }}>
+                    <span>{module.title}<small>{items.length} {items.length === 1 ? 'item' : 'items'}</small></span><span>{expanded ? '⌃' : '⌄'}</span>
+                  </button>
+                  {expanded && (items.length
+                    ? <ul>{items.map((item) => {
+                      const isSelected = item._learningKey === activeContentItemId
+                        || (!activeContentItem && detailsTab === 'overview' && item.type === 'video-lesson' && item._learningKey === activeEntry?.lessonKey)
+                      const isCompleted = item.type === 'video-lesson' && completedLessonIds.has(String(item._id))
+                      const quizAttemptCount = item.quiz?._id
+                        ? quizAttempts.filter((attempt) => String(attempt.quizId) === String(item.quiz._id)).length
+                        : 0
+                      const assignmentSubmitted = item.type === 'assignment'
+                        && assignmentSubmissions.some((submission) => String(submission.assignmentId) === String(item._id))
+                      const status = item.type === 'video-lesson'
+                        ? isCompleted ? 'Completed' : item.durationSeconds ? `${Math.ceil(item.durationSeconds / 60)} min` : 'Video'
+                        : item.type === 'quiz'
+                          ? `${quizAttemptCount} ${quizAttemptCount === 1 ? 'attempt' : 'attempts'}`
+                          : item.type === 'assignment'
+                            ? assignmentSubmitted ? 'Submitted' : 'Assignment'
+                            : item.type === 'note' ? 'Notes / PDF' : getStudentContentLabel(item.type)
+                      return (
+                        <li key={item._learningKey}>
+                          <button
+                            id={item._id ? `student-content-${item._id}` : undefined}
+                            className={isSelected ? 'is-selected' : ''}
+                            type="button"
+                            aria-current={isSelected ? 'true' : undefined}
+                            onClick={() => selectContentItem(item)}
+                          >
+                            <span className={`student-course-learning__item-icon${isCompleted || assignmentSubmitted ? ' is-complete' : ''}`}>
+                              <Icon name={isCompleted || assignmentSubmitted ? 'check' : item.type === 'assignment' || item.type === 'quiz' ? 'clipboardCheck' : item.type === 'note' ? 'folderOpen' : 'play'} size={15} />
+                            </span>
+                            <span className="student-course-learning__item-copy"><strong>{item.title}</strong><small>{status}</small></span>
+                            {isSelected && <span className="student-course-learning__play">▶</span>}
+                          </button>
+                        </li>
+                      )
+                    })}</ul>
+                    : <p className="student-course-learning__empty-module">{contentSearch ? 'No matching content in this module.' : 'No content in this module.'}</p>)}
+                </section>
+              )
+            })}
+            {filteredCourseLevelItems.length > 0 && (
+              <section className="student-course-learning__module student-course-learning__course-items">
+                <strong>Course activities</strong>
+                <ul>{filteredCourseLevelItems.map((item) => (
+                  <li key={item._learningKey}>
+                    <button
+                      className={item._learningKey === activeContentItemId ? 'is-selected' : ''}
+                      type="button"
+                      aria-current={item._learningKey === activeContentItemId ? 'true' : undefined}
+                      onClick={() => selectContentItem(item)}
+                    >
+                      <span>{item.title}</span>
+                      <small>{getStudentContentLabel(item.type)}</small>
+                    </button>
+                  </li>
+                ))}</ul>
+              </section>
+            )}
+            <section className="student-course-learning__sidebar-links" aria-label="Course materials">
+              <button
+                className={detailsTab === 'notes' ? 'is-selected' : ''}
+                type="button"
+                aria-pressed={detailsTab === 'notes'}
+                onClick={() => {
+                  videoPlayerRef.current?.pause()
+                  setActiveContentItemId(COURSE_NOTES_KEY)
+                  setDetailsTab('notes')
+                }}
+              >
+                <span className="student-course-learning__item-icon"><Icon name="pen" size={15} /></span>
+                <strong>Notes</strong>
+              </button>
+              <button
+                className={detailsTab === 'resources' ? 'is-selected' : ''}
+                type="button"
+                aria-pressed={detailsTab === 'resources'}
+                onClick={() => {
+                  videoPlayerRef.current?.pause()
+                  setActiveContentItemId(COURSE_RESOURCES_KEY)
+                  setDetailsTab('resources')
+                }}
+              >
+                <span className="student-course-learning__item-icon"><Icon name="link" size={15} /></span>
+                <strong>Resources</strong>
+              </button>
+            </section>
+            {contentSearch && !filteredModuleItems.some(({ items }) => items.length) && !filteredCourseLevelItems.length && (
+              <p className="student-course-learning__empty-module">No course content matches “{contentSearch}”.</p>
+            )}
+          </aside>
+          <div className={`student-course-learning__main${showVideoPlayer ? ' student-course-learning__main--video' : ' student-course-learning__main--activity'}`}>
+            {showVideoPlayer && (
+              <div className="student-course-learning__active-heading">
+                <div>
+                  <h2>{activeEntry?.lesson.title || 'Select course content'}</h2>
+                  <span className="student-course-learning__type student-course-learning__type--video-lesson">
+                    <Icon name="book" size={14} />
+                    {getStudentContentLabel('video-lesson')}
+                  </span>
+                </div>
+              </div>
+            )}
+            {showVideoPlayer && (
+              <div className="student-course-learning__player">
+                {activeEntry?.lesson.videoUrl
+                  ? <video ref={videoPlayerRef} key={activeEntry.lesson.videoUrl} controls playsInline preload="metadata" src={activeEntry.lesson.videoUrl} onEnded={() => {
+                    if (!completedLessonIds.has(String(activeEntry.lesson._id))) setLessonCompleted(activeEntry, true)
+                  }}>
+                    Your browser does not support video playback.
+                  </video>
+                  : <div className="student-course-learning__no-video">No video has been uploaded for this lesson.</div>}
+              </div>
+            )}
+            {showVideoPlayer && (
+              <div className="student-course-learning__video-nav">
+                <button type="button" disabled={activeContentIndex <= 0} onClick={() => moveContent(-1)}>← Previous</button>
+                <button type="button" disabled={activeContentIndex < 0 || activeContentIndex >= allContentItems.length - 1} onClick={() => moveContent(1)}>Next →</button>
+              </div>
+            )}
+            <section className="student-course-learning__details">
+              {!showVideoPlayer && <div className="student-course-learning__active-heading">
+                <div>
+                  <h2>{activeContentItem?.title || (detailsTab === 'notes' ? 'Notes' : detailsTab === 'resources' ? 'Resources' : activeEntry?.lesson.title) || 'Select course content'}</h2>
+                  <span className={`student-course-learning__type student-course-learning__type--${activeContentItem?.type || 'video-lesson'}`}>
+                    <Icon name={activeContentItem?.type === 'assignment' ? 'clipboardCheck' : activeContentItem?.type === 'note' || detailsTab === 'notes' ? 'folderOpen' : activeContentItem?.type === 'quiz' ? 'check' : detailsTab === 'resources' ? 'link' : 'book'} size={14} />
+                    {detailsTab === 'resources'
+                      ? 'Resources'
+                      : getStudentContentLabel(activeContentItem?.type || (detailsTab === 'notes' ? 'note' : 'video-lesson'))}
+                  </span>
+                </div>
+                {!showVideoPlayer && <div className="student-course-learning__detail-nav">
+                  <button type="button" disabled={activeContentIndex <= 0} onClick={() => moveContent(-1)}>← Previous</button>
+                  <button type="button" disabled={activeContentIndex < 0 || activeContentIndex >= allContentItems.length - 1} onClick={() => moveContent(1)}>Next →</button>
+                </div>}
+              </div>}
+              {detailsTab === 'overview' && (activeContentItem?.description || (!activeContentItem && activeEntry?.lesson.content)) && (
+                <p className="student-course-learning__active-description">
+                  {activeContentItem?.description || activeEntry?.lesson.content}
+                </p>
+              )}
+              <div className="student-course-learning__tabs" role="tablist" aria-label="Course information">
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={detailsTab === 'overview'}
+                  className={detailsTab === 'overview' ? 'is-active' : ''}
+                  onClick={() => {
+                    setActiveContentItemId('')
+                    setDetailsTab('overview')
+                  }}
+                >
+                  <Icon name="book" size={15} />
+                  Overview
+                </button>
+              </div>
+              {detailsTab === 'notes' ? (
+                <div className="student-course-learning__tab-content">
+                  {courseNotes.length ? courseNotes.map((note) => (
+                    <article className="student-course-learning__note-card" key={note._learningKey}>
+                      <h3>{note.title}</h3>
+                      {note.content && <p>{note.content}</p>}
+                      {note.resources?.length > 0 && (
+                        <ul className="student-course-note__resources">
+                          {note.resources.map((resource, index) => (
+                            <li key={resource._id || `${resource.url}-${index}`}>
+                              <a href={resource.url} target="_blank" rel="noreferrer" download={resource.resourceType === 'raw' || resource.format === 'pdf' ? resource.title : undefined}>
+                                {resource.title || `Resource ${index + 1}`}
+                              </a>
+                              {resource.format && <small>{resource.format.toUpperCase()}</small>}
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                    </article>
+                  )) : <p className="student-course-learning__tab-empty">No notes have been added to this course.</p>}
+                </div>
+              ) : detailsTab === 'resources' ? (
+                <div className="student-course-learning__tab-content">
+                  {courseResources.length ? (
+                    <ul className="student-course-note__resources">
+                      {courseResources.map((resource, index) => (
+                        <li key={resource._id || `${resource.url}-${index}`}>
+                          <a href={resource.url} target="_blank" rel="noreferrer" download={resource.resourceType === 'raw' || resource.format === 'pdf' ? resource.title : undefined}>
+                            {resource.title || `Resource ${index + 1}`}
+                          </a>
+                          {resource.format && <small>{resource.format.toUpperCase()}</small>}
+                        </li>
+                      ))}
+                    </ul>
+                  ) : <p className="student-course-learning__tab-empty">No resources have been added to this course.</p>}
+                </div>
+              ) : (
+                <div className="student-course-learning__tab-content">
+                  {activeContentItem?.type === 'quiz' ? (
+                    activeContentItem.quiz?.questions?.length ? (
+                      <StudentQuizExperience
+                        key={activeContentItem._learningKey}
+                        courseId={course._id}
+                        enrollmentId={enrollment._id}
+                        quiz={activeContentItem.quiz}
+                        attempts={quizAttempts}
+                        onAttemptAdded={addQuizAttempt}
+                        onLearningDataChanged={onLearningDataChanged}
+                        onLogout={onLogout}
+                        showHeader={false}
+                      />
+                    ) : <EmptyState icon="check" title="Quiz is not available" description="This quiz does not contain any questions." />
+                  ) : activeContentItem?.type === 'assignment' ? (
+                    <StudentAssignmentPanel
+                      key={activeContentItem._learningKey}
+                      courseId={course._id}
+                      enrollmentId={enrollment._id}
+                      assignment={activeContentItem}
+                      submissions={assignmentSubmissions}
+                      onSubmitted={addAssignmentSubmission}
+                      onLearningDataChanged={onLearningDataChanged}
+                      onLogout={onLogout}
+                      showHeader={false}
+                    />
+                  ) : activeContentItem?.type === 'note' ? (
+                    <StudentNotePanel item={activeContentItem} />
+                  ) : activeEntry ? (
+                    <section className="student-course-learning__lesson">
+                      <span className="student-eyebrow">{activeEntry.module.title}</span>
+                      <button
+                        className={`student-button${completedLessonIds.has(String(activeEntry.lesson._id)) ? ' student-button--quiet' : ''}`}
+                        type="button"
+                        disabled={savingLessonId === String(activeEntry.lesson._id) || !activeEntry.lesson._id}
+                        onClick={() => setLessonCompleted(activeEntry, !completedLessonIds.has(String(activeEntry.lesson._id)))}
+                      >
+                        {savingLessonId === String(activeEntry.lesson._id)
+                          ? 'Saving…'
+                          : completedLessonIds.has(String(activeEntry.lesson._id)) ? 'Mark incomplete' : 'Mark as complete'}
+                      </button>
+                    </section>
+                  ) : <EmptyState icon="book" title="Select course content" description="Choose a video, quiz, assignment, or note from the course content list." />}
+                </div>
+              )}
+            </section>
+          </div>
+        </div>
+      ) : <EmptyState icon="book" title="Course content is not available yet" description="This enrolled course does not currently have any lessons or activities." />}
+    </div>
+  )
 }
 
 async function referralsRequest(path, { onLogout, method = 'GET', body, signal }) {
@@ -505,57 +1452,45 @@ function StudentReferrals({ onLogout }) {
   )
 }
 
-function StudentCourses({ user, onLogout }) {
-  const [courses, setCourses] = useState([])
-  const [enrollments, setEnrollments] = useState([])
-  const [error, setError] = useState('')
+function StudentCourseDetailsPage({ user, onLogout, onLearningDataChanged }) {
+  const { courseId } = useParams()
+  const navigate = useNavigate()
+  const [course, setCourse] = useState(null)
   const [loading, setLoading] = useState(true)
-  const [enrollingId, setEnrollingId] = useState('')
-  const [message, setMessage] = useState('')
+  const [enrolling, setEnrolling] = useState(false)
+  const [error, setError] = useState('')
   const isCollegeStudent = user?.studentType === 'college' || Boolean(user?.collegeId)
-  const location = useLocation()
-  const requestedFilter = new URLSearchParams(location.search).get('filter')
-  const requestedCourseId = new URLSearchParams(location.search).get('course')
-  const requestedLessonId = new URLSearchParams(location.search).get('lesson')
-  const enrollmentFilter = ['enrolled', 'completed', 'active'].includes(requestedFilter) ? requestedFilter : ''
-
-  async function loadCourses() {
-    const savedAuth = sessionStorage.getItem('lms.auth')
-    const auth = savedAuth ? JSON.parse(savedAuth) : null
-    if (typeof auth?.token !== 'string') {
-      onLogout()
-      return
-    }
-    const headers = { Authorization: `Bearer ${auth.token}` }
-    const [courseResponse, enrollmentResponse] = await Promise.all([
-      fetch(`${API_BASE_URL}/courses`, { headers }),
-      fetch(`${API_BASE_URL}/enrollments/me`, { headers }),
-    ])
-    const [courseResult, enrollmentResult] = await Promise.all([
-      courseResponse.json(),
-      enrollmentResponse.json(),
-    ])
-    if (isInvalidSessionResponse(courseResponse, courseResult) ||
-      isInvalidSessionResponse(enrollmentResponse, enrollmentResult)) {
-      onLogout()
-      return
-    }
-    if (!courseResponse.ok) throw new Error(courseResult.message || 'Unable to load courses.')
-    if (!enrollmentResponse.ok) throw new Error(enrollmentResult.message || 'Unable to load your enrollments.')
-    setCourses(courseResult.courses || [])
-    setEnrollments(enrollmentResult.enrollments || [])
-  }
+  const courseLessons = course ? getCourseLessons(course) : []
+  const courseCounts = course ? getCourseCounts(course) : { modules: 0, lessons: 0 }
 
   useEffect(() => {
-    loadCourses()
-      .catch((loadError) => setError(loadError instanceof Error ? loadError.message : 'Unable to load course data.'))
-      .finally(() => setLoading(false))
-  }, [user?.id])
+    const controller = new AbortController()
+    Promise.all([
+      fetchPublishedCourses(onLogout, controller.signal),
+      fetchMyEnrollments(onLogout, controller.signal),
+    ])
+      .then(([publishedCourses, enrollments]) => {
+        const enrolled = enrollments.find((entry) => String(entry.courseId?._id || entry.courseId) === courseId)
+        if (enrolled) {
+          navigate(`/student/course/${encodeURIComponent(courseId)}/learn`, { replace: true })
+          return
+        }
+        const selectedCourse = publishedCourses.find((item) => String(item._id) === courseId)
+        if (!selectedCourse) throw new Error('This course is not currently published or available.')
+        setCourse(selectedCourse)
+      })
+      .catch((loadError) => {
+        if (loadError.name !== 'AbortError') {
+          setError(loadError instanceof Error ? loadError.message : 'Course details could not be loaded.')
+        }
+      })
+      .finally(() => { if (!controller.signal.aborted) setLoading(false) })
+    return () => controller.abort()
+  }, [courseId, navigate, onLogout])
 
-  async function enroll(courseId) {
-    setEnrollingId(courseId)
+  async function enroll() {
+    setEnrolling(true)
     setError('')
-    setMessage('')
     try {
       const savedAuth = sessionStorage.getItem('lms.auth')
       const auth = savedAuth ? JSON.parse(savedAuth) : null
@@ -576,17 +1511,170 @@ function StudentCourses({ user, onLogout }) {
         onLogout()
         return
       }
-      if (!response.ok) throw new Error(result.message || 'Unable to enroll in this course.')
-      setMessage(result.message)
-      await loadCourses()
+      if (!response.ok) throw new Error(result.message || 'You could not be enrolled in this course.')
+      if (!result.enrollment?._id) throw new Error('The server did not confirm your enrollment.')
+      onLearningDataChanged()
+      navigate(`/student/course/${encodeURIComponent(courseId)}/learn`, { replace: true })
     } catch (enrollError) {
-      setError(enrollError instanceof Error ? enrollError.message : 'Unable to enroll in this course.')
+      setError(enrollError instanceof Error ? enrollError.message : 'You could not be enrolled in this course.')
     } finally {
-      setEnrollingId('')
+      setEnrolling(false)
     }
   }
 
-  const enrolledCourseIds = new Set(enrollments.map((entry) => String(entry.courseId?._id || entry.courseId)))
+  return (
+    <StudentRoutePage title={course?.title || 'Course details'}>
+      {error && <p className="student-courses__message is-error" role="alert">{error}</p>}
+      {loading ? <p role="status">Loading course details…</p> : course && (
+        <div className="student-course-details">
+          <Link className="student-section-link" to="/student/dashboard">← Back to dashboard</Link>
+          <section className="student-course-details__intro">
+            <header className="student-course-details__header">
+              <div className="student-course-details__identity">
+                <p className="student-course-details__category">
+                  {course.category || 'Other'} <span>·</span> {course.difficulty?.replaceAll('-', ' ') || 'Beginner'}
+                </p>
+                <h1>{course.title}</h1>
+                <span className="student-course-details__published">Published</span>
+              </div>
+              <div className="student-course-details__enroll">
+                {isCollegeStudent
+                  ? <p>Enrollment for this course is managed by your college administrator.</p>
+                  : <button type="button" className="student-enrolled-course__continue" disabled={enrolling} onClick={enroll}>
+                    {enrolling ? 'Enrolling…' : 'Enroll for free'}
+                  </button>}
+              </div>
+            </header>
+            <p className="student-course-details__description">{course.description || course.detailedDescription || 'No course description added yet.'}</p>
+          </section>
+          <section className="student-course-details__facts" aria-label="Course overview">
+            <div><span>Course duration</span><strong>{formatCourseDuration(course.estimatedDurationMinutes)}</strong></div>
+            <div><span>Modules</span><strong>{courseCounts.modules}</strong></div>
+            <div><span>Lessons</span><strong>{courseCounts.lessons}</strong></div>
+          </section>
+          {(course.learningObjectives?.length > 0 || course.prerequisites?.length > 0) && (
+            <div className="student-course-details__information">
+              {course.learningObjectives?.length > 0 && (
+                <section className="student-course-details__section">
+                  <h2>What you’ll learn</h2>
+                  <ul>{course.learningObjectives.map((objective, index) => <li key={`${objective}-${index}`}>{objective}</li>)}</ul>
+                </section>
+              )}
+              {course.prerequisites?.length > 0 && (
+                <section className="student-course-details__section">
+                  <h2>Prerequisites</h2>
+                  <ul>{course.prerequisites.map((prerequisite, index) => <li key={`${prerequisite}-${index}`}>{prerequisite}</li>)}</ul>
+                </section>
+              )}
+            </div>
+          )}
+          <section className="student-course-details__section">
+            <h2>Course modules</h2>
+            {course.modules?.length ? course.modules.map((module, moduleIndex) => {
+              const moduleKey = String(module._id || `${module.title}-${moduleIndex}`)
+              const moduleLessons = courseLessons.filter((entry) => entry.moduleKey === moduleKey)
+              return (
+                <article className="student-course-details__module" key={moduleKey}>
+                  <h3>{module.title}</h3>
+                  {module.description && <p>{module.description}</p>}
+                  {moduleLessons.length
+                    ? <ul>{moduleLessons.map(({ lesson, lessonKey }) => (
+                      <li key={lessonKey}>
+                        <strong>{lesson.title}</strong>
+                        {lesson.content && <p>{lesson.content}</p>}
+                      </li>
+                    ))}</ul>
+                    : <p>No lessons have been added to this module.</p>}
+                </article>
+              )
+            }) : <EmptyState icon="book" title="Course content is not available yet" description="This course does not currently have any modules or lessons." />}
+          </section>
+        </div>
+      )}
+    </StudentRoutePage>
+  )
+}
+
+function StudentCourseLearningPage({
+  onLogout,
+  onLearningDataChanged,
+  onCourseTitleChange,
+  contentSearch,
+}) {
+  const { courseId } = useParams()
+  const [enrollment, setEnrollment] = useState(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+  const location = useLocation()
+  const requestedLessonId = new URLSearchParams(location.search).get('lesson')
+
+  useEffect(() => {
+    onCourseTitleChange(enrollment?.courseId?.title || '')
+  }, [enrollment?.courseId?.title, onCourseTitleChange])
+
+  useEffect(() => {
+    const controller = new AbortController()
+    setLoading(true)
+    setError('')
+    fetchStudentCourseContent(courseId, onLogout, controller.signal)
+      .then(({ enrollment: courseEnrollment, assignmentSubmissions, quizAttempts }) => {
+        setEnrollment({
+          ...courseEnrollment,
+          assignmentSubmissions,
+          quizAttempts,
+        })
+      })
+      .catch((loadError) => {
+        if (loadError.name !== 'AbortError') {
+          setError(loadError instanceof Error ? loadError.message : 'Your course could not be loaded.')
+        }
+      })
+      .finally(() => { if (!controller.signal.aborted) setLoading(false) })
+    return () => controller.abort()
+  }, [courseId, onLogout])
+
+  return (
+    <StudentRoutePage title={enrollment?.courseId?.title || 'Course learning'} className="student-course-learning-page">
+      {error && <p className="student-courses__message is-error" role="alert">{error}</p>}
+      {loading ? <p role="status">Loading your course…</p> : enrollment && (
+        <StudentCourseLearning
+          enrollment={enrollment}
+          onEnrollmentUpdated={(updates) => setEnrollment((current) => current ? {
+            ...current,
+            ...updates,
+            courseId: current.courseId,
+          } : current)}
+          onLearningDataChanged={onLearningDataChanged}
+          onLogout={onLogout}
+          requestedLessonId={requestedLessonId}
+          contentSearch={contentSearch}
+        />
+      )}
+    </StudentRoutePage>
+  )
+}
+
+function StudentCourses({ user, onLogout }) {
+  const [enrollments, setEnrollments] = useState([])
+  const [error, setError] = useState('')
+  const [loading, setLoading] = useState(true)
+  const location = useLocation()
+  const requestedFilter = new URLSearchParams(location.search).get('filter')
+  const enrollmentFilter = ['enrolled', 'completed', 'active'].includes(requestedFilter) ? requestedFilter : ''
+
+  useEffect(() => {
+    const controller = new AbortController()
+    fetchMyEnrollments(onLogout, controller.signal)
+      .then(setEnrollments)
+      .catch((loadError) => {
+        if (loadError.name !== 'AbortError') {
+          setError(loadError instanceof Error ? loadError.message : 'Unable to load your enrolled courses.')
+        }
+      })
+      .finally(() => { if (!controller.signal.aborted) setLoading(false) })
+    return () => controller.abort()
+  }, [onLogout, user?.id])
+
   const filteredEnrollments = enrollmentFilter
     ? enrollments.filter((entry) => enrollmentFilter === 'enrolled'
       ? ['active', 'completed'].includes(entry.status)
@@ -597,81 +1685,20 @@ function StudentCourses({ user, onLogout }) {
     : enrollmentFilter === 'active'
       ? 'Courses In Progress'
       : 'My Courses'
-  const selectedCourse = courses.find((course) => String(course._id) === requestedCourseId)
-
-  useEffect(() => {
-    if (!selectedCourse || !requestedLessonId) return undefined
-    const timeoutId = window.setTimeout(() => {
-      document.getElementById(`student-lesson-${requestedLessonId}`)?.scrollIntoView({ block: 'center', behavior: 'smooth' })
-    }, 0)
-    return () => window.clearTimeout(timeoutId)
-  }, [selectedCourse, requestedLessonId])
 
   return (
-    <StudentRoutePage title={selectedCourse ? selectedCourse.title : pageTitle} showHeading={Boolean(selectedCourse)}>
+    <StudentRoutePage title={pageTitle} showHeading>
       {error && <p className="student-courses__message is-error" role="alert">{error}</p>}
-      {message && <p className="student-courses__message" role="status">{message}</p>}
-      {loading ? <p>Loading courses…</p> : (
-        <>
-          {selectedCourse ? (
-            <div className="student-course-detail">
-              <Link className="student-section-link" to="/student/courses">← Back to courses</Link>
-              <p>{selectedCourse.description || 'No course description is available.'}</p>
-              {selectedCourse.modules?.length ? selectedCourse.modules.map((module) => (
-                <section className="student-course-detail__module" key={module._id || module.title}>
-                  <h3>{module.title}</h3>
-                  {module.description && <p>{module.description}</p>}
-                  {module.lessons?.length ? (
-                    <ul>
-                      {module.lessons.map((lesson) => (
-                        <li
-                          id={lesson._id ? `student-lesson-${lesson._id}` : undefined}
-                          className={String(lesson._id) === requestedLessonId ? 'is-selected' : ''}
-                          key={lesson._id || lesson.title}
-                        >
-                          <strong>{lesson.title}</strong>
-                          {lesson.content && <p>{lesson.content}</p>}
-                        </li>
-                      ))}
-                    </ul>
-                  ) : <p>No lessons have been added to this module.</p>}
-                </section>
-              )) : <EmptyState icon="book" title="Course content is not available yet" description="This course does not currently have any modules or lessons." />}
-            </div>
-          ) : enrollmentFilter ? (
-            filteredEnrollments.length === 0
-              ? <EmptyState icon={enrollmentFilter === 'completed' ? 'award' : 'book'} title={enrollmentFilter === 'completed' ? 'No completed courses yet' : enrollmentFilter === 'active' ? 'No courses in progress' : 'No enrolled courses yet'} description="Course status is based on your current enrollment records." />
-              : <ul className="student-courses__enrollments">
-                {filteredEnrollments.map((entry) => <li key={entry._id}>{entry.courseId?.title || 'Course'} <span>{entry.status}</span></li>)}
-              </ul>
-          ) : (
-            <>
-              <h3 className="student-courses__heading">Published courses</h3>
-              {courses.length === 0 ? <EmptyState icon="book" title="No published courses yet" description="Published courses will appear here when the administrator adds them." /> : (
-                <div className="student-courses__list">
-                  {courses.map((course) => {
-                    const isEnrolled = enrolledCourseIds.has(String(course._id))
-                    return (
-                      <article className="student-courses__card" key={course._id}>
-                        <div><h3>{course.title}</h3><p>{course.description || 'No description provided.'}</p>
-                          <small>{course.modules?.length || 0} modules</small></div>
-                        {isEnrolled ? <span className="student-courses__enrolled">Enrolled</span> : isCollegeStudent
-                          ? <span className="student-courses__enrolled">Ask your college administrator to enroll you</span>
-                          : <button type="button" disabled={enrollingId === course._id} onClick={() => enroll(course._id)}>{enrollingId === course._id ? 'Enrolling…' : 'Enroll'}</button>}
-                      </article>
-                    )
-                  })}
-                </div>
-              )}
-              <h3 className="student-courses__heading">Current enrollments</h3>
-              {enrollments.length === 0 ? <p>You are not enrolled in any courses yet.</p> : (
-                <ul className="student-courses__enrollments">
-                  {enrollments.map((entry) => <li key={entry._id}>{entry.courseId?.title || 'Course'} <span>{entry.status}</span></li>)}
-                </ul>
-              )}
-            </>
-          )}
-        </>
+      {loading ? <p role="status">Loading your courses…</p> : !error && (
+        <EnrollmentCourseCards
+          enrollments={filteredEnrollments}
+          emptyTitle={enrollmentFilter === 'completed'
+            ? 'No completed courses yet'
+            : enrollmentFilter === 'active'
+              ? 'No courses in progress'
+              : 'No enrolled courses yet'}
+          emptyDescription="Your courses and progress will appear here when an enrollment is available."
+        />
       )}
     </StudentRoutePage>
   )
@@ -766,7 +1793,7 @@ function StudentSearch({ onLogout, navigateTo }) {
           onLogout()
           throw new Error('Your session has ended. Please sign in again.')
         }
-        const response = await fetch(`${API_BASE_URL}/courses`, {
+        const response = await fetch(`${API_BASE_URL}/enrollments/me`, {
           headers: { Authorization: `Bearer ${auth.token}` },
           signal: controller.signal,
         })
@@ -776,10 +1803,12 @@ function StudentSearch({ onLogout, navigateTo }) {
           throw new Error('Your session has ended. Please sign in again.')
         }
         if (!response.ok) throw new Error(result.message || 'Search is temporarily unavailable.')
-        if (!Array.isArray(result.courses)) throw new Error('The server returned invalid course search data.')
+        if (!Array.isArray(result.enrollments)) throw new Error('The server returned invalid course search data.')
 
         const matches = []
-        for (const course of result.courses) {
+        for (const enrollment of result.enrollments) {
+          const course = enrollment.courseId
+          if (!course || typeof course !== 'object') continue
           const courseText = `${course.title || ''} ${course.description || ''}`.toLowerCase()
           if (courseText.includes(normalizedQuery)) {
             matches.push({
@@ -789,18 +1818,16 @@ function StudentSearch({ onLogout, navigateTo }) {
               courseId: course._id,
             })
           }
-          for (const [moduleIndex, module] of (course.modules || []).entries()) {
-            for (const [lessonIndex, lesson] of (module.lessons || []).entries()) {
-              const lessonText = `${lesson.title || ''} ${lesson.content || ''} ${module.title || ''}`.toLowerCase()
-              if (lessonText.includes(normalizedQuery)) {
-                matches.push({
-                  id: `lesson-${course._id}-${lesson._id || `${moduleIndex}-${lessonIndex}`}`,
-                  title: lesson.title,
-                  detail: `${course.title} · ${module.title}`,
-                  courseId: course._id,
-                  lessonId: lesson._id,
-                })
-              }
+          for (const { module, lesson, lessonKey } of getCourseLessons(course)) {
+            const lessonText = `${lesson.title || ''} ${lesson.content || ''} ${module.title || ''}`.toLowerCase()
+            if (lessonText.includes(normalizedQuery)) {
+              matches.push({
+                id: `lesson-${course._id}-${lessonKey}`,
+                title: lesson.title,
+                detail: `${course.title} · ${module.title}`,
+                courseId: course._id,
+                lessonId: lesson._id,
+              })
             }
           }
         }
@@ -826,9 +1853,10 @@ function StudentSearch({ onLogout, navigateTo }) {
   function selectResult(result) {
     setQuery('')
     setIsOpen(false)
-    const params = new URLSearchParams({ course: result.courseId })
+    const path = `/student/course/${encodeURIComponent(result.courseId)}/learn`
+    const params = new URLSearchParams()
     if (result.lessonId) params.set('lesson', result.lessonId)
-    navigateTo(`/student/courses?${params.toString()}`)
+    navigateTo(params.size ? `${path}?${params.toString()}` : path)
   }
 
   return (
@@ -864,10 +1892,10 @@ function StudentSearch({ onLogout, navigateTo }) {
       </label>
       {isOpen && query.trim().length >= 2 && (
         <div className="student-search-results" id="student-search-results" role="listbox" aria-label="Search results">
-          {status === 'loading' && <p role="status">Searching published courses…</p>}
+          {status === 'loading' && <p role="status">Searching your courses…</p>}
           {status === 'error' && <p className="is-error" role="alert">{error}</p>}
           {status === 'ready' && results.length === 0 && (
-            <p>No matching courses or lessons. Learning resources are not yet available to search.</p>
+            <p>No matching enrolled courses or lessons were found.</p>
           )}
           {status === 'ready' && results.map((result) => (
             <button
@@ -1030,12 +2058,21 @@ function StudentDashboard({
   onAccountUpdated,
 }) {
   const [sidebarOpen, setSidebarOpen] = useState(false)
+  const [selectedCourseCategory, setSelectedCourseCategory] = useState('')
+  const [courseLearningTitle, setCourseLearningTitle] = useState('')
+  const [courseContentSearch, setCourseContentSearch] = useState('')
+  const [courseBookmarked, setCourseBookmarked] = useState(false)
+  const [learningSummary, setLearningSummary] = useState(emptyLearningSummary)
+  const [learningSummaryLoading, setLearningSummaryLoading] = useState(true)
+  const [learningSummaryError, setLearningSummaryError] = useState('')
+  const [learningSummaryRefresh, setLearningSummaryRefresh] = useState(0)
   const location = useLocation()
   const navigate = useNavigate()
   const visibleNavigation = user?.studentType === 'independent'
     ? navigation
     : navigation.filter((item) => item.path !== '/student/referrals')
   const currentPage = visibleNavigation.find((item) => item.path === location.pathname)
+  const isCourseLearningPage = /^\/student\/course\/[^/]+\/learn$/.test(location.pathname)
   const isHelpPage = location.pathname.startsWith('/student/help')
   const secondaryPage = secondaryPages[location.pathname]
   const pageTitle = currentPage?.label || (isHelpPage ? 'Help Center' : secondaryPage?.label || 'Dashboard')
@@ -1058,6 +2095,32 @@ function StudentDashboard({
   const initials = user?.fullName
     ? user.fullName.trim().split(/\s+/).slice(0, 2).map((part) => part[0]).join('').toUpperCase()
     : 'S'
+  const completionPercentage = learningSummary.completionPercentage
+
+  useEffect(() => {
+    if (loading) return undefined
+    const controller = new AbortController()
+    setLearningSummaryLoading(true)
+    fetchStudentLearningSummary(onLogout, controller.signal)
+      .then((summary) => {
+        if (!controller.signal.aborted) {
+          setLearningSummary(summary)
+          setLearningSummaryError('')
+        }
+      })
+      .catch((summaryError) => {
+        if (!controller.signal.aborted) {
+          setLearningSummary(emptyLearningSummary)
+          setLearningSummaryError(summaryError instanceof Error
+            ? summaryError.message
+            : 'Learning statistics could not be loaded.')
+        }
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setLearningSummaryLoading(false)
+      })
+    return () => controller.abort()
+  }, [loading, user?.id, onLogout, learningSummaryRefresh])
 
   useEffect(() => {
     setSidebarOpen(false)
@@ -1065,22 +2128,41 @@ function StudentDashboard({
     document.querySelector('.student-main')?.scrollTo(0, 0)
   }, [location.pathname])
 
+  useEffect(() => {
+    if (!isCourseLearningPage) {
+      setCourseLearningTitle('')
+      setCourseContentSearch('')
+      setCourseBookmarked(false)
+    }
+  }, [isCourseLearningPage])
+
+  useEffect(() => {
+    if (!sidebarOpen) return undefined
+    function closeOnEscape(event) {
+      if (event.key === 'Escape') setSidebarOpen(false)
+    }
+    window.addEventListener('keydown', closeOnEscape)
+    return () => window.removeEventListener('keydown', closeOnEscape)
+  }, [sidebarOpen])
+
   function navigateTo(path) {
     setSidebarOpen(false)
     navigate(path)
   }
 
+  function refreshLearningSummary() {
+    setLearningSummaryRefresh((refresh) => refresh + 1)
+  }
+
   return (
-    <div className="student-dashboard">
-      {sidebarOpen && (
-        <button
-          className="student-dashboard__scrim"
-          type="button"
-          aria-label="Close navigation"
-          onClick={() => setSidebarOpen(false)}
-        />
-      )}
-      <aside className={`student-sidebar${sidebarOpen ? ' is-open' : ''}`} aria-label="Student navigation">
+    <div className={`student-dashboard${sidebarOpen ? ' is-sidebar-open' : ''}${isCourseLearningPage ? ' is-course-learning' : ''}`}>
+      <aside
+        id="student-navigation"
+        className={`student-sidebar${sidebarOpen ? ' is-open' : ''}`}
+        aria-label="Student navigation"
+        aria-hidden={!sidebarOpen}
+        inert={!sidebarOpen}
+      >
         <a className="student-sidebar__brand" href="/" aria-label="Morrow Learning home">
           <img src="/logo.png" alt="Morrow Learning" />
           <span>LEARN. GROW. BECOME.</span>
@@ -1109,20 +2191,53 @@ function StudentDashboard({
 
       <main className="student-main" id="student-overview">
         <header className="student-topbar">
-          <button
+          {!isCourseLearningPage && <button
             className="student-icon-button student-menu-toggle"
             type="button"
-            aria-label="Open navigation"
+            aria-label={sidebarOpen ? 'Close navigation' : 'Open navigation'}
             aria-expanded={sidebarOpen}
-            onClick={() => setSidebarOpen(true)}
+            aria-controls="student-navigation"
+            onClick={() => setSidebarOpen((open) => !open)}
           >
             <Icon name="menu" />
-          </button>
-          <div className="student-breadcrumb student-page-heading">
-            <Icon name={pageIcon} size={19} />
-            <strong>{pageTitle}</strong>
+          </button>}
+          <div className={`student-breadcrumb student-page-heading${isCourseLearningPage ? ' student-course-learning-topbar__identity' : ''}`}>
+            {isCourseLearningPage ? (
+              <>
+                <Link to="/student/courses">← Back to My Courses</Link>
+                <span aria-hidden="true" />
+                <strong>{courseLearningTitle || 'Course learning'}</strong>
+              </>
+            ) : (
+              <>
+                <Icon name={pageIcon} size={19} />
+                <strong>{pageTitle}</strong>
+              </>
+            )}
           </div>
-          <StudentSearch onLogout={onLogout} navigateTo={navigateTo} />
+          {isCourseLearningPage ? (
+            <label className="student-search student-course-learning-topbar__search">
+              <Icon name="search" size={17} />
+              <input
+                type="search"
+                value={courseContentSearch}
+                onChange={(event) => setCourseContentSearch(event.target.value)}
+                placeholder="Search here..."
+                aria-label="Search course content"
+              />
+            </label>
+          ) : <StudentSearch onLogout={onLogout} navigateTo={navigateTo} />}
+          {isCourseLearningPage && (
+            <button
+              className={`student-course-learning__bookmark student-course-learning-topbar__bookmark${courseBookmarked ? ' is-active' : ''}`}
+              type="button"
+              aria-label={courseBookmarked ? 'Remove course bookmark' : 'Bookmark course'}
+              aria-pressed={courseBookmarked}
+              onClick={() => setCourseBookmarked((saved) => !saved)}
+            >
+              <Icon name="book" size={17} />
+            </button>
+          )}
           <div className="student-topbar__actions">
             <ThemeToggle isDark={isDark} onToggle={onToggleTheme} className="student-theme-toggle" />
             <button
@@ -1181,13 +2296,18 @@ function StudentDashboard({
                 <LearningIllustration />
               </section>
 
+              {learningSummaryError && (
+                <p className="student-courses__message is-error" role="alert">{learningSummaryError}</p>
+              )}
               <section className="student-stats" aria-label="Student statistics">
                 {stats.map((stat) => (
                   <article className="student-stat" key={stat.label}>
                     <span className={`student-stat__icon is-${stat.tone}`}><Icon name={stat.icon} size={19} /></span>
                     <span className="student-stat__label">{stat.label}</span>
-                    <strong className="student-stat__value" aria-label="Data unavailable">—</strong>
-                    <small>Not yet connected to LMS data</small>
+                    <strong className="student-stat__value" aria-label={`${learningSummary[stat.value]} ${stat.label.toLowerCase()}`}>
+                      {learningSummary[stat.value]}
+                    </strong>
+                    <small>{learningSummaryLoading ? 'Updating your learning data…' : stat.caption}</small>
                   </article>
                 ))}
               </section>
@@ -1195,25 +2315,32 @@ function StudentDashboard({
               <section className="student-panel student-progress-panel" aria-labelledby="student-progress-title">
                 <div className="student-section-heading">
                   <div><span className="student-eyebrow">YOUR JOURNEY</span><h2 id="student-progress-title">My learning progress</h2></div>
-                  <span className="student-data-note">Progress tracking unavailable</span>
+                  <span className="student-data-note">
+                    {learningSummaryLoading ? 'Updating progress…' : `${learningSummary.totalLessons} lessons across enrolled courses`}
+                  </span>
                 </div>
                 <div className="student-progress-layout">
-                  <div className="student-donut" role="img" aria-label="Overall learning completion data unavailable">
-                    <div><strong>—</strong><span>OVERALL</span></div>
+                  <div
+                    className="student-donut"
+                    role="img"
+                    aria-label={`Overall learning completion ${completionPercentage}%`}
+                    style={{ background: `conic-gradient(#5d9a83 ${completionPercentage}%, #dedfd5 ${completionPercentage}% 100%)` }}
+                  >
+                    <div><strong>{completionPercentage}%</strong><span>OVERALL</span></div>
                   </div>
                   <div className="student-lesson-counts">
                     {[
-                      ['Completed lessons', 'mint'],
-                      ['Lessons in progress', 'gold'],
-                      ['Lessons not started', 'gray'],
-                    ].map(([label, tone]) => (
+                      ['Completed lessons', 'completedLessons', 'mint'],
+                      ['Lessons in progress', 'inProgressLessons', 'gold'],
+                      ['Lessons not started', 'notStartedLessons', 'gray'],
+                    ].map(([label, value, tone]) => (
                       <div className="student-lesson-count" key={label}>
                         <span className={`student-lesson-count__dot is-${tone}`} />
                         <span>{label}</span>
-                        <strong>—</strong>
+                        <strong>{learningSummary[value]}</strong>
                       </div>
                     ))}
-                    <p>Lesson progress will appear once course tracking is connected.</p>
+                    <p>Counts update as you start and complete lessons.</p>
                   </div>
                 </div>
               </section>
@@ -1222,36 +2349,49 @@ function StudentDashboard({
                 <h2 id="student-categories-title">Explore categories</h2>
                 <div className="student-categories__list">
                   {categories.map((category) => (
-                    <div className="student-category" key={category.label}>
+                    <button
+                      className={`student-category student-category-link${selectedCourseCategory === category.label ? ' is-selected' : ''}`}
+                      key={category.label}
+                      type="button"
+                      aria-pressed={selectedCourseCategory === category.label}
+                      onClick={() => setSelectedCourseCategory((current) => (
+                        current === category.label ? '' : category.label
+                      ))}
+                    >
                       <Icon name={category.icon} size={19} />
                       {category.label}
-                    </div>
-                  ))}
-                </div>
-              </section>
-
-              <section className="student-recommendations" aria-labelledby="student-recommendations-title">
-                <div className="student-section-heading">
-                  <div>
-                    <span className="student-eyebrow">PLACEHOLDER SAMPLES</span>
-                    <h2 id="student-recommendations-title">Recommended Learning Resources</h2>
-                  </div>
-                  <span className="student-recommendations__note">Sample content only</span>
-                </div>
-                <div className="student-recommendations__grid">
-                  {recommendedResources.map((resource) => (
-                    <RecommendedResourceCard key={resource.title} resource={resource} />
+                    </button>
                   ))}
                 </div>
               </section>
 
               <section className="student-panel" aria-labelledby="student-courses-title">
                 <div className="student-section-heading">
-                  <div><span className="student-eyebrow">PICK UP WHERE YOU LEFT OFF</span><h2 id="student-courses-title">Continue learning</h2></div>
-                  <Link className="student-section-link" to="/student/courses">Browse courses</Link>
+                  <div><span className="student-eyebrow">PICK UP WHERE YOU LEFT OFF</span><h2 id="student-courses-title">My Courses</h2></div>
+                  <div className="student-dashboard-courses__actions">
+                    {selectedCourseCategory && (
+                      <button
+                        className="student-section-link"
+                        type="button"
+                        onClick={() => setSelectedCourseCategory('')}
+                      >
+                        Clear filter
+                      </button>
+                    )}
+                    <Link className="student-section-link" to="/student/courses">View all</Link>
+                  </div>
                 </div>
-                <EmptyState icon="book" title="Explore the course catalog" description="Browse published courses and view your current enrollments." />
+                <StudentDashboardCourses
+                  onLogout={onLogout}
+                  selectedCategory={selectedCourseCategory}
+                />
               </section>
+
+              <StudentAvailableCourses
+                user={user}
+                onLogout={onLogout}
+                onLearningDataChanged={refreshLearningSummary}
+              />
 
               <div className="student-two-column">
                 <section className="student-panel" aria-labelledby="student-assignments-title">
@@ -1304,6 +2444,17 @@ function StudentDashboard({
               </section>
               <footer className="student-footer"><span>Made for curious minds</span><span>Keep going, one lesson at a time.</span></footer>
                 </>
+              } />
+              <Route path="/student/course/:courseId/learn" element={
+                <StudentCourseLearningPage
+                  onLogout={onLogout}
+                  onLearningDataChanged={refreshLearningSummary}
+                  onCourseTitleChange={setCourseLearningTitle}
+                  contentSearch={courseContentSearch}
+                />
+              } />
+              <Route path="/student/course/:courseId" element={
+                <StudentCourseDetailsPage user={user} onLogout={onLogout} onLearningDataChanged={refreshLearningSummary} />
               } />
               <Route path="/student/courses" element={<StudentCourses user={user} onLogout={onLogout} />} />
               <Route path="/student/assignments" element={

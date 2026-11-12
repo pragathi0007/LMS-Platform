@@ -11,7 +11,6 @@ const [
   { default: referralsRouter, dailyGenerationLimit, getUtcDayStart },
   { default: ReferralCode },
   { default: ReferralCodeDailyLimit },
-  { default: Notification },
   { Student, CollegeStudent, Admin, CollegeAdmin },
   { default: AccountIdentity },
 ] = await Promise.all([
@@ -19,7 +18,6 @@ const [
   import('../routes/referrals.js'),
   import('../models/ReferralCode.js'),
   import('../models/ReferralCodeDailyLimit.js'),
-  import('../models/Notification.js'),
   import('../models/account-models.js'),
   import('../models/AccountIdentity.js'),
 ])
@@ -189,7 +187,6 @@ stub(Student, 'create', async (documents) => {
   for (const account of documents) students.set(String(account._id), account)
   return documents
 })
-stub(Notification, 'create', async (documents) => documents)
 stub(Admin, 'findOne', () => queryResult(() => null))
 stub(CollegeAdmin, 'findOne', () => queryResult(() => null))
 stub(CollegeStudent, 'findOne', () => queryResult(() => null))
@@ -320,7 +317,7 @@ test('referral generation limits, UTC reset, redemption, history, and privacy', 
   assert.equal(String(redeemedDocument.usedBy), registeredAccountId)
   assert.equal(redeemedDocument.status, 'used')
   assert.ok(redeemedDocument.usedAt instanceof originalDate)
-  assert.equal(redeemedDocument.registrationStatus, 'awaiting_approval')
+  assert.equal(redeemedDocument.registrationStatus, 'approved')
 
   const repeatedValidation = await request('/referrals/validate', { body: { code: codeToRedeem } })
   assert.equal(repeatedValidation.response.status, 400)
@@ -340,16 +337,13 @@ test('referral generation limits, UTC reset, redemption, history, and privacy', 
 
   const referredAccount = students.get(registeredAccountId)
   referredAccount.status = 'pending'
-  referredAccount.approvalStatus = 'pending'
   let history = await request('/referrals/me', { token: ownerToken })
   const usedEntry = history.result.codes.find((entry) => entry.code === codeToRedeem)
   assert.equal(usedEntry.registrationStatus, 'awaiting_approval')
   referredAccount.status = 'active'
-  referredAccount.approvalStatus = 'approved'
   history = await request('/referrals/me', { token: ownerToken })
   assert.equal(history.result.codes.find((entry) => entry.code === codeToRedeem).registrationStatus, 'approved')
   referredAccount.status = 'rejected'
-  referredAccount.approvalStatus = 'rejected'
   history = await request('/referrals/me', { token: ownerToken })
   assert.equal(history.result.codes.find((entry) => entry.code === codeToRedeem).registrationStatus, 'rejected')
 

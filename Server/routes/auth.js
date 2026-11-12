@@ -6,7 +6,6 @@ import jwt from 'jsonwebtoken'
 import { OAuth2Client } from 'google-auth-library'
 import { config } from '../config/env.js'
 import AccountIdentity from '../models/AccountIdentity.js'
-import Notification from '../models/Notification.js'
 import {
   accountModelsByCollection,
   accountModelsByRole,
@@ -26,7 +25,6 @@ import {
   TwoFactorError,
   verifyStudentOtp,
 } from '../utils/two-factor.js'
-import { independentApprovalMessage } from '../utils/independent-approval.js'
 
 const router = Router()
 const registrationRoles = new Set(['student'])
@@ -80,7 +78,6 @@ function serializeAccount(user, role = user.role) {
           twoFactorEnabledAt: user.twoFactorEnabledAt || null,
         }
       : {}),
-    approvalStatus: user.approvalStatus,
   }
 }
 
@@ -295,20 +292,7 @@ router.post('/register', async (req, res, next) => {
             passwordHash,
             role: normalizedRole,
             studentType: 'independent',
-            status: 'pending',
-            isActive: false,
-            approvalStatus: 'pending',
-          }],
-          { session },
-        )
-        await Notification.create(
-          [{
-            recipientRole: 'main_admin',
-            type: 'independent_student_registered',
-            title: 'Independent student application',
-            message: `${normalizedName} submitted an independent student application.`,
-            link: '/admin/dashboard?section=independent-approvals',
-            metadata: { studentId: String(accountId), email: normalizedEmail },
+            status: 'active',
           }],
           { session },
         )
@@ -338,7 +322,7 @@ router.post('/register', async (req, res, next) => {
     }
 
     return res.status(201).json({
-      message: 'Your account was created and is awaiting administrator approval.',
+      message: 'Account created successfully.',
       user: {
         id: String(account._id),
         fullName: account.fullName,
@@ -346,7 +330,6 @@ router.post('/register', async (req, res, next) => {
         username: account.username,
         role: 'student',
         status: account.status,
-        approvalStatus: account.approvalStatus,
       },
     })
   } catch (error) {
@@ -560,10 +543,6 @@ router.post('/google', async (req, res, next) => {
       await session.endSession()
     }
 
-    const approvalMessage = independentApprovalMessage(account)
-    if (approvalMessage) {
-      return res.status(403).json({ message: approvalMessage })
-    }
     if (!isActiveAccount(account)) {
       return res.status(403).json({ message: 'Your account is not active.' })
     }
@@ -653,10 +632,6 @@ router.post('/login', async (req, res, next) => {
       return res.status(401).json({ message: 'Invalid username/email or password.' })
     }
 
-    const approvalMessage = independentApprovalMessage(user)
-    if (approvalMessage) {
-      return res.status(403).json({ message: approvalMessage })
-    }
     if (!isActiveAccount(user)) {
       return res.status(403).json({ message: 'Your account is not active.' })
     }
@@ -696,10 +671,6 @@ router.post('/two-factor/verify', async (req, res, next) => {
     const payload = readChallengeToken(challengeToken, 'login')
     const AccountModel = accountModelsByCollection[payload.accountCollection]
     const user = await AccountModel.findById(payload.sub)
-    const approvalMessage = independentApprovalMessage(user)
-    if (approvalMessage) {
-      return res.status(403).json({ message: approvalMessage })
-    }
     if (
       !isActiveAccount(user) ||
       user.role !== 'student' ||
@@ -737,10 +708,6 @@ router.post('/two-factor/resend', async (req, res, next) => {
     const payload = readChallengeToken(challengeToken, 'login')
     const AccountModel = accountModelsByCollection[payload.accountCollection]
     const user = await AccountModel.findById(payload.sub)
-    const approvalMessage = independentApprovalMessage(user)
-    if (approvalMessage) {
-      return res.status(403).json({ message: approvalMessage })
-    }
     if (!isActiveAccount(user) || user.twoFactorEnabled !== true) {
       return res.status(401).json({ message: 'This login verification is no longer valid. Sign in again.' })
     }

@@ -18,6 +18,19 @@ const enrollmentSchema = new mongoose.Schema(
       default: 'active',
       required: true,
     },
+    completedLessonIds: {
+      type: [{ type: mongoose.Schema.Types.ObjectId }],
+      default: [],
+    },
+    startedLessonIds: {
+      type: [{ type: mongoose.Schema.Types.ObjectId }],
+      default: [],
+    },
+    lessonCompletionDates: {
+      type: Map,
+      of: Date,
+      default: () => new Map(),
+    },
   },
   { autoCreate: false, autoIndex: false, timestamps: true, collection: 'enrollment' },
 )

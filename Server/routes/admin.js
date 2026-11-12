@@ -7,7 +7,6 @@ import mongoose from 'mongoose'
 import path from 'node:path'
 import cloudinary from '../config/cloudinary.js'
 import { config } from '../config/env.js'
-import { getOpenAIClient } from '../config/openai.js'
 import AccountIdentity from '../models/AccountIdentity.js'
 import College from '../models/College.js'
 import Course from '../models/Course.js'
@@ -261,18 +260,46 @@ router.get('/courses', ...requireAdmin, async (req, res, next) => {
   try {
     const [courses, totalCourses, publishedCourses, draftCourses, totalEnrolledStudents] = await Promise.all([
       Course.find({})
-        .select('title description detailedDescription category difficulty thumbnailUrl thumbnailPublicId learningObjectives prerequisites estimatedDurationMinutes modules._id modules.title modules.description modules.order modules.lessons modules.quiz._id modules.quiz.title modules.quiz.passingPercentage modules.quiz.maxAttempts modules.quiz.timeLimitMinutes modules.quiz.questions.prompt modules.quiz.questions.type modules.quiz.questions.options modules.quiz.questions.marks modules.quiz.questions.order +modules.quiz.questions.correctOptionIndices modules.contentItems +modules.contentItems.quiz.questions.correctOptionIndices assignments status createdAt quizzes.title quizzes.description quizzes.questions.prompt quizzes.questions.options +quizzes.questions.correctOptionIndex')
+        .select(`
+          title description detailedDescription category difficulty thumbnailUrl thumbnailPublicId
+          learningObjectives prerequisites estimatedDurationMinutes
+          modules._id modules.title modules.description modules.order modules.lessons
+          modules.quiz._id modules.quiz.title modules.quiz.passingPercentage modules.quiz.maxAttempts
+          modules.quiz.timeLimitMinutes modules.quiz.questions.prompt modules.quiz.questions.type
+          modules.quiz.questions.options modules.quiz.questions.marks modules.quiz.questions.order
+          +modules.quiz.questions.correctOptionIndices
+          modules.contentItems._id modules.contentItems.type modules.contentItems.title
+          modules.contentItems.description modules.contentItems.content modules.contentItems.videoUrl
+          modules.contentItems.videoPublicId modules.contentItems.videoFormat modules.contentItems.videoBytes
+          modules.contentItems.durationSeconds modules.contentItems.resources modules.contentItems.dueDate
+          modules.contentItems.points modules.contentItems.quiz._id modules.contentItems.quiz.title
+          modules.contentItems.quiz.passingPercentage modules.contentItems.quiz.maxAttempts
+          modules.contentItems.quiz.timeLimitMinutes modules.contentItems.quiz.questions.prompt
+          modules.contentItems.quiz.questions.type modules.contentItems.quiz.questions.options
+          modules.contentItems.quiz.questions.marks modules.contentItems.quiz.questions.order
+          +modules.contentItems.quiz.questions.correctOptionIndices modules.contentItems.order
+          assignments status createdAt quizzes.title quizzes.description
+          quizzes.questions.prompt quizzes.questions.options +quizzes.questions.correctOptionIndex
+        `)
         .sort({ createdAt: -1 })
-        .limit(500)
         .lean(),
       Course.countDocuments({}),
       Course.countDocuments({ status: 'published' }),
       Course.countDocuments({ status: 'draft' }),
-      Enrollment.countDocuments({ status: { $ne: 'cancelled' } }),
+      Enrollment.aggregate([
+        { $match: { status: { $ne: 'cancelled' } } },
+        { $group: { _id: { userId: '$userId', collegeId: { $ifNull: ['$collegeId', null] } } } },
+        { $count: 'total' },
+      ]),
     ])
     return res.json({
       courses,
-      stats: { totalCourses, publishedCourses, draftCourses, totalEnrolledStudents },
+      stats: {
+        totalCourses,
+        publishedCourses,
+        draftCourses,
+        totalEnrolledStudents: totalEnrolledStudents[0]?.total || 0,
+      },
     })
   } catch (error) {
     return next(error)
@@ -293,10 +320,10 @@ router.post('/courses', ...requireAdmin, async (req, res, next) => {
   }
 })
 
-function safeOpenAIErrorMessage(error) {
+function safeGeminiErrorMessage(error) {
   let message = typeof error?.message === 'string' ? error.message : ''
-  if (config.openaiApiKey) message = message.replaceAll(config.openaiApiKey, '[redacted]')
-  message = message.replace(/\bsk-[A-Za-z0-9_-]{8,}\b/g, '[redacted]')
+  if (config.geminiApiKey) message = message.replaceAll(config.geminiApiKey, '[redacted]')
+  message = message.replace(/\bAIza[0-9A-Za-z_-]{20,}\b/g, '[redacted]')
   message = message.replace(/\bBearer\s+\S+/gi, 'Bearer [redacted]')
   return message.replace(/[\r\n]+/g, ' ').trim().slice(0, 400)
 }
@@ -326,9 +353,8 @@ router.post('/courses/generate-quiz-questions', ...requireAdmin, async (req, res
   }
 
   const selectedQuestionTypes = questionTypes || supportedQuestionTypes
-  const openAIClient = getOpenAIClient()
-  if (!openAIClient) {
-    return res.status(503).json({ message: 'Quiz question generation is unavailable because OpenAI is not configured.' })
+  if (!config.geminiApiKey) {
+    return res.status(503).json({ message: 'Quiz question generation is unavailable because Gemini is not configured.' })
   }
 
   try {
@@ -337,22 +363,21 @@ router.post('/courses/generate-quiz-questions', ...requireAdmin, async (req, res
       questionCount,
       difficulty,
       questionTypes: selectedQuestionTypes,
-    }, openAIClient)
+    }, { apiKey: config.geminiApiKey })
     return res.json({ questions })
   } catch (error) {
-    const providerMessage = safeOpenAIErrorMessage(error)
+    const providerMessage = safeGeminiErrorMessage(error)
     console.error(JSON.stringify({
       event: 'admin.quiz_question_generation_failed',
       errorName: error instanceof Error ? error.name : 'UnknownError',
       errorCode: typeof error?.code === 'string' ? error.code : undefined,
       status: Number.isInteger(error?.status) ? error.status : undefined,
-      requestId: typeof error?.request_id === 'string' ? error.request_id : undefined,
       providerMessage: providerMessage || undefined,
     }))
     return res.status(502).json({
       message: providerMessage
         ? `Quiz question generation failed: ${providerMessage}`
-        : 'Quiz question generation failed without a provider error message. Check the server log for the request ID.',
+        : 'Quiz question generation failed without a provider error message. Check the server logs for details.',
     })
   }
 })

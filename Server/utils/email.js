@@ -119,39 +119,3 @@ export async function sendStudentEmailChangeVerificationEmail({ email, fullName,
     ].join('\n'),
   })
 }
-
-export function emailNotificationsConfigured() {
-  return [
-    config.smtpHost,
-    config.smtpUser,
-    config.smtpPassword,
-    config.smtpFrom,
-  ].every((setting) => typeof setting === 'string' && setting.trim())
-}
-
-export async function sendIndependentStudentDecisionEmail({ email, fullName, approved, reason }) {
-  if (!emailNotificationsConfigured()) {
-    const error = new Error('SMTP email settings are not configured.')
-    error.code = 'SMTP_NOT_CONFIGURED'
-    throw error
-  }
-
-  const transporter = nodemailer.createTransport({
-    host: config.smtpHost,
-    port: config.smtpPort,
-    secure: config.smtpSecure,
-    auth: { user: config.smtpUser, pass: config.smtpPassword },
-  })
-  const subject = approved ? 'Your LMS account has been approved' : 'Update on your LMS account application'
-  const text = approved
-    ? `Hello${fullName ? ` ${fullName}` : ''},\n\nYour independent student account has been approved. You can now log in to the LMS.`
-    : [
-        `Hello${fullName ? ` ${fullName}` : ''},`,
-        '',
-        'Your independent student account application was rejected.',
-        ...(reason ? ['', `Reason: ${reason}`] : []),
-        '',
-        'Please contact the administrator if you have questions.',
-      ].join('\n')
-  await transporter.sendMail({ from: config.smtpFrom, to: email, subject, text })
-}

@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useRef, useState } from 'react'
 import AdminSupport from './AdminSupport.jsx'
 import AdminDashboard from './AdminDashboard.jsx'
 import CollegeAdminDashboard from './CollegeAdminDashboard.jsx'
@@ -1233,10 +1233,10 @@ function DashboardPage({ role, isDark, onToggleTheme, themePreference, onSetThem
     return () => controller.abort()
   }, [role])
 
-  function signOut() {
+  const signOut = useCallback(() => {
     sessionStorage.removeItem('lms.auth')
     window.location.replace('/')
-  }
+  }, [])
 
   function updateAccount(updatedAccount) {
     setUser((current) => current ? { ...current, ...updatedAccount } : current)

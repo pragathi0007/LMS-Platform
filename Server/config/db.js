@@ -5,11 +5,12 @@ import AccountIdentity from '../models/AccountIdentity.js'
 import Course from '../models/Course.js'
 import College from '../models/College.js'
 import Enrollment from '../models/Enrollment.js'
+import QuizAttempt from '../models/QuizAttempt.js'
+import AssignmentSubmission from '../models/AssignmentSubmission.js'
 import SupportTicket from '../models/SupportTicket.js'
 import EmailOtpChallenge from '../models/EmailOtpChallenge.js'
 import ReferralCode from '../models/ReferralCode.js'
 import ReferralCodeDailyLimit from '../models/ReferralCodeDailyLimit.js'
-import Notification from '../models/Notification.js'
 
 const requiredModels = [
   Admin,
@@ -20,11 +21,12 @@ const requiredModels = [
   Course,
   College,
   Enrollment,
+  QuizAttempt,
+  AssignmentSubmission,
   SupportTicket,
   EmailOtpChallenge,
   ReferralCode,
   ReferralCodeDailyLimit,
-  Notification,
 ]
 
 export async function connectToDatabase() {

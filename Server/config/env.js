@@ -33,7 +33,7 @@ export const config = Object.freeze({
   smtpFrom: process.env.SMTP_FROM,
   resendApiKey: process.env.RESEND_API_KEY,
   emailFrom: process.env.EMAIL_FROM,
-  openaiApiKey: process.env.OPENAI_API_KEY?.trim(),
+  geminiApiKey: process.env.GEMINI_API_KEY?.trim(),
   cloudinaryCloudName: process.env.CLOUDINARY_CLOUD_NAME,
   cloudinaryApiKey: process.env.CLOUDINARY_API_KEY,
   cloudinaryApiSecret: process.env.CLOUDINARY_API_SECRET,

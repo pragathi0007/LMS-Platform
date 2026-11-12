@@ -2,7 +2,11 @@ import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { isInvalidSessionResponse } from './auth-session.js'
 import './AdminCourseManagement.css'
 
-const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000/api').replace(/\/+$/, '')
+const API_BASE_URL = (
+  import.meta.env.VITE_API_URL ||
+  import.meta.env.VITE_API_BASE_URL ||
+  'http://localhost:5000/api'
+).replace(/\/+$/, '')
 const defaultCourseCategories = [
   'Python',
   'Prompt Engineering',
@@ -636,7 +640,7 @@ export default function AdminCourseManagement({ onLogout }) {
   const [notice, setNotice] = useState('')
   const [search, setSearch] = useState('')
   const [categoryFilter, setCategoryFilter] = useState('all')
-  const [statusFilter, setStatusFilter] = useState('published')
+  const [statusFilter, setStatusFilter] = useState('all')
   const [deleteCandidate, setDeleteCandidate] = useState(null)
   const [view, setView] = useState('list')
   const [step, setStep] = useState(1)
@@ -647,6 +651,7 @@ export default function AdminCourseManagement({ onLogout }) {
   const [categoryManagerError, setCategoryManagerError] = useState('')
   const [categoryPendingDelete, setCategoryPendingDelete] = useState('')
   const [course, setCourse] = useState(emptyCourse)
+  const [thumbnailPreview, setThumbnailPreview] = useState('')
   const [editingId, setEditingId] = useState('')
   const [previewFromList, setPreviewFromList] = useState(false)
   const [lessonTarget, setLessonTarget] = useState(null)
@@ -668,16 +673,34 @@ export default function AdminCourseManagement({ onLogout }) {
   const detailsForm = useRef(null)
   const originalAssets = useRef([])
   const pendingAssets = useRef([])
+  const thumbnailPreviewUrl = useRef('')
 
   async function loadCourses() {
     setError('')
+    setIsLoading(true)
     try {
       const result = await adminCourseRequest('/admin/courses', onLogout)
-      setCourses(result.courses || [])
-      setStats(result.stats || { totalCourses: result.courses?.length || 0, publishedCourses: 0, draftCourses: 0, totalEnrolledStudents: 0 })
+      if (!Array.isArray(result.courses)) {
+        throw new Error('The server returned an invalid course catalog response. Please try again.')
+      }
+      const statValues = [
+        result.stats?.totalCourses,
+        result.stats?.publishedCourses,
+        result.stats?.draftCourses,
+        result.stats?.totalEnrolledStudents,
+      ]
+      if (!statValues.every((value) => Number.isSafeInteger(value) && value >= 0)) {
+        throw new Error('The server returned invalid course statistics. Please try again.')
+      }
+      setCourses(result.courses)
+      setStats(result.stats)
       return true
     } catch (loadError) {
-      setError(loadError instanceof Error ? loadError.message : 'Unable to load courses.')
+      setError(loadError instanceof TypeError
+        ? 'Could not connect to the LMS server. Check that the backend is running and try again.'
+        : loadError instanceof Error && loadError.message === 'Something went wrong. Please try again.'
+          ? 'The server could not load course data (HTTP 500). Try again later.'
+          : loadError instanceof Error ? loadError.message : 'Unable to load courses.')
       return false
     } finally {
       setIsLoading(false)
@@ -696,6 +719,9 @@ export default function AdminCourseManagement({ onLogout }) {
 
   useEffect(() => { loadCourses() }, [])
   useEffect(() => { checkCloudinaryHealth() }, [])
+  useEffect(() => () => {
+    if (thumbnailPreviewUrl.current) URL.revokeObjectURL(thumbnailPreviewUrl.current)
+  }, [])
 
   const filteredCourses = useMemo(() => courses.filter((item) => {
     const query = search.trim().toLowerCase()
@@ -704,6 +730,10 @@ export default function AdminCourseManagement({ onLogout }) {
     const matchesStatus = statusFilter === 'all' || item.status === statusFilter
     return matchesText && matchesCategory && matchesStatus
   }), [courses, search, categoryFilter, statusFilter])
+  const catalogCategories = useMemo(() => [...new Set([
+    ...courseCategories,
+    ...courses.map((item) => item.category || 'Other'),
+  ])].sort((left, right) => left.localeCompare(right)), [courseCategories, courses])
 
   function persistCourseCategories(nextCategories) {
     setCourseCategories(nextCategories)
@@ -831,6 +861,15 @@ export default function AdminCourseManagement({ onLogout }) {
     setError('')
   }
 
+  function cancelCourseDetails() {
+    if (!editingId) {
+      setView('category')
+      setError('')
+      return
+    }
+    backToList()
+  }
+
   function updateCourse(field, value) {
     setCourse((current) => ({ ...current, [field]: value }))
     setError('')
@@ -894,7 +933,9 @@ export default function AdminCourseManagement({ onLogout }) {
     const response = await fetch(`https://api.cloudinary.com/v1_1/${encodeURIComponent(signature.cloudName)}/${resourceType}/upload`, { method: 'POST', body: uploadBody })
     let result
     try { result = await response.json() } catch { throw new Error('The media provider returned an invalid response.') }
-    if (!response.ok || !result.secure_url) throw new Error(result.error?.message || 'The file could not be uploaded.')
+    if (!response.ok || !result.secure_url || typeof result.public_id !== 'string') {
+      throw new Error(result.error?.message || 'The file could not be uploaded.')
+    }
     return { url: result.secure_url, publicId: result.public_id, duration: result.duration }
   }
 
@@ -1111,6 +1152,19 @@ export default function AdminCourseManagement({ onLogout }) {
     const file = event.currentTarget.files?.[0]
     event.currentTarget.value = ''
     if (!file) return
+    const supportedImageExtensions = new Set(['jpg', 'jpeg', 'png', 'webp', 'gif', 'avif'])
+    const extension = file.name.split('.').pop()?.toLowerCase()
+    if (!file.type.startsWith('image/') && !supportedImageExtensions.has(extension)) {
+      setError('Choose a JPG, PNG, WebP, GIF, or AVIF image.')
+      return
+    }
+    if (file.size > 10 * 1024 * 1024) {
+      setError('Choose an image up to 10 MB.')
+      return
+    }
+    if (thumbnailPreviewUrl.current) URL.revokeObjectURL(thumbnailPreviewUrl.current)
+    thumbnailPreviewUrl.current = URL.createObjectURL(file)
+    setThumbnailPreview(thumbnailPreviewUrl.current)
     setIsUploading('thumbnail')
     setError('')
     try {
@@ -1120,6 +1174,9 @@ export default function AdminCourseManagement({ onLogout }) {
     } catch (uploadError) {
       setError(uploadError instanceof Error ? uploadError.message : 'The thumbnail could not be uploaded.')
     } finally {
+      if (thumbnailPreviewUrl.current) URL.revokeObjectURL(thumbnailPreviewUrl.current)
+      thumbnailPreviewUrl.current = ''
+      setThumbnailPreview('')
       setIsUploading('')
     }
   }
@@ -1329,10 +1386,11 @@ export default function AdminCourseManagement({ onLogout }) {
           <div className="ac-library-heading"><div><p className="ac-eyebrow">YOUR CATALOG</p><h2>All courses <span>{filteredCourses.length}</span></h2></div></div>
           <div className="ac-filters">
             <label className="ac-search"><span aria-hidden="true">⌕</span><input aria-label="Search courses" placeholder="Search courses..." value={search} onChange={(event) => setSearch(event.target.value)} /></label>
-            <label className="ac-filter"><span>Category</span><select value={categoryFilter} onChange={(event) => setCategoryFilter(event.target.value)}><option value="all">All categories</option>{courseCategories.map((category) => <option key={category}>{category}</option>)}</select></label>
-            <label className="ac-filter"><span>Status</span><select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}><option value="all">All statuses</option><option value="published">Published</option><option value="draft">Draft</option></select></label>
+            <label className="ac-filter"><span>Category</span><select value={categoryFilter} onChange={(event) => setCategoryFilter(event.target.value)}><option value="all">All categories</option>{catalogCategories.map((category) => <option key={category}>{category}</option>)}</select></label>
+            <label className="ac-filter"><span>Status</span><select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}><option value="all">All statuses</option><option value="published">Published</option><option value="draft">Draft</option><option value="archived">Archived</option></select></label>
           </div>
           {isLoading ? <div className="ac-empty-state"><span className="ac-spinner" />Loading courses...</div>
+            : error && courses.length === 0 ? <div className="ac-empty-state"><span aria-hidden="true">!</span><strong>Courses could not be loaded</strong><p>Check that the server is available, then try again.</p><button type="button" className="ac-button ac-button--gold" onClick={loadCourses}>Retry</button></div>
             : filteredCourses.length === 0 ? <div className="ac-empty-state"><span aria-hidden="true">▤</span><strong>{courses.length ? 'No matching courses' : 'No courses yet'}</strong><p>{courses.length ? 'Try another search or filter.' : 'Create the first course for your catalog.'}</p>{!courses.length && <button type="button" className="ac-button ac-button--gold" onClick={beginNewCourse}>Add new course</button>}</div>
               : <div className="ac-course-grid">{filteredCourses.map((item) => <CourseCard key={item._id} course={item} onEdit={beginEdit} onPreview={openPreview} onToggleStatus={toggleCourseStatus} onDelete={() => setDeleteCandidate(item)} />)}</div>}
         </section>
@@ -1412,6 +1470,39 @@ export default function AdminCourseManagement({ onLogout }) {
             <label className="ac-field"><span>Course title <b>*</b></span><input required maxLength="200" value={course.title} onChange={(event) => updateCourse('title', event.target.value)} placeholder="Full Stack Web Development" /></label>
             <label className="ac-field"><span>Short description <b>*</b></span><textarea required minLength="10" maxLength="1000" rows="3" value={course.description} onChange={(event) => updateCourse('description', event.target.value)} placeholder="A concise introduction shown in the course catalog." /></label>
             <label className="ac-field"><span>Detailed description</span><textarea maxLength="10000" rows="6" value={course.detailedDescription} onChange={(event) => updateCourse('detailedDescription', event.target.value)} placeholder="Describe the course, its audience, and what learners will build." /></label>
+            <section className="ac-thumbnail-upload" aria-labelledby="ac-thumbnail-upload-title">
+              <div>
+                <h3 id="ac-thumbnail-upload-title">Course thumbnail</h3>
+                <p>Choose an image up to 10 MB. It will appear on the course card and preview.</p>
+              </div>
+              <CoverImage className="ac-thumbnail-upload__preview" url={thumbnailPreview || course.thumbnailUrl} title={course.title} />
+              <div className="ac-thumbnail-upload__actions">
+                <label className={`ac-button ac-button--outline${isUploading === 'thumbnail' ? ' is-disabled' : ''}`} htmlFor="ac-course-thumbnail">
+                  {isUploading === 'thumbnail' ? 'Uploading…' : course.thumbnailUrl ? 'Change thumbnail' : 'Upload thumbnail'}
+                  <input
+                    className="ac-thumbnail-upload__input"
+                    id="ac-course-thumbnail"
+                    type="file"
+                    accept="image/*"
+                    onChange={uploadThumbnail}
+                    disabled={isUploading === 'thumbnail'}
+                  />
+                </label>
+                {course.thumbnailUrl && (
+                  <button
+                    type="button"
+                    className="ac-button ac-button--quiet ac-button--danger"
+                    onClick={() => {
+                      setCourse((current) => ({ ...current, thumbnailUrl: '', thumbnailPublicId: '' }))
+                      setError('')
+                    }}
+                    disabled={isUploading === 'thumbnail'}
+                  >
+                    Remove thumbnail
+                  </button>
+                )}
+              </div>
+            </section>
             <label className="ac-field"><span>Difficulty level</span><select value={course.difficulty} onChange={(event) => updateCourse('difficulty', event.target.value)}>{Object.entries(difficultyLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
             <label className="ac-field"><span>Estimated duration (minutes)</span><input type="number" min="0" max="100000" value={course.estimatedDurationMinutes} onChange={(event) => updateCourse('estimatedDurationMinutes', event.target.value)} /></label>
             <label className="ac-field"><span>Learning objectives <small>One per line</small></span><textarea rows="4" value={course.learningObjectives.join('\n')} onChange={(event) => updateCourse('learningObjectives', event.target.value.split(/\r?\n/).map((line) => line.trim()).filter(Boolean))} placeholder="Build responsive web interfaces\nUnderstand modern JavaScript" /></label>
@@ -1419,7 +1510,7 @@ export default function AdminCourseManagement({ onLogout }) {
           </div>
         </div>
         {error && <p className="ac-inline-error" role="alert">{error}</p>}
-        <div className="ac-builder-footer"><button type="button" className="ac-button ac-button--outline" onClick={() => backToList()}>Cancel</button><button type="submit" className="ac-button ac-button--gold" disabled={isSaving}>{isSaving ? 'Saving draft…' : <>Continue to content <span aria-hidden="true">→</span></>}</button></div>
+        <div className="ac-builder-footer"><button type="button" className="ac-button ac-button--outline" onClick={cancelCourseDetails}>Cancel</button><button type="submit" className="ac-button ac-button--gold" disabled={isSaving}>{isSaving ? 'Saving draft…' : <>Continue to content <span aria-hidden="true">→</span></>}</button></div>
       </form>
     )
   }

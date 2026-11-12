@@ -29,8 +29,7 @@ npm run dev
 The seed command creates a `main_admin` account in `admin`, reserves its login
 identity in `accountidentities`, and bcrypt-hashes the password. It leaves an
 existing account unchanged. Public registration is available only to
-independent students. New independent student registrations remain pending
-until approved by a Main Admin; the existing college onboarding flow is unchanged.
+independent students.
 
 ## Account collections and roles
 
@@ -48,7 +47,6 @@ The application uses the database selected by `MONGO_URI` (currently `LMS`).
 | `accountidentities` | Normalized login identity-to-collection/document mappings |
 | `referralCodes` | External User referral codes and redemption history |
 | `referralCodeDailyLimits` | Atomic per-External-User UTC daily generation counters |
-| `notifications` | Persistent Main Admin and student notifications |
 
 Authentication accepts only the `main_admin`, `college_admin`, and `student`
 roles. JWTs include the canonical role and the account collection; identity
@@ -81,10 +79,10 @@ collection has a unique owner/UTC-day index. Referral history is retained; no
 TTL index is used. Referral history returns only whether the friend registered
 and their registration status, not their account identifiers or profile data.
 
-Independent student registrations remain pending until approved by a Main
-Admin. Referral registration status is derived from the referred account's
-current approval/account status and is refreshed when the creator loads referral
-history.
+The current public External User registration flow activates accounts
+immediately. Referral registration status is derived from the referred
+account's current approval/account status and is refreshed when the creator
+loads referral history; the referral feature does not alter account approval.
 
 ## Database backup, integration tests, and reset
 
@@ -156,6 +154,46 @@ Google sign-in return a short-lived login challenge instead of an access token.
 The normal JWT is issued only after successful OTP verification. The
 `emailotpchallenges` collection uses a TTL index to remove expired challenge
 records.
+
+## Main Admin course media
+
+Configure `CLOUDINARY_CLOUD_NAME`, `CLOUDINARY_API_KEY`, and
+`CLOUDINARY_API_SECRET` in `Server/.env`. Main Admin lesson media is uploaded
+through authenticated Multer endpoints:
+
+- `POST /api/admin/courses/:courseId/modules/:moduleId/media/video`
+- `POST /api/admin/courses/:courseId/modules/:moduleId/media/resource`
+- `POST /api/admin/course-assets/delete`
+
+Videos accept MP4, M4V, MOV, WebM, OGV, AVI, or MKV, with a default 2 GiB limit.
+PDF, PNG, JPEG, and WebP resources default to a 50 MiB limit. Set
+`COURSE_VIDEO_MAX_BYTES` and `COURSE_RESOURCE_MAX_BYTES` to change those limits.
+Uploads are validated by extension, MIME type, and file signature, streamed from
+temporary files to Cloudinary, then removed from disk. MongoDB stores the
+Cloudinary URLs, public IDs, media metadata, and embedded lesson timestamps;
+video and resource bytes are never stored in MongoDB. Cloudinary assets are
+deleted only after a course edit removes them and no course still references
+their public ID. Thumbnail images continue to use a signed upload request.
+
+## Main Admin AI quiz question generation
+
+Set `GEMINI_API_KEY` in `Server/.env`. The key stays on the backend and is never
+sent to the client. Authenticated Main Admins can request reviewable quiz
+questions with `POST /api/admin/courses/generate-quiz-questions`:
+
+```json
+{
+  "lessonContent": "Lesson text...",
+  "questionCount": 5,
+  "difficulty": "intermediate",
+  "questionTypes": ["multiple-choice", "multiple-select", "true-false"]
+}
+```
+
+`questionTypes` is optional and defaults to all supported types. The endpoint
+returns structured question data, including answer indexes, without saving it
+to a course or publishing it. Admins can review and edit the response before
+using it in a quiz.
 
 ## Google sign-in
 
