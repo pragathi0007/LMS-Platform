@@ -17,6 +17,7 @@ import {
 } from '../models/account-models.js'
 import { authenticate, requireRoles } from '../middleware/auth.js'
 import ReferralCode from '../models/ReferralCode.js'
+import RefreshSession from '../models/RefreshSession.js'
 import { findTakenEmails, findTakenUsernames } from '../utils/account-identity-availability.js'
 import {
   cancelStudentOtp,
@@ -58,6 +59,8 @@ const registrationEmailResendCooldownMs = 60 * 1000
 const registrationEmailMaxRequests = 5
 const registrationEmailRequestWindowMs = 60 * 60 * 1000
 const registrationEmailMaxAttempts = 5
+const refreshCookieName = 'lms.refresh'
+const refreshTokenLifetimeMs = 7 * 24 * 60 * 60 * 1000
 
 const allowedRoles = new Set(['main_admin', 'college_admin', 'student'])
 const protectedRegistrationField = /(password|token|secret|credential|auth|otp|hash)/i
@@ -111,9 +114,7 @@ export function createReferralRedemptionFilter(code, accountId, now) {
 }
 
 function isAllowedGoogleOrigin(origin) {
-  if (!origin) return false
-  if (origin === config.clientOrigin) return true
-  return config.nodeEnv !== 'production' && /^http:\/\/(localhost|127\.0\.0\.1):\d+$/.test(origin)
+  return Boolean(origin) && isAllowedClientOrigin(origin)
 }
 
 function createAuthToken(user, accountCollection) {
@@ -124,6 +125,50 @@ function createAuthToken(user, accountCollection) {
     config.jwtSecret,
     { subject: String(user._id), expiresIn: '1h' },
   )
+}
+
+function hashRefreshToken(token) {
+  return createHash('sha256').update(token).digest('hex')
+}
+
+function refreshCookieOptions(maxAge) {
+  return {
+    httpOnly: true,
+    secure: config.nodeEnv === 'production',
+    sameSite: config.nodeEnv === 'production' ? 'none' : 'lax',
+    path: '/api/auth',
+    ...(Number.isFinite(maxAge) ? { maxAge } : {}),
+  }
+}
+
+function readRefreshCookie(req) {
+  const prefix = `${refreshCookieName}=`
+  const cookie = (req.get('cookie') || '').split(';').map((part) => part.trim()).find((part) => part.startsWith(prefix))
+  return cookie ? cookie.slice(prefix.length) : ''
+}
+
+function clearRefreshCookie(res) {
+  const { maxAge, ...options } = refreshCookieOptions()
+  res.clearCookie(refreshCookieName, options)
+}
+
+async function issueStudentRefreshSession(user, accountCollection, res) {
+  const refreshToken = randomBytes(32).toString('base64url')
+  const expiresAt = new Date(Date.now() + refreshTokenLifetimeMs)
+  await RefreshSession.create({
+    userId: user._id,
+    accountCollection,
+    tokenHash: hashRefreshToken(refreshToken),
+    expiresAt,
+    lastUsedAt: new Date(),
+  })
+  res.cookie(refreshCookieName, refreshToken, refreshCookieOptions(refreshTokenLifetimeMs))
+}
+
+function isAllowedClientOrigin(origin) {
+  if (!origin) return true
+  if (origin === config.clientOrigin) return true
+  return config.nodeEnv !== 'production' && /^http:\/\/(localhost|127\.0\.0\.1):\d+$/.test(origin)
 }
 
 function serializeAccount(user, role = user.role) {
@@ -716,6 +761,67 @@ router.post('/register', async (req, res, next) => {
   }
 })
 
+router.post('/refresh', async (req, res, next) => {
+  try {
+    if (!isAllowedClientOrigin(req.get('origin'))) {
+      return res.status(403).json({ message: 'The session refresh request could not be verified.' })
+    }
+
+    const refreshToken = readRefreshCookie(req)
+    if (!/^[A-Za-z0-9_-]{43}$/.test(refreshToken)) {
+      clearRefreshCookie(res)
+      return res.status(401).json({ message: 'Your session has expired. Sign in again.' })
+    }
+    const now = new Date()
+    const session = await RefreshSession.findOne({
+      tokenHash: hashRefreshToken(refreshToken),
+      expiresAt: { $gt: now },
+    })
+    if (!session || !['students', 'clg_students'].includes(session.accountCollection)) {
+      clearRefreshCookie(res)
+      return res.status(401).json({ message: 'Your session has expired. Sign in again.' })
+    }
+
+    const AccountModel = accountModelsByCollection[session.accountCollection]
+    const user = await AccountModel.findById(session.userId)
+    if (!user || !matchesStoredAccountRole(session.accountCollection, user.role)) {
+      await RefreshSession.deleteOne({ _id: session._id })
+      clearRefreshCookie(res)
+      return res.status(401).json({ message: 'Your session has expired. Sign in again.' })
+    }
+    if (!isActiveAccount(user)) {
+      await RefreshSession.deleteOne({ _id: session._id })
+      clearRefreshCookie(res)
+      return res.status(403).json({ message: 'Your account is not active.' })
+    }
+
+    await RefreshSession.updateOne({ _id: session._id }, { $set: { lastUsedAt: now } })
+    res.cookie(refreshCookieName, refreshToken, refreshCookieOptions(session.expiresAt.getTime() - now.getTime()))
+    return res.json({
+      token: createAuthToken(user, session.accountCollection),
+      user: serializeAccount(user, 'student'),
+    })
+  } catch (error) {
+    return next(error)
+  }
+})
+
+router.post('/logout', async (req, res, next) => {
+  try {
+    if (!isAllowedClientOrigin(req.get('origin'))) {
+      return res.status(403).json({ message: 'The logout request could not be verified.' })
+    }
+    const refreshToken = readRefreshCookie(req)
+    if (/^[A-Za-z0-9_-]{43}$/.test(refreshToken)) {
+      await RefreshSession.deleteOne({ tokenHash: hashRefreshToken(refreshToken) })
+    }
+    clearRefreshCookie(res)
+    return res.status(204).end()
+  } catch (error) {
+    return next(error)
+  }
+})
+
 router.post('/google', async (req, res, next) => {
   let failureStage = 'validate_request'
   try {
@@ -920,6 +1026,7 @@ router.post('/google', async (req, res, next) => {
     }
 
     failureStage = 'issue_lms_token'
+    if (requestedRole === 'student') await issueStudentRefreshSession(account, accountCollection, res)
     return res.json({
       token: createAuthToken(account, accountCollection),
       user: serializeAccount(account, requestedRole),
@@ -1010,6 +1117,7 @@ router.post('/login', async (req, res, next) => {
       return res.json({ requiresTwoFactor: true, ...challenge })
     }
 
+    if (requestedRole === 'student') await issueStudentRefreshSession(user, accountCollection, res)
     const token = createAuthToken(user, accountCollection)
 
     return res.json({
@@ -1049,6 +1157,7 @@ router.post('/two-factor/verify', async (req, res, next) => {
       purpose: 'login',
       authenticatedUser: { id: payload.sub, accountCollection: payload.accountCollection },
     })
+    await issueStudentRefreshSession(user, payload.accountCollection, res)
     return res.json({
       token: createAuthToken(user, payload.accountCollection),
       user: serializeAccount(user, 'student'),

@@ -15,6 +15,7 @@ import certificatesRouter from './routes/certificates.js'
 const app = express()
 app.use(
   cors({
+    credentials: true,
     origin(origin, callback) {
       const configuredOrigin = config.clientOrigin
       const isLocalDevelopmentOrigin = /^http:\/\/(localhost|127\.0\.0\.1):\d+$/.test(origin || '')

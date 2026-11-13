@@ -1,0 +1,21 @@
+.admin-certificate-management { display: grid; gap: 20px; }
+.admin-certificate-management > .ac-page-heading { align-items: flex-start; }
+.ac-certificate-panel { display: grid; gap: 24px; padding: 22px; border: 1px solid var(--ac-line); border-radius: 12px; background: var(--ac-paper); }
+.ac-certificate-panel h2 { margin: 0 0 8px; font-size: 17px; }
+.ac-certificate-panel p:not(.ac-eyebrow) { max-width: 700px; margin: 0 0 10px; color: var(--ac-muted); font-size: 12px; line-height: 1.55; }
+.ac-certificate-review-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+.ac-certificate-review-heading h2 { margin-bottom: 5px; }
+.ac-certificate-review-heading h2 span { display: inline-grid; min-width: 23px; height: 23px; place-items: center; margin-left: 5px; border-radius: 12px; background: #e8efeb; color: #34796e; font-size: 11px; }
+.ac-certificate-submissions { display: grid; gap: 12px; margin-top: 16px; }
+.ac-certificate-submission { display: grid; grid-template-columns: minmax(0, 1fr) minmax(180px, 280px) auto; align-items: center; gap: 18px; padding: 15px; border: 1px solid var(--ac-line); border-radius: 9px; background: #fffdfa; }
+.ac-certificate-submission__details { display: grid; min-width: 0; gap: 5px; }
+.ac-certificate-submission__details strong { font-size: 12px; }
+.ac-certificate-submission__details span { overflow: hidden; color: var(--ac-muted); font-size: 10px; text-overflow: ellipsis; }
+.ac-certificate-submission__actions { display: flex; flex-wrap: wrap; gap: 7px; }
+.ac-certificate-submission__actions .ac-button { min-height: 34px; padding-inline: 10px; }
+.ac-certificate-submission .ac-field textarea { min-height: 56px; }
+
+@media (max-width: 760px) {
+  .ac-certificate-submission { grid-template-columns: 1fr; }
+  .ac-certificate-submission__actions { justify-content: flex-end; }
+}

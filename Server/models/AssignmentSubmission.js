@@ -46,11 +46,16 @@ const assignmentSubmissionSchema = new mongoose.Schema(
     evaluatedAt: { type: Date },
     evaluatorId: { type: mongoose.Schema.Types.ObjectId },
     evaluationHistory: { type: [evaluationSchema], default: [] },
+    reviewStatus: { type: String, enum: ['pending', 'approved', 'rejected'], default: 'pending', required: true },
+    reviewedAt: { type: Date },
+    reviewedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'Admin' },
+    reviewComment: { type: String, trim: true, maxlength: 1000, default: '' },
   },
   { autoCreate: false, autoIndex: false, timestamps: true, collection: 'assignment_submissions' },
 )
 
 assignmentSubmissionSchema.index({ enrollmentId: 1, assignmentId: 1, submittedAt: -1 })
+assignmentSubmissionSchema.index({ reviewStatus: 1, submittedAt: -1 })
 
 const AssignmentSubmission = mongoose.models.AssignmentSubmission
   || mongoose.model('AssignmentSubmission', assignmentSubmissionSchema, 'assignment_submissions')

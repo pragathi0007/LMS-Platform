@@ -8,7 +8,7 @@ import ThemeToggle from './ThemeToggle.jsx'
 import WorkspaceTopbar from './WorkspaceTopbar.jsx'
 import { Link, Navigate, useLocation } from 'react-router-dom'
 import { API_BASE_URL } from './api-base-url.js'
-import { isInvalidSessionResponse } from './auth-session.js'
+import { isInvalidSessionResponse, refreshAuthSession } from './auth-session.js'
 import './App.css'
 
 function getPasswordStrength(password) {
@@ -533,6 +533,7 @@ function AuthForm({ mode, role, onMessage, onRegistrationSuccess }) {
       for (const candidateRole of isRegistering ? ['student'] : loginRoles) {
         response = await fetch(`${API_BASE_URL}/auth/${isRegistering ? 'register' : 'login'}`, {
           method: 'POST',
+          credentials: 'include',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(isRegistering
             ? {
@@ -627,6 +628,7 @@ function AuthForm({ mode, role, onMessage, onRegistrationSuccess }) {
     try {
       const response = await fetch(`${API_BASE_URL}/auth/two-factor/verify`, {
         method: 'POST',
+        credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ challengeToken: loginChallenge.challengeToken, code: loginOtp }),
       })
@@ -740,6 +742,7 @@ function AuthForm({ mode, role, onMessage, onRegistrationSuccess }) {
       try {
         const response = await fetch(`${API_BASE_URL}/auth/google`, {
           method: 'POST',
+          credentials: 'include',
           headers: {
             'Content-Type': 'application/json',
             'X-Requested-With': 'XmlHttpRequest',
@@ -1419,6 +1422,7 @@ function DashboardPage({ role, isDark, onToggleTheme, themePreference, onSetThem
   const [error, setError] = useState('')
   const [mainAdminSidebarOpen, setMainAdminSidebarOpen] = useState(false)
   const [mainAdminSidebarCollapsed, setMainAdminSidebarCollapsed] = useState(true)
+  const [isVerifying, setIsVerifying] = useState(true)
   const roleLabels = {
     student: 'Student',
     main_admin: 'Main Admin',
@@ -1431,21 +1435,37 @@ function DashboardPage({ role, isDark, onToggleTheme, themePreference, onSetThem
     async function verifyDashboardAccess() {
       try {
         const storedAuth = sessionStorage.getItem('lms.auth')
-        const auth = storedAuth ? JSON.parse(storedAuth) : null
+        let auth = storedAuth ? JSON.parse(storedAuth) : null
+        if (typeof auth?.token !== 'string' && role === 'student') {
+          auth = await refreshAuthSession(API_BASE_URL)
+        }
         if (typeof auth?.token !== 'string') {
           window.location.replace('/')
           return
         }
 
-        const response = await fetch(`${API_BASE_URL}/auth/dashboard/${DASHBOARD_API_ROLES[role]}`, {
+        let response = await fetch(`${API_BASE_URL}/auth/dashboard/${DASHBOARD_API_ROLES[role]}`, {
           headers: { Authorization: `Bearer ${auth.token}` },
           signal: controller.signal,
         })
-        const result = await readApiResponse(response)
+        let result = await readApiResponse(response)
         if (isInvalidSessionResponse(response, result)) {
-          sessionStorage.removeItem('lms.auth')
-          window.location.replace('/')
-          return
+          const refreshed = role === 'student' ? await refreshAuthSession(API_BASE_URL) : null
+          if (!refreshed) {
+            sessionStorage.removeItem('lms.auth')
+            window.location.replace('/')
+            return
+          }
+          response = await fetch(`${API_BASE_URL}/auth/dashboard/${DASHBOARD_API_ROLES[role]}`, {
+            headers: { Authorization: `Bearer ${refreshed.token}` },
+            signal: controller.signal,
+          })
+          result = await readApiResponse(response)
+          if (isInvalidSessionResponse(response, result)) {
+            sessionStorage.removeItem('lms.auth')
+            window.location.replace('/')
+            return
+          }
         }
         const userIsActive =
           result.user?.isActive === true &&
@@ -1468,6 +1488,8 @@ function DashboardPage({ role, isDark, onToggleTheme, themePreference, onSetThem
         if (requestError.name !== 'AbortError') {
           setError('We couldn’t verify your session. Check the connection and try again.')
         }
+      } finally {
+        if (!controller.signal.aborted) setIsVerifying(false)
       }
     }
 
@@ -1477,7 +1499,14 @@ function DashboardPage({ role, isDark, onToggleTheme, themePreference, onSetThem
 
   const signOut = useCallback(() => {
     sessionStorage.removeItem('lms.auth')
-    window.location.replace('/')
+    void fetch(`${API_BASE_URL}/auth/logout`, {
+      method: 'POST',
+      credentials: 'include',
+    }).then((response) => {
+      if (!response.ok) console.error('The server could not revoke the current session.')
+    }).catch(() => {
+      console.error('The server session could not be revoked because the backend is unreachable.')
+    }).finally(() => window.location.replace('/'))
   }, [])
 
   function updateAccount(updatedAccount) {
@@ -1497,6 +1526,9 @@ function DashboardPage({ role, isDark, onToggleTheme, themePreference, onSetThem
   }
 
   if (role === 'student') {
+    if (isVerifying) {
+      return <main className="dashboard-landing"><section className="dashboard-card" role="status">Verifying your session…</section></main>
+    }
     return (
       <StudentDashboard
         user={user}
@@ -1513,6 +1545,46 @@ function DashboardPage({ role, isDark, onToggleTheme, themePreference, onSetThem
     )
   }
 
+  if (role === 'main_admin' && user && location.pathname.startsWith('/admin/support')) {
+    return (
+      <AdminSupport
+        user={user}
+        onLogout={signOut}
+        isDark={isDark}
+        onToggleTheme={onToggleTheme}
+        dashboardPath="/admin/dashboard"
+        supportPath="/admin/support"
+        settingsPath="/admin/settings"
+        roleLabel={roleLabels[role]}
+      />
+    )
+  }
+  if (role === 'main_admin' && user && location.pathname.startsWith('/admin/settings')) {
+    return (
+      <>
+        <WorkspaceTopbar
+          title="Settings"
+          name={user.fullName}
+          email={user.email}
+          roleLabel={roleLabels[role]}
+          dashboardPath="/admin/dashboard"
+          helpPath="/admin/support"
+          settingsPath="/admin/settings"
+          isDark={isDark}
+          onToggleTheme={onToggleTheme}
+          onLogout={signOut}
+        />
+        <SettingsPage
+          user={user}
+          onAccountUpdated={updateAccount}
+          onLogout={signOut}
+          themePreference={themePreference}
+          onSetTheme={onSetTheme}
+          standalone
+        />
+      </>
+    )
+  }
   if (role === 'main_admin' && user) {
     return (
       <AdminDashboard

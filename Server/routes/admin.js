@@ -2,8 +2,10 @@ import { Router } from 'express'
 import bcrypt from 'bcryptjs'
 import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import { openAsBlob } from 'node:fs'
+import { Readable } from 'node:stream'
 import { open, unlink } from 'node:fs/promises'
 import mongoose from 'mongoose'
+import multer from 'multer'
 import path from 'node:path'
 import cloudinary from '../config/cloudinary.js'
 import { config } from '../config/env.js'
@@ -16,6 +18,8 @@ import Notification from '../models/Notification.js'
 import AssignmentSubmission from '../models/AssignmentSubmission.js'
 import QuizAttempt from '../models/QuizAttempt.js'
 import ReferralCode from '../models/ReferralCode.js'
+import CertificateTemplate from '../models/CertificateTemplate.js'
+import VideoAttentionResponse from '../models/VideoAttentionResponse.js'
 import {
   CollegeAdmin,
   CollegeStudent,
@@ -38,6 +42,7 @@ import {
 import { generateQuizQuestions } from '../utils/quiz-question-generator.js'
 import { parseStudentCsv } from '../utils/student-csv.js'
 import { toMongoBuffer } from '../utils/mongo-binary.js'
+import { getActiveCertificateTemplateId, issueCertificateIfEligible } from '../utils/certificates.js'
 
 const router = Router()
 const requireAdmin = [authenticate, requireRoles('main_admin')]
@@ -98,6 +103,328 @@ function publicRegistrationDetails(details, accountFields, legacyDetails = {}) {
 function escapeRegex(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
+
+const certificateTemplateUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 4 * 1024 * 1024, files: 1, fields: 0, parts: 1 },
+  fileFilter(_req, file, callback) {
+    if (!['image/png', 'image/jpeg'].includes(file.mimetype)) {
+      const error = new Error('Upload a PNG or JPEG certificate background image up to 4 MB.')
+      error.statusCode = 415
+      callback(error)
+      return
+    }
+    callback(null, true)
+  },
+})
+
+function receiveCertificateTemplate(req, res, next) {
+  certificateTemplateUpload.single('template')(req, res, (error) => {
+    if (!error) return next()
+    const statusCode = error.statusCode || (error.code === 'LIMIT_FILE_SIZE' ? 413 : 400)
+    return res.status(statusCode).json({
+      message: error.code === 'LIMIT_FILE_SIZE'
+        ? 'The certificate background image must be 4 MB or smaller.'
+        : error.message || 'The certificate background image could not be uploaded.',
+    })
+  })
+}
+
+function certificateImageType(buffer) {
+  if (buffer?.length >= 8 && buffer.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))) return 'image/png'
+  if (buffer?.length >= 3 && buffer[0] === 255 && buffer[1] === 216 && buffer[2] === 255) return 'image/jpeg'
+  return ''
+}
+
+function uploadCertificateImage(buffer, publicId) {
+  if (!cloudinaryIsConfigured()) {
+    const error = new Error('Cloudinary is not configured for certificate background uploads.')
+    error.statusCode = 503
+    throw error
+  }
+
+  return new Promise((resolve, reject) => {
+    const uploadStream = cloudinary.uploader.upload_stream({
+      folder: 'aihustle/certificate-templates',
+      public_id: publicId,
+      resource_type: 'image',
+      overwrite: true,
+    }, (error, result) => {
+      if (error) {
+        const uploadError = new Error('The certificate background image could not be uploaded to Cloudinary.')
+        uploadError.statusCode = 502
+        uploadError.cause = error
+        reject(uploadError)
+        return
+      }
+      if (!result?.secure_url || !result.public_id) {
+        const uploadError = new Error('Cloudinary did not return a usable certificate image URL.')
+        uploadError.statusCode = 502
+        reject(uploadError)
+        return
+      }
+      resolve({ secureUrl: result.secure_url, publicId: result.public_id })
+    })
+    uploadStream.on('error', reject)
+    Readable.from([buffer]).on('error', reject).pipe(uploadStream)
+  })
+}
+
+async function ensureCertificateImageOnCloudinary(template) {
+  if (template.secureUrl && template.publicId) return template
+  if (!template.imageData?.length) {
+    throw new Error('The active certificate template image could not be loaded.')
+  }
+
+  const migrationId = createHash('sha256')
+    .update(String(template._id))
+    .update(template.imageData)
+    .digest('hex')
+  const uploaded = await uploadCertificateImage(template.imageData, `legacy-${migrationId}`)
+  try {
+    const savedTemplate = await CertificateTemplate.findByIdAndUpdate(
+      template._id,
+      { $set: uploaded },
+      { new: true, runValidators: true },
+    ).lean()
+    if (!savedTemplate) throw new Error('The active certificate template could not be saved.')
+    return { ...template, ...uploaded }
+  } catch (error) {
+    try {
+      await cloudinary.uploader.destroy(uploaded.publicId, { resource_type: 'image', invalidate: true })
+    } catch (cleanupError) {
+      console.error(JSON.stringify({
+        event: 'certificate_template_cloudinary_cleanup_failed',
+        errorCode: typeof cleanupError?.http_code === 'number' ? cleanupError.http_code : undefined,
+      }))
+    }
+    throw error
+  }
+}
+
+function handleCertificateTemplateError(error, res, next) {
+  if ([502, 503].includes(error?.statusCode)) {
+    return res.status(error.statusCode).json({ message: error.message })
+  }
+  return next(error)
+}
+
+function assignmentTitle(course, assignmentId) {
+  const topLevel = (course?.assignments || []).find((item) => String(item._id) === String(assignmentId))
+  if (topLevel) return topLevel.title
+  for (const module of course?.modules || []) {
+    const item = (module.contentItems || []).find((entry) => (
+      entry.type === 'assignment' && String(entry._id) === String(assignmentId)
+    ))
+    if (item) return item.title
+  }
+  return 'Assignment'
+}
+
+router.get('/certificate-template', ...requireAdmin, async (_req, res, next) => {
+  try {
+    const templateId = await getActiveCertificateTemplateId()
+    let template = templateId === 'builtin'
+      ? null
+      : await CertificateTemplate.findById(templateId)
+        .select('+imageData secureUrl publicId contentType fileName fileSize updatedAt')
+        .lean()
+    if (templateId !== 'builtin' && !template?.contentType) {
+      throw new Error('The active certificate template could not be loaded.')
+    }
+    if (template) template = await ensureCertificateImageOnCloudinary(template)
+    return res.json({
+      configured: Boolean(template),
+      uploaded: Boolean(template?.contentType),
+      fileName: template?.fileName || '',
+      fileSize: template?.fileSize || 0,
+      secureUrl: template?.secureUrl || '',
+      updatedAt: template?.updatedAt || null,
+    })
+  } catch (error) {
+    return handleCertificateTemplateError(error, res, next)
+  }
+})
+
+router.get('/certificate-template/image', ...requireAdmin, async (_req, res, next) => {
+  try {
+    const templateId = await getActiveCertificateTemplateId()
+    if (templateId === 'builtin') return res.status(404).json({ message: 'No uploaded certificate background is configured.' })
+    const template = await CertificateTemplate.findById(templateId)
+      .select('+imageData contentType fileSize')
+      .lean()
+    if (!template) {
+      throw new Error('The active certificate template could not be loaded.')
+    }
+    if (!template.contentType) {
+      return res.status(404).json({ message: 'No uploaded certificate background is configured.' })
+    }
+    if (!template.imageData?.length) throw new Error('The active certificate template image could not be loaded.')
+    res.setHeader('Content-Type', template.contentType)
+    res.setHeader('Content-Length', template.fileSize)
+    res.setHeader('Content-Disposition', 'inline; filename="certificate-background"')
+    res.setHeader('Cache-Control', 'private, no-store')
+    res.setHeader('X-Content-Type-Options', 'nosniff')
+    return res.send(template.imageData)
+  } catch (error) {
+    return next(error)
+  }
+})
+
+router.post('/certificate-template', ...requireAdmin, receiveCertificateTemplate, async (req, res, next) => {
+  try {
+    const contentType = certificateImageType(req.file?.buffer)
+    if (!contentType) return res.status(400).json({ message: 'Upload a valid PNG or JPEG certificate background image.' })
+    const fileName = path.basename(req.file.originalname || 'certificate-template')
+      .replace(/[\r\n"]/g, '_')
+      .slice(0, 180)
+    const currentTemplateId = await getActiveCertificateTemplateId()
+    const templateId = `template-${randomUUID()}`
+    const uploaded = await uploadCertificateImage(req.file.buffer, templateId)
+    await CertificateTemplate.create({
+      _id: templateId,
+      imageData: req.file.buffer,
+      ...uploaded,
+      contentType,
+      fileName,
+      fileSize: req.file.size,
+      updatedBy: req.auth.id,
+    })
+    const legacyTemplateFilter = currentTemplateId === 'default'
+      ? { $or: [{ templateId: { $exists: false } }, { templateId: null }, { templateId: 'default' }] }
+      : { $or: [{ templateId: { $exists: false } }, { templateId: null }] }
+    await Certificate.updateMany(legacyTemplateFilter, { $set: { templateId: currentTemplateId } })
+    const activeTemplate = await CertificateTemplate.findOneAndUpdate(
+      { _id: 'default' },
+      { $set: { activeTemplateId: templateId, updatedBy: req.auth.id } },
+      { upsert: true, new: true, runValidators: true, setDefaultsOnInsert: true },
+    )
+    return res.json({
+      configured: true,
+      uploaded: true,
+      fileName,
+      fileSize: req.file.size,
+      secureUrl: uploaded.secureUrl,
+      updatedAt: activeTemplate.updatedAt,
+    })
+  } catch (error) {
+    return handleCertificateTemplateError(error, res, next)
+  }
+})
+
+router.get('/assignment-submissions', ...requireAdmin, async (_req, res, next) => {
+  try {
+    const submissions = await AssignmentSubmission.find({ reviewStatus: { $in: ['pending', null] } })
+      .select('userId enrollmentId courseId assignmentId fileName contentType fileSize submittedAt reviewStatus')
+      .sort({ submittedAt: -1 })
+      .limit(200)
+      .lean()
+    const userIds = [...new Set(submissions.map((submission) => String(submission.userId)))]
+    const courseIds = [...new Set(submissions.map((submission) => String(submission.courseId)))]
+    const [independentStudents, collegeStudents, courses] = await Promise.all([
+      Student.find({ _id: { $in: userIds } }).select('fullName email').lean(),
+      CollegeStudent.find({ _id: { $in: userIds } }).select('fullName email').lean(),
+      Course.find({ _id: { $in: courseIds } }).select('title modules.contentItems assignments').lean(),
+    ])
+    const studentsById = new Map([...independentStudents, ...collegeStudents].map((student) => [String(student._id), student]))
+    const coursesById = new Map(courses.map((course) => [String(course._id), course]))
+    return res.json({
+      submissions: submissions.map((submission) => {
+        const student = studentsById.get(String(submission.userId))
+        const course = coursesById.get(String(submission.courseId))
+        return {
+          id: String(submission._id),
+          studentName: student?.fullName || 'Student name unavailable',
+          studentEmail: student?.email || '',
+          courseId: String(submission.courseId),
+          courseName: course?.title || 'Course unavailable',
+          assignmentId: String(submission.assignmentId),
+          assignmentName: assignmentTitle(course, submission.assignmentId),
+          fileName: submission.fileName,
+          contentType: submission.contentType,
+          fileSize: submission.fileSize,
+          submittedAt: submission.submittedAt,
+          reviewStatus: submission.reviewStatus || 'pending',
+        }
+      }),
+    })
+  } catch (error) {
+    return next(error)
+  }
+})
+
+router.get('/assignment-submissions/:submissionId/download', ...requireAdmin, async (req, res, next) => {
+  try {
+    if (!mongoose.isValidObjectId(req.params.submissionId)) {
+      return res.status(404).json({ message: 'The assignment submission was not found.' })
+    }
+    const submission = await AssignmentSubmission.findById(req.params.submissionId).select('+fileData')
+    if (!submission) return res.status(404).json({ message: 'The assignment submission was not found.' })
+    const fileName = submission.fileName.replace(/[\r\n"]/g, '_')
+    res.setHeader('Content-Type', submission.contentType)
+    res.setHeader('Content-Length', submission.fileSize)
+    res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`)
+    return res.send(submission.fileData)
+  } catch (error) {
+    return next(error)
+  }
+})
+
+router.patch('/assignment-submissions/:submissionId/review', ...requireAdmin, async (req, res, next) => {
+  try {
+    const { submissionId } = req.params
+    const { reviewStatus, reviewComment = '' } = req.body ?? {}
+    if (!mongoose.isValidObjectId(submissionId)) {
+      return res.status(400).json({ message: 'Select a valid assignment submission.' })
+    }
+    if (!['approved', 'rejected'].includes(reviewStatus)) {
+      return res.status(400).json({ message: 'Choose approved or rejected for the assignment review.' })
+    }
+    if (typeof reviewComment !== 'string' || reviewComment.length > 1000) {
+      return res.status(400).json({ message: 'The review comment must be 1,000 characters or fewer.' })
+    }
+    const submission = await AssignmentSubmission.findByIdAndUpdate(
+      submissionId,
+      {
+        $set: {
+          reviewStatus,
+          reviewComment: reviewComment.trim(),
+          reviewedAt: new Date(),
+          reviewedBy: req.auth.id,
+        },
+      },
+      { new: true, runValidators: true },
+    )
+    if (!submission) return res.status(404).json({ message: 'The assignment submission was not found.' })
+
+    if (reviewStatus === 'approved') {
+      const enrollment = await Enrollment.findById(submission.enrollmentId)
+        .populate('courseId', 'title modules assignments quizzes generateCertificate')
+        .lean()
+      if (
+        enrollment
+        && enrollment.status !== 'cancelled'
+        && String(enrollment.userId) === String(submission.userId)
+        && String(enrollment.courseId?._id) === String(submission.courseId)
+      ) {
+        const student = await Student.findById(submission.userId).select('fullName').lean()
+          || await CollegeStudent.findById(submission.userId).select('fullName').lean()
+        if (student?.fullName?.trim()) {
+          await issueCertificateIfEligible({
+            userId: submission.userId,
+            studentName: student.fullName,
+            enrollment,
+            course: enrollment.courseId,
+          })
+        }
+      }
+    }
+
+    return res.json({ reviewStatus: submission.reviewStatus, reviewedAt: submission.reviewedAt })
+  } catch (error) {
+    return next(error)
+  }
+})
 
 async function accountIdentifierExists(field, value) {
   const identity = await AccountIdentity.exists({ [field]: value })
@@ -608,24 +935,49 @@ router.get('/courses', ...requireAdmin, async (req, res, next) => {
       Course.find({})
         .select(`
           title description detailedDescription category difficulty thumbnailUrl thumbnailPublicId
+          generateCertificate
           learningObjectives prerequisites estimatedDurationMinutes
-          modules._id modules.title modules.description modules.order modules.lessons
+          modules._id modules.title modules.description modules.order
+          modules.lessons._id modules.lessons.title modules.lessons.description modules.lessons.content
+          modules.lessons.videoUrl modules.lessons.videoPublicId modules.lessons.videoFormat
+          modules.lessons.videoBytes modules.lessons.durationSeconds modules.lessons.resources
+          modules.lessons.requiredForCertificate
+          modules.lessons.order modules.lessons.createdAt modules.lessons.updatedAt
+          modules.lessons.attentionCheck.enabled modules.lessons.attentionCheck.minIntervalSeconds
+          modules.lessons.attentionCheck.maxIntervalSeconds
+          modules.lessons.attentionCheck.questionsDuringVideo
+          modules.lessons.attentionCheck.questions._id
+          modules.lessons.attentionCheck.questions.prompt modules.lessons.attentionCheck.questions.type
+          modules.lessons.attentionCheck.questions.options
+          modules.lessons.attentionCheck.questions.selectedForPlayback
+          +modules.lessons.attentionCheck.questions.correctOptionIndices
           modules.quiz._id modules.quiz.title modules.quiz.passingPercentage modules.quiz.maxAttempts
           modules.quiz.timeLimitMinutes modules.quiz.questions.prompt modules.quiz.questions.type
+          modules.quiz.requiredForCertificate
           modules.quiz.questions.options modules.quiz.questions.marks modules.quiz.questions.order
           +modules.quiz.questions.correctOptionIndices
           modules.contentItems._id modules.contentItems.type modules.contentItems.title
           modules.contentItems.description modules.contentItems.content modules.contentItems.videoUrl
+          modules.contentItems.requiredForCertificate
           modules.contentItems.videoPublicId modules.contentItems.videoFormat modules.contentItems.videoBytes
           modules.contentItems.durationSeconds modules.contentItems.resources modules.contentItems.dueDate
+          modules.contentItems.attentionCheck.enabled modules.contentItems.attentionCheck.questionsDuringVideo
+          modules.contentItems.attentionCheck.minIntervalSeconds
+          modules.contentItems.attentionCheck.maxIntervalSeconds modules.contentItems.attentionCheck.questions.prompt
+          modules.contentItems.attentionCheck.questions.type modules.contentItems.attentionCheck.questions.options
+          modules.contentItems.attentionCheck.questions.selectedForPlayback
+          +modules.contentItems.attentionCheck.questions.correctOptionIndices
           modules.contentItems.points modules.contentItems.quiz._id modules.contentItems.quiz.title
           modules.contentItems.quiz.passingPercentage modules.contentItems.quiz.maxAttempts
+          modules.contentItems.quiz.requiredForCertificate
           modules.contentItems.quiz.timeLimitMinutes modules.contentItems.quiz.questions.prompt
           modules.contentItems.quiz.questions.type modules.contentItems.quiz.questions.options
           modules.contentItems.quiz.questions.marks modules.contentItems.quiz.questions.order
           +modules.contentItems.quiz.questions.correctOptionIndices modules.contentItems.order
-          assignments status createdAt quizzes.title quizzes.description
-          quizzes.questions.prompt quizzes.questions.options +quizzes.questions.correctOptionIndex
+          assignments status createdAt quizzes._id quizzes.title quizzes.description
+          quizzes.passingPercentage quizzes.maxAttempts quizzes.timeLimitMinutes
+          quizzes.requiredForCertificate quizzes.questions.prompt quizzes.questions.options
+          quizzes.questions.explanation +quizzes.questions.correctOptionIndex
         `)
         .sort({ createdAt: -1 })
         .lean(),
@@ -964,12 +1316,13 @@ router.put('/courses/:courseId', ...requireAdmin, async (req, res, next) => {
   try {
     const { courseId } = req.params
     if (!mongoose.isValidObjectId(courseId)) return res.status(400).json({ message: 'Select a valid course.' })
-    const existing = await Course.findById(courseId).select('assignments quizzes').lean()
+    const existing = await Course.findById(courseId).select('assignments quizzes generateCertificate').lean()
     if (!existing) return res.status(404).json({ message: 'The course was not found.' })
     const result = normalizeCourseDetails({
       ...req.body,
       assignments: req.body?.assignments ?? existing.assignments ?? [],
       quizzes: req.body?.quizzes ?? existing.quizzes ?? [],
+      generateCertificate: req.body?.generateCertificate ?? existing.generateCertificate ?? true,
     })
     if (result.error) return res.status(400).json({ message: result.error })
     if (result.value.status === 'published' && !hasPublishableContent(result.value)) {
@@ -1120,6 +1473,22 @@ router.get('/enrollments', ...requireAdmin, async (req, res, next) => {
       .limit(500)
       .lean()
     return res.json({ enrollments })
+  } catch (error) {
+    return next(error)
+  }
+})
+
+router.get('/video-attention-responses', ...requireAdmin, async (req, res, next) => {
+  try {
+    const responses = await VideoAttentionResponse.find({})
+      .select('userId collegeId enrollmentId courseId lessonId lessonTitle questionPrompt questionType options selectedOptionIndices videoPositionSeconds presentedAt answeredAt responseTimeMs isCorrect status')
+      .populate('userId', 'fullName email username studentType')
+      .populate('courseId', 'title')
+      .populate('collegeId', 'name')
+      .sort({ presentedAt: -1 })
+      .limit(500)
+      .lean()
+    return res.json({ responses })
   } catch (error) {
     return next(error)
   }

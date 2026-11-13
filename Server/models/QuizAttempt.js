@@ -30,6 +30,8 @@ const quizAttemptSchema = new mongoose.Schema(
     enrollmentId: { type: mongoose.Schema.Types.ObjectId, ref: 'Enrollment', required: true },
     courseId: { type: mongoose.Schema.Types.ObjectId, ref: 'Course', required: true },
     quizId: { type: mongoose.Schema.Types.ObjectId, required: true },
+    cycleNumber: { type: Number, min: 1 },
+    attemptNumber: { type: Number, min: 1, max: 3 },
     status: { type: String, enum: ['started', 'submitted'], default: 'submitted', required: true },
     startedAt: { type: Date, default: Date.now, required: true },
     passingPercentage: { type: Number, min: 1, max: 100 },

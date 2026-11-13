@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react'
 import { API_BASE_URL } from './api-base-url.js'
+import { fetchWithAuth } from './auth-session.js'
 import './NotificationFeed.css'
-
 function formatNotificationDate(value) {
   if (!value) return 'Date unavailable'
   const date = new Date(value)
@@ -27,10 +27,13 @@ export default function NotificationFeed({ role, onLogout, onOpenApprovals }) {
           onLogout()
           return
         }
-        const response = await fetch(`${API_BASE_URL}/notifications/me`, {
+        const requestOptions = {
           headers: { Authorization: `Bearer ${auth.token}` },
           signal: controller.signal,
-        })
+        }
+        const response = role === 'student'
+          ? await fetchWithAuth(`${API_BASE_URL}/notifications/me`, requestOptions, API_BASE_URL, auth.token)
+          : await fetch(`${API_BASE_URL}/notifications/me`, requestOptions)
         const result = await response.json()
         if (response.status === 401 || response.status === 403) {
           onLogout()

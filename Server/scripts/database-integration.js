@@ -26,9 +26,11 @@ const expectedCollections = [
   'referralCodeDailyLimits',
   'referralCodes',
   'registrationemailverifications',
+  'refresh_sessions',
   'students',
   'sub_admins',
   'supporttickets',
+  'video_attention_responses',
 ]
 const { config } = await import('../config/env.js')
 if (!config.mongoUri) throw new Error('MONGO_URI is not configured.')

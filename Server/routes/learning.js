@@ -25,6 +25,17 @@ import {
 } from '../utils/college-student-capacity.js'
 import { parseStudentCsv } from '../utils/student-csv.js'
 import { toMongoBuffer } from '../utils/mongo-binary.js'
+import QuizAttemptState from '../models/QuizAttemptState.js'
+import VideoAttentionResponse from '../models/VideoAttentionResponse.js'
+import CertificateTemplate from '../models/CertificateTemplate.js'
+import { config } from '../config/env.js'
+import {
+  evaluateCertificateEligibility,
+  generateCertificatePdf,
+  getActiveCertificateTemplateId,
+  getRequiredCertificateActivities,
+  issueCertificateIfEligible,
+} from '../utils/certificates.js'
 
 const router = Router()
 const requireStudent = [authenticate, requireRoles('student')]
@@ -32,6 +43,11 @@ const requireCollegeAdmin = [authenticate, requireRoles('college_admin')]
 const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 const usernamePattern = /^[a-zA-Z0-9._-]{3,30}$/
 const maxAssignmentSubmissionBytes = 10 * 1024 * 1024
+const maxCertificateTemplateBytes = 4 * 1024 * 1024
+const quizAttemptLimit = 3
+const quizAttemptCooldownMs = 24 * 60 * 60 * 1000
+const attentionCheckResponseTimeoutMs = 10 * 1000
+const loggedInvalidAttentionConfigurations = new Set()
 const assignmentFileTypes = new Map([
   ['.pdf', 'application/pdf'],
   ['.txt', 'text/plain'],
@@ -51,6 +67,46 @@ const assignmentUpload = multer({
     callback(null, true)
   },
 })
+
+function certificateImageBuffer(imageData) {
+  if (Buffer.isBuffer(imageData)) return imageData
+  if (imageData instanceof Uint8Array) return Buffer.from(imageData)
+  if (imageData?._bsontype === 'Binary' && Buffer.isBuffer(imageData.buffer)) {
+    const length = Number.isInteger(imageData.position) ? imageData.position : imageData.buffer.length
+    return Buffer.from(imageData.buffer.subarray(0, length))
+  }
+  return null
+}
+
+async function loadCertificateTemplateImage(template) {
+  const storedImageData = certificateImageBuffer(template?.imageData)
+  if (storedImageData?.length) return storedImageData
+  if (typeof template?.secureUrl !== 'string' || !config.cloudinaryCloudName) {
+    throw new Error('The certificate background used for this certificate is unavailable.')
+  }
+
+  const imageUrl = new URL(template.secureUrl)
+  const expectedPath = `/${config.cloudinaryCloudName}/image/upload/`
+  if (
+    imageUrl.protocol !== 'https:'
+    || imageUrl.hostname !== 'res.cloudinary.com'
+    || !imageUrl.pathname.startsWith(expectedPath)
+  ) {
+    throw new Error('The certificate background URL is invalid.')
+  }
+
+  const response = await fetch(imageUrl, { redirect: 'error', signal: AbortSignal.timeout(10000) })
+  if (!response.ok) throw new Error('The certificate background could not be loaded.')
+  const contentLength = Number(response.headers.get('content-length'))
+  if (Number.isFinite(contentLength) && contentLength > maxCertificateTemplateBytes) {
+    throw new Error('The certificate background exceeds the supported file size.')
+  }
+  const imageData = Buffer.from(await response.arrayBuffer())
+  if (!imageData.length || imageData.length > maxCertificateTemplateBytes) {
+    throw new Error('The certificate background could not be loaded.')
+  }
+  return imageData
+}
 
 function isValidObjectId(value) {
   return typeof value === 'string' && mongoose.isValidObjectId(value)
@@ -88,6 +144,25 @@ function isDuplicateStudentId(studentId, model, session) {
   return query.lean()
 }
 
+function getLessonPlaybackPositions(enrollment) {
+  const positions = enrollment?.lessonPlaybackPositions
+  if (positions instanceof Map) return Object.fromEntries(positions)
+  return positions && typeof positions === 'object' ? { ...positions } : {}
+}
+
+function getCertificateCourseProgress(activities, pendingRequirements = [], earned = false) {
+  const totalActivities = Object.values(activities).reduce((total, items) => total + items.length, 0)
+  const incompleteActivities = pendingRequirements.filter((requirement) => (
+    ['video', 'quiz', 'assignment'].includes(requirement.type)
+  )).length
+  const completedActivities = earned ? totalActivities : Math.max(0, totalActivities - incompleteActivities)
+  return {
+    completedActivities,
+    totalActivities,
+    percentage: earned ? 100 : totalActivities ? Math.round((completedActivities / totalActivities) * 100) : 0,
+  }
+}
+
 function canonicalObjectId(value) {
   const isBsonObjectId = value instanceof mongoose.Types.ObjectId
     || (value?._bsontype === 'ObjectId' && typeof value.toHexString === 'function')
@@ -95,16 +170,104 @@ function canonicalObjectId(value) {
   return new mongoose.Types.ObjectId(value).toString()
 }
 
+function sanitizeStudentAttentionCheck(attentionCheck) {
+  if (!attentionCheck) return attentionCheck
+  return {
+    enabled: attentionCheck.enabled === true,
+    questionsDuringVideo: attentionCheck.questionsDuringVideo
+      ?? Math.max(1, (attentionCheck.questions || []).length),
+    minIntervalSeconds: attentionCheck.minIntervalSeconds ?? 120,
+    maxIntervalSeconds: attentionCheck.maxIntervalSeconds ?? 300,
+  }
+}
+
+function logInvalidAttentionCheckConfigurations(course) {
+  for (const [moduleIndex, module] of (course.modules || []).entries()) {
+    const videoLessons = [
+      ...(module.lessons || []).map((lesson) => ({ lesson, source: 'legacy' })),
+      ...(module.contentItems || [])
+        .filter((item) => item.type === 'video-lesson')
+        .map((lesson) => ({ lesson, source: 'contentItem' })),
+    ]
+    for (const { lesson, source } of videoLessons) {
+      const settings = lesson.attentionCheck
+      if (settings?.enabled !== true) continue
+
+      const questions = settings.questions || []
+      const isLegacy = settings.questionsDuringVideo === undefined
+        && questions.every((question) => question.selectedForPlayback === undefined)
+      const questionCount = Number(settings.questionsDuringVideo ?? Math.max(1, questions.length))
+      const minIntervalSeconds = Number(settings.minIntervalSeconds ?? 120)
+      const maxIntervalSeconds = Number(settings.maxIntervalSeconds ?? 300)
+      const durationSeconds = Number(lesson.durationSeconds)
+      const selectedQuestionCount = isLegacy
+        ? questions.length
+        : questions.filter((question) => question.selectedForPlayback === true).length
+      const reasons = []
+
+      if (!Number.isInteger(questionCount) || questionCount < 1 || questionCount > 100) {
+        reasons.push('invalid_question_count')
+      }
+      if (
+        !Number.isInteger(minIntervalSeconds)
+        || minIntervalSeconds < 10
+        || minIntervalSeconds > 7200
+        || !Number.isInteger(maxIntervalSeconds)
+        || maxIntervalSeconds < minIntervalSeconds
+        || maxIntervalSeconds > 7200
+      ) {
+        reasons.push('invalid_interval_range')
+      }
+      if (selectedQuestionCount !== questionCount) reasons.push('selected_question_count_mismatch')
+      if (
+        Number.isFinite(durationSeconds)
+        && durationSeconds > 0
+        && Number.isInteger(questionCount)
+        && Number.isInteger(minIntervalSeconds)
+        && durationSeconds < questionCount * minIntervalSeconds
+      ) {
+        reasons.push('video_duration_too_short')
+      }
+      if (!reasons.length) continue
+
+      const diagnostic = {
+        event: 'student.video_attention_check.invalid_configuration',
+        courseId: String(course._id || ''),
+        moduleIndex: moduleIndex + 1,
+        lessonId: String(lesson._id || ''),
+        lessonSource: source,
+        durationSeconds: Number.isFinite(durationSeconds) ? durationSeconds : null,
+        questionsDuringVideo: questionCount,
+        selectedQuestionCount,
+        minIntervalSeconds,
+        maxIntervalSeconds,
+        reasons,
+      }
+      const diagnosticKey = JSON.stringify(diagnostic)
+      if (loggedInvalidAttentionConfigurations.has(diagnosticKey)) continue
+      loggedInvalidAttentionConfigurations.add(diagnosticKey)
+      console.warn(JSON.stringify(diagnostic))
+    }
+  }
+}
+
 function hideQuizAnswers(course) {
   if (!course) return course
+  logInvalidAttentionCheckConfigurations(course)
   return {
     ...course,
     quizzes: course.quizzes?.map(({ questions, ...quiz }) => ({
       ...quiz,
       questions: questions?.map(({ correctOptionIndex, ...question }) => question),
     })),
-    modules: course.modules?.map(({ quiz, contentItems, ...module }) => ({
+    modules: course.modules?.map(({ quiz, lessons, contentItems, ...module }) => ({
       ...module,
+      ...(lessons ? {
+        lessons: lessons.map(({ attentionCheck, ...lesson }) => ({
+          ...lesson,
+          ...(attentionCheck ? { attentionCheck: sanitizeStudentAttentionCheck(attentionCheck) } : {}),
+        })),
+      } : {}),
       ...(quiz ? {
         quiz: {
           ...quiz,
@@ -112,8 +275,9 @@ function hideQuizAnswers(course) {
         },
       } : {}),
       ...(contentItems ? {
-        contentItems: contentItems.map(({ quiz: itemQuiz, ...item }) => ({
+        contentItems: contentItems.map(({ quiz: itemQuiz, attentionCheck, ...item }) => ({
           ...item,
+          ...(attentionCheck ? { attentionCheck: sanitizeStudentAttentionCheck(attentionCheck) } : {}),
           ...(itemQuiz ? {
             quiz: {
               ...itemQuiz,
@@ -140,68 +304,6 @@ function getCourseLessonIds(course) {
     const lessons = videoItems.length ? videoItems : module.lessons || []
     return lessons.map((lesson) => String(lesson._id)).filter(Boolean)
   })
-}
-
-async function issueCourseCertificate(req, enrollment) {
-  const course = enrollment.courseId
-  const lessonIds = [...new Set(getCourseLessonIds(course))]
-  const completedIds = new Set((enrollment.completedLessonIds || []).map(String))
-  if (!lessonIds.length || !lessonIds.every((lessonId) => completedIds.has(lessonId))) return null
-
-  const studentType = req.auth.accountCollection === 'clg_students' ? 'college' : 'independent'
-  const studentName = req.auth.user.fullName || req.auth.user.username || req.auth.user.email
-  const courseName = course?.title?.trim()
-  if (!studentName || !courseName) {
-    throw new Error('A student name and course name are required to issue a certificate.')
-  }
-
-  const studentId = new mongoose.Types.ObjectId(req.auth.id)
-  const courseId = new mongoose.Types.ObjectId(course._id)
-  const legacyCertificate = await Certificate.findOne({
-    userId: studentId,
-    courseId,
-    $or: [{ studentId: { $exists: false } }, { studentId: null }],
-  }).lean()
-  if (legacyCertificate) {
-    const legacyEnrollment = await Enrollment.findOne({
-      _id: legacyCertificate.enrollmentId,
-      userId: studentId,
-      courseId,
-      ...(studentType === 'college'
-        ? { collegeId: req.auth.user.collegeId }
-        : { $or: [{ collegeId: { $exists: false } }, { collegeId: null }] }),
-    }).select('_id').lean()
-    if (legacyEnrollment) return legacyCertificate
-  }
-
-  const certificateId = `AIH-${randomBytes(16).toString('hex').toUpperCase()}`
-  const identity = { studentType, studentId, courseId }
-  const certificateData = {
-    ...identity,
-    userId: studentId,
-    ...(studentType === 'college' ? { collegeId: req.auth.user.collegeId } : {}),
-    studentName,
-    courseName,
-    enrollmentId: enrollment._id,
-    certificateId,
-    name: `${courseName} Certificate of Completion`,
-    issuedAt: new Date(),
-    viewUrl: `/certificates/${certificateId}/view`,
-    downloadUrl: `/certificates/${certificateId}/download`,
-  }
-
-  try {
-    return await Certificate.findOneAndUpdate(
-      identity,
-      { $setOnInsert: certificateData },
-      { upsert: true, new: true, setDefaultsOnInsert: true },
-    ).lean()
-  } catch (error) {
-    if (error?.code !== 11000) throw error
-    const existing = await Certificate.findOne(identity).lean()
-    if (existing) return existing
-    throw error
-  }
 }
 
 function getCourseAssignmentCount(course) {
@@ -328,6 +430,143 @@ function findQuiz(course, quizId) {
     if (canonicalObjectId(quiz._id) === requestedQuizId) return quiz
   }
   return null
+}
+
+function getQuizAttemptStatus(state, now = new Date()) {
+  const lockedUntil = state.lockedUntil || null
+  const remainingLockMs = lockedUntil ? Math.max(0, new Date(lockedUntil).getTime() - now.getTime()) : 0
+  return {
+    maxAttempts: quizAttemptLimit,
+    attemptsUsed: state.attemptsUsed,
+    attemptsRemaining: state.passed || remainingLockMs > 0
+      ? 0
+      : Math.max(0, quizAttemptLimit - state.attemptsUsed),
+    cycleNumber: state.cycleNumber,
+    passed: state.passed,
+    lockedUntil,
+    remainingLockMs,
+    serverTime: now,
+  }
+}
+
+async function getQuizAttemptState(key, now = new Date()) {
+  let state = await QuizAttemptState.findOne(key).lean()
+  if (!state) {
+    const history = await QuizAttempt.find(key)
+      .select('status passed submittedAt createdAt attemptNumber cycleNumber')
+      .sort({ createdAt: 1 })
+      .lean()
+    const submitted = history.filter((attempt) => attempt.status === 'submitted')
+    const passed = submitted.some((attempt) => attempt.passed === true)
+    const lastThree = submitted.slice(-quizAttemptLimit)
+    const thirdFailure = !passed
+      && lastThree.length === quizAttemptLimit
+      && lastThree.every((attempt) => attempt.passed === false)
+      ? lastThree[lastThree.length - 1]
+      : null
+    let attemptsUsed = Math.min(history.length, quizAttemptLimit)
+    let cycleNumber = 1
+    let lockedUntil = null
+    if (thirdFailure) {
+      const failedAt = thirdFailure.submittedAt || thirdFailure.createdAt
+      if (failedAt) lockedUntil = new Date(new Date(failedAt).getTime() + quizAttemptCooldownMs)
+      if (lockedUntil && lockedUntil <= now) {
+        attemptsUsed = 0
+        cycleNumber += 1
+        lockedUntil = null
+      } else {
+        attemptsUsed = quizAttemptLimit
+      }
+    }
+
+    try {
+      state = await QuizAttemptState.findOneAndUpdate(
+        key,
+        {
+          $setOnInsert: {
+            ...key,
+            attemptsUsed,
+            cycleNumber,
+            passed,
+            lockedUntil,
+          },
+        },
+        { new: true, upsert: true, setDefaultsOnInsert: true },
+      ).lean()
+    } catch (error) {
+      if (error?.code !== 11000) throw error
+      state = await QuizAttemptState.findOne(key).lean()
+      if (!state) throw error
+    }
+  }
+
+  if (state.lockedUntil && new Date(state.lockedUntil) <= now && !state.passed) {
+    const resetState = await QuizAttemptState.findOneAndUpdate(
+      { ...key, cycleNumber: state.cycleNumber, lockedUntil: state.lockedUntil },
+      {
+        $set: { attemptsUsed: 0, lockedUntil: null },
+        $inc: { cycleNumber: 1 },
+      },
+      { new: true },
+    ).lean()
+    state = resetState || await QuizAttemptState.findOne(key).lean()
+  }
+  return state
+}
+
+async function reserveQuizAttempt(key, now = new Date()) {
+  let state = await getQuizAttemptState(key, now)
+  if (state.passed) return { state, reason: 'passed' }
+  if (state.lockedUntil && new Date(state.lockedUntil) > now) return { state, reason: 'locked' }
+  if (state.attemptsUsed >= quizAttemptLimit) return { state, reason: 'exhausted' }
+
+  const reservedState = await QuizAttemptState.findOneAndUpdate(
+    {
+      ...key,
+      cycleNumber: state.cycleNumber,
+      attemptsUsed: { $lt: quizAttemptLimit },
+      passed: { $ne: true },
+      $or: [
+        { lockedUntil: null },
+        { lockedUntil: { $exists: false } },
+        { lockedUntil: { $lte: now } },
+      ],
+    },
+    { $inc: { attemptsUsed: 1 } },
+    { new: true },
+  ).lean()
+  if (reservedState) return { state: reservedState, attemptNumber: reservedState.attemptsUsed }
+
+  state = await getQuizAttemptState(key, now)
+  if (state.passed) return { state, reason: 'passed' }
+  if (state.lockedUntil && new Date(state.lockedUntil) > now) return { state, reason: 'locked' }
+  return { state, reason: 'exhausted' }
+}
+
+function findVideoLesson(course, lessonId) {
+  for (const module of course?.modules || []) {
+    const lessons = [
+      ...(module.lessons || []),
+      ...(module.contentItems || []).filter((item) => item.type === 'video-lesson'),
+    ]
+    const lesson = lessons.find((item) => canonicalObjectId(item._id) === lessonId)
+    if (lesson) return lesson
+  }
+  return null
+}
+
+function getSelectedAttentionQuestions(attentionCheck) {
+  const questions = attentionCheck?.questions || []
+  const isLegacy = attentionCheck?.questionsDuringVideo === undefined
+    && questions.every((question) => question.selectedForPlayback === undefined)
+  return questions.filter((question) => isLegacy || question.selectedForPlayback === true)
+}
+
+function isCorrectAttentionAnswer(selectedIndices, correctIndices) {
+  const sortedSelected = [...selectedIndices].sort((a, b) => a - b)
+  const sortedCorrect = [...correctIndices].sort((a, b) => a - b)
+  return sortedSelected.length === sortedCorrect.length
+    && sortedSelected.every((index, position) => index === sortedCorrect[position])
 }
 
 function getQuizQuestionSnapshot(quiz) {
@@ -702,8 +941,8 @@ router.get('/courses/:courseId/learning-content', ...requireStudent, async (req,
 
     const [assignmentSubmissions, quizAttempts] = await Promise.all([
       AssignmentSubmission.find({ userId: req.auth.id, enrollmentId: enrollment._id })
-        .select('_id assignmentId fileName contentType fileSize submittedAt')
-        .sort({ submittedAt: -1 })
+        .select('_id assignmentId fileName contentType fileSize submittedAt reviewStatus')
+        .sort({ submittedAt: -1, _id: -1 })
         .lean(),
       QuizAttempt.find({ userId: req.auth.id, enrollmentId: enrollment._id })
         .select('_id quizId status startedAt passingPercentage timeLimitMinutes timeTakenSeconds answers earnedPoints totalPoints correctAnswers incorrectAnswers scorePercentage passed submittedAt createdAt +questionSnapshot')
@@ -713,11 +952,271 @@ router.get('/courses/:courseId/learning-content', ...requireStudent, async (req,
     return res.json({
       enrollment: {
         ...enrollment,
+        lessonPlaybackPositions: getLessonPlaybackPositions(enrollment),
         courseId: hideQuizAnswers(course),
       },
-      assignmentSubmissions,
+      assignmentSubmissions: assignmentSubmissions.map((submission) => ({
+        ...submission,
+        reviewStatus: ['approved', 'rejected'].includes(submission.reviewStatus)
+          ? submission.reviewStatus
+          : 'pending',
+      })),
       quizAttempts: quizAttempts.map(serializeQuizAttempt),
     })
+  } catch (error) {
+    return next(error)
+  }
+})
+
+router.post('/courses/:courseId/attention-checks/:lessonId/start', ...requireStudent, async (req, res, next) => {
+  try {
+    const { courseId, lessonId } = req.params
+    const { sessionId, triggerIndex, positionSeconds } = req.body ?? {}
+    if (
+      !isValidObjectId(courseId)
+      || !isValidObjectId(lessonId)
+      || typeof sessionId !== 'string'
+      || !/^[a-f\d-]{36}$/i.test(sessionId)
+      || !Number.isInteger(triggerIndex)
+      || triggerIndex < 0
+      || triggerIndex > 99
+      || !Number.isFinite(positionSeconds)
+      || positionSeconds < 0
+      || positionSeconds > 43200
+    ) {
+      return res.status(400).json({ message: 'A valid course, lesson, playback session, question number, and video position are required.' })
+    }
+
+    const enrollment = await Enrollment.findOne({
+      userId: req.auth.id,
+      courseId,
+      ...getStudentEnrollmentScope(req),
+      status: { $ne: 'cancelled' },
+    }).sort({ createdAt: -1 }).lean()
+    if (!enrollment) return res.status(404).json({ message: 'An active enrollment is required to answer this attention check.' })
+
+    const course = await Course.findById(courseId)
+      .select('+modules.lessons.attentionCheck.questions.correctOptionIndices +modules.contentItems.attentionCheck.questions.correctOptionIndices')
+      .lean()
+    if (!course) return res.status(404).json({ message: 'The enrolled course could not be found.' })
+    const lesson = findVideoLesson(course, lessonId)
+    const attentionCheck = lesson?.attentionCheck
+    if (!attentionCheck?.enabled) return res.status(404).json({ message: 'Attention checks are not enabled for this lesson.' })
+
+    const questions = getSelectedAttentionQuestions(attentionCheck)
+    const questionCount = attentionCheck.questionsDuringVideo ?? questions.length
+    if (!questions.length || questions.length !== questionCount || triggerIndex >= questionCount) {
+      return res.status(409).json({ message: 'The attention check configuration for this lesson is incomplete.' })
+    }
+
+    const scope = {
+      userId: req.auth.id,
+      enrollmentId: enrollment._id,
+      courseId,
+      lessonId,
+      sessionId,
+      triggerIndex,
+    }
+    const previousResponse = await VideoAttentionResponse.findOne(scope).select('+correctOptionIndices').lean()
+    if (previousResponse && previousResponse.status !== 'presented') {
+      return res.json({
+        recorded: true,
+        status: previousResponse.status,
+        responseTimeMs: previousResponse.responseTimeMs,
+        presentedAt: previousResponse.presentedAt,
+        serverTime: new Date(),
+      })
+    }
+    if (previousResponse) {
+      return res.json({
+        responseId: String(previousResponse._id),
+        question: {
+          _id: String(previousResponse.questionId),
+          prompt: previousResponse.questionPrompt,
+          type: previousResponse.questionType,
+          options: previousResponse.options,
+        },
+        presentedAt: previousResponse.presentedAt,
+        serverTime: new Date(),
+      })
+    }
+
+    const priorResponses = await VideoAttentionResponse.find({
+      userId: req.auth.id,
+      enrollmentId: enrollment._id,
+      lessonId,
+      sessionId,
+    }).select('questionId').lean()
+    const usedQuestionIds = new Set(priorResponses.map((response) => String(response.questionId)))
+    const availableQuestions = questions.filter((question) => !usedQuestionIds.has(String(question._id)))
+    if (!availableQuestions.length) {
+      return res.status(409).json({ message: 'There are no unused attention questions remaining in this playback session.' })
+    }
+    const question = availableQuestions[Math.floor(Math.random() * availableQuestions.length)]
+    const presentedAt = new Date()
+    const response = await VideoAttentionResponse.create({
+      userId: req.auth.id,
+      ...(req.auth.user.studentType === 'college' ? { collegeId: req.auth.user.collegeId } : {}),
+      enrollmentId: enrollment._id,
+      courseId,
+      lessonId,
+      lessonTitle: lesson.title || 'Video lesson',
+      sessionId,
+      triggerIndex,
+      questionId: question._id,
+      questionPrompt: question.prompt,
+      questionType: question.type,
+      options: question.options,
+      correctOptionIndices: question.correctOptionIndices,
+      videoPositionSeconds: positionSeconds,
+      presentedAt,
+      status: 'presented',
+    })
+    return res.status(201).json({
+      responseId: String(response._id),
+      question: {
+        _id: String(question._id),
+        prompt: question.prompt,
+        type: question.type,
+        options: question.options,
+      },
+      presentedAt,
+      serverTime: new Date(),
+    })
+  } catch (error) {
+    return next(error)
+  }
+})
+
+router.post('/courses/:courseId/attention-checks/:lessonId/submit', ...requireStudent, async (req, res, next) => {
+  try {
+    const { courseId, lessonId } = req.params
+    const { responseId, selectedOptionIndices, notAnswered } = req.body ?? {}
+    if (!isValidObjectId(courseId) || !isValidObjectId(lessonId) || !isValidObjectId(responseId)) {
+      return res.status(400).json({ message: 'Select a valid course, lesson, and attention check response.' })
+    }
+    if (notAnswered !== undefined && typeof notAnswered !== 'boolean') {
+      return res.status(400).json({ message: 'The attention check response status is invalid.' })
+    }
+
+    const enrollment = await Enrollment.findOne({
+      userId: req.auth.id,
+      courseId,
+      ...getStudentEnrollmentScope(req),
+      status: { $ne: 'cancelled' },
+    }).sort({ createdAt: -1 }).lean()
+    if (!enrollment) return res.status(404).json({ message: 'An active enrollment is required to submit this attention check.' })
+
+    const response = await VideoAttentionResponse.findOne({
+      _id: responseId,
+      userId: req.auth.id,
+      enrollmentId: enrollment._id,
+      courseId,
+      lessonId,
+    }).select('+correctOptionIndices')
+    if (!response) return res.status(409).json({ message: 'This attention check is no longer available for submission.' })
+    const answeredAt = new Date()
+    const responseTimeMs = Math.max(0, answeredAt.getTime() - new Date(response.presentedAt).getTime())
+    const isTimedOut = responseTimeMs >= attentionCheckResponseTimeoutMs
+    const hasNoAnswer = notAnswered === true
+      || selectedOptionIndices === undefined
+      || (Array.isArray(selectedOptionIndices) && selectedOptionIndices.length === 0)
+    const isNotAnswered = hasNoAnswer || isTimedOut
+
+    if (response.status === 'answered') {
+      if (notAnswered === true || !Array.isArray(selectedOptionIndices) || !isCorrectAttentionAnswer(selectedOptionIndices, response.selectedOptionIndices || [])) {
+        return res.status(409).json({ message: 'This attention check has already been answered.' })
+      }
+      return res.json({
+        recorded: true,
+        status: 'answered',
+        isCorrect: response.isCorrect,
+        responseTimeMs: response.responseTimeMs,
+      })
+    }
+
+    if (response.status === 'not_answered') {
+      if (!isNotAnswered) return res.status(409).json({ message: 'This attention check was recorded as not answered.' })
+      return res.json({
+        recorded: true,
+        status: 'not_answered',
+        isCorrect: false,
+        responseTimeMs: response.responseTimeMs,
+      })
+    }
+
+    if (isNotAnswered && !isTimedOut) {
+      return res.status(409).json({ message: 'The 10-second response window is still active.' })
+    }
+
+    if (isNotAnswered) {
+      response.selectedOptionIndices = []
+      response.answeredAt = answeredAt
+      response.responseTimeMs = attentionCheckResponseTimeoutMs
+      response.isCorrect = false
+      response.status = 'not_answered'
+      await response.save()
+      return res.json({
+        recorded: true,
+        status: 'not_answered',
+        isCorrect: false,
+        responseTimeMs: response.responseTimeMs,
+      })
+    }
+
+    if (
+      !Array.isArray(selectedOptionIndices)
+      || selectedOptionIndices.length < 1
+      || selectedOptionIndices.length > response.options.length
+      || selectedOptionIndices.some((index) => !Number.isInteger(index) || index < 0 || index >= response.options.length)
+      || new Set(selectedOptionIndices).size !== selectedOptionIndices.length
+      || (response.questionType !== 'multiple-select' && selectedOptionIndices.length !== 1)
+    ) {
+      return res.status(400).json({ message: 'Select a valid answer for this attention check.' })
+    }
+
+    response.selectedOptionIndices = selectedOptionIndices
+    response.answeredAt = answeredAt
+    response.responseTimeMs = responseTimeMs
+    response.isCorrect = isCorrectAttentionAnswer(selectedOptionIndices, response.correctOptionIndices)
+    response.status = 'answered'
+    await response.save()
+    return res.json({
+      recorded: true,
+      status: 'answered',
+      isCorrect: response.isCorrect,
+      responseTimeMs: response.responseTimeMs,
+    })
+  } catch (error) {
+    return next(error)
+  }
+})
+
+router.get('/courses/:courseId/quizzes/:quizId/attempts/status', ...requireStudent, async (req, res, next) => {
+  try {
+    const { courseId, quizId } = req.params
+    if (![courseId, quizId].every(isValidObjectId)) {
+      return res.status(400).json({ message: 'Select a valid course and quiz.' })
+    }
+    const enrollment = await Enrollment.findOne({
+      userId: req.auth.id,
+      courseId,
+      ...getStudentEnrollmentScope(req),
+      status: { $ne: 'cancelled' },
+    }).sort({ createdAt: -1 }).lean()
+    if (!enrollment) return res.status(404).json({ message: 'An active enrollment is required to view quiz status.' })
+
+    const course = await Course.findById(courseId).select('_id modules quizzes').lean()
+    if (!course) return res.status(404).json({ message: 'The enrolled course could not be found.' })
+    if (!findQuiz(course, quizId)) return res.status(404).json({ message: 'This quiz is not available in the enrolled course.' })
+
+    const now = new Date()
+    const state = await getQuizAttemptState({
+      userId: req.auth.id,
+      courseId,
+      quizId,
+    }, now)
+    return res.status(200).json({ quizStatus: getQuizAttemptStatus(state, now) })
   } catch (error) {
     return next(error)
   }
@@ -746,14 +1245,21 @@ router.post('/courses/:courseId/quizzes/:quizId/attempts/start', ...requireStude
       return res.status(404).json({ message: 'This quiz is not available in the enrolled course.' })
     }
     const questionSnapshot = getQuizQuestionSnapshot(quiz)
-    const attemptsMade = await QuizAttempt.countDocuments({
+    const stateKey = {
       userId: req.auth.id,
-      enrollmentId: enrollment._id,
+      courseId,
       quizId,
-    })
-    const maxAttempts = Number.isInteger(quiz.maxAttempts) && quiz.maxAttempts > 0 ? quiz.maxAttempts : 3
-    if (attemptsMade >= maxAttempts) {
-      return res.status(409).json({ message: 'You have used all available attempts for this quiz.' })
+    }
+    const now = new Date()
+    const reservation = await reserveQuizAttempt(stateKey, now)
+    if (reservation.reason) {
+      const quizStatus = getQuizAttemptStatus(reservation.state, now)
+      const message = reservation.reason === 'locked'
+        ? 'This quiz is locked until the 24-hour cooldown ends.'
+        : reservation.reason === 'passed'
+          ? 'You have already passed this quiz.'
+          : 'You have used all 3 attempts for this quiz.'
+      return res.status(reservation.reason === 'locked' ? 423 : 409).json({ message, quizStatus })
     }
 
     const attempt = await QuizAttempt.create({
@@ -762,8 +1268,10 @@ router.post('/courses/:courseId/quizzes/:quizId/attempts/start', ...requireStude
       enrollmentId: enrollment._id,
       courseId,
       quizId,
+      cycleNumber: reservation.state.cycleNumber,
+      attemptNumber: reservation.attemptNumber,
       status: 'started',
-      startedAt: new Date(),
+      startedAt: now,
       passingPercentage: Number.isFinite(quiz.passingPercentage) ? quiz.passingPercentage : 70,
       timeLimitMinutes: Number.isFinite(quiz.timeLimitMinutes) ? quiz.timeLimitMinutes : 0,
       questionSnapshot,
@@ -777,9 +1285,12 @@ router.post('/courses/:courseId/quizzes/:quizId/attempts/start', ...requireStude
         passingPercentage: attempt.passingPercentage,
         timeLimitMinutes: attempt.timeLimitMinutes,
         answers: [],
-        attemptsMade: attemptsMade + 1,
-        maxAttempts,
+        attemptsMade: reservation.attemptNumber,
+        attemptNumber: reservation.attemptNumber,
+        cycleNumber: reservation.state.cycleNumber,
+        maxAttempts: quizAttemptLimit,
       },
+      quizStatus: getQuizAttemptStatus(reservation.state, now),
       questions: getPublicQuestionSnapshot(questionSnapshot),
     })
   } catch (error) {
@@ -811,6 +1322,25 @@ router.post('/courses/:courseId/quizzes/:quizId/attempts/:attemptId/submit', ...
       status: 'started',
     }).select('+questionSnapshot')
     if (!attempt) return res.status(409).json({ message: 'This quiz attempt has already been submitted or is no longer available.' })
+
+    const stateKey = {
+      userId: req.auth.id,
+      courseId,
+      quizId,
+    }
+    const stateNow = new Date()
+    const state = await getQuizAttemptState(stateKey, stateNow)
+    const cycleNumber = attempt.cycleNumber || state.cycleNumber
+    if (cycleNumber !== state.cycleNumber || state.passed) {
+      return res.status(409).json({ message: 'This quiz attempt is no longer available.', quizStatus: getQuizAttemptStatus(state, stateNow) })
+    }
+    if (state.lockedUntil && new Date(state.lockedUntil) > stateNow) {
+      return res.status(423).json({
+        message: 'This quiz is locked until the 24-hour cooldown ends.',
+        quizStatus: getQuizAttemptStatus(state, stateNow),
+      })
+    }
+    const attemptNumber = attempt.attemptNumber || state.attemptsUsed
 
     const course = await Course.findById(courseId)
       .select('+modules.quiz.questions.correctOptionIndices +modules.contentItems.quiz.questions.correctOptionIndices +quizzes.questions.correctOptionIndex')
@@ -936,6 +1466,7 @@ router.post('/courses/:courseId/quizzes/:quizId/attempts/:attemptId/submit', ...
     const timeTakenSeconds = timeLimitMinutes > 0
       ? Math.min(elapsedSeconds, timeLimitMinutes * 60)
       : elapsedSeconds
+    const passed = scorePercentage >= passingPercentage
     const submittedAttempt = await QuizAttempt.findOneAndUpdate(
       { _id: attempt._id, userId: req.auth.id, status: 'started' },
       {
@@ -947,7 +1478,7 @@ router.post('/courses/:courseId/quizzes/:quizId/attempts/:attemptId/submit', ...
           correctAnswers,
           incorrectAnswers: questions.length - correctAnswers,
           scorePercentage,
-          passed: scorePercentage >= passingPercentage,
+          passed,
           passingPercentage,
           timeLimitMinutes,
           timeTakenSeconds,
@@ -958,6 +1489,29 @@ router.post('/courses/:courseId/quizzes/:quizId/attempts/:attemptId/submit', ...
     )
     if (!submittedAttempt) {
       return res.status(409).json({ message: 'This quiz attempt has already been submitted.' })
+    }
+    let updatedState = state
+    if (passed || attemptNumber === quizAttemptLimit) {
+      updatedState = await QuizAttemptState.findOneAndUpdate(
+        { ...stateKey, cycleNumber, passed: { $ne: true } },
+        {
+          $set: passed
+            ? { passed: true, lockedUntil: null }
+            : { lockedUntil: new Date(submittedAt.getTime() + quizAttemptCooldownMs) },
+        },
+        { new: true },
+      ).lean() || await QuizAttemptState.findOne(stateKey).lean()
+    }
+    if (!updatedState) throw new Error('Quiz attempt state could not be updated after submission.')
+    const quizStatus = getQuizAttemptStatus(updatedState, submittedAt)
+
+    if (submittedAttempt.passed) {
+      await issueCertificateIfEligible({
+        userId: req.auth.id,
+        studentName: req.auth.user.fullName,
+        enrollment,
+        course,
+      })
     }
 
     return res.status(200).json({
@@ -970,15 +1524,17 @@ router.post('/courses/:courseId/quizzes/:quizId/attempts/:attemptId/submit', ...
         timeTakenSeconds: submittedAttempt.timeTakenSeconds,
         passingPercentage: submittedAttempt.passingPercentage,
         timeLimitMinutes: submittedAttempt.timeLimitMinutes,
+        attemptNumber,
+        cycleNumber,
         answers: submittedAttempt.answers,
         earnedPoints,
         totalPoints,
         correctAnswers,
         incorrectAnswers: questions.length - correctAnswers,
         scorePercentage,
-        passed: scorePercentage >= passingPercentage,
-        attemptsMade: await QuizAttempt.countDocuments({ userId: req.auth.id, enrollmentId: enrollment._id, quizId }),
-        maxAttempts: Number.isInteger(quiz?.maxAttempts) && quiz.maxAttempts > 0 ? quiz.maxAttempts : 3,
+        passed,
+        attemptsMade: attemptNumber,
+        maxAttempts: quizAttemptLimit,
         questions: getPublicQuestionSnapshot(attempt.questionSnapshot?.length
           ? attempt.questionSnapshot
           : questions.map((question) => ({
@@ -988,6 +1544,7 @@ router.post('/courses/:courseId/quizzes/:quizId/attempts/:attemptId/submit', ...
             options: question.options || [],
           }))),
       },
+      quizStatus,
     })
   } catch (error) {
     return next(error)
@@ -1037,6 +1594,7 @@ router.post(
           contentType: submission.contentType,
           fileSize: submission.fileSize,
           submittedAt: submission.submittedAt,
+          reviewStatus: submission.reviewStatus,
         },
       })
     } catch (error) {
@@ -1104,14 +1662,119 @@ router.get('/enrollments/me', ...requireStudent, async (req, res, next) => {
   }
 })
 
+router.get('/certificates', ...requireStudent, async (req, res, next) => {
+  try {
+    const enrollments = await Enrollment.find({
+      userId: req.auth.id,
+      ...getStudentEnrollmentScope(req),
+      status: { $ne: 'cancelled' },
+    })
+      .populate('courseId', 'title thumbnailUrl modules assignments quizzes generateCertificate')
+      .sort({ createdAt: -1 })
+      .lean()
+    const latestEnrollmentByCourse = new Map()
+    for (const enrollment of enrollments) {
+      if (!enrollment.courseId) continue
+      const courseId = String(enrollment.courseId._id)
+      if (!latestEnrollmentByCourse.has(courseId)) latestEnrollmentByCourse.set(courseId, enrollment)
+    }
+
+    const certificates = await Promise.all([...latestEnrollmentByCourse.values()].map(async (enrollment) => {
+      const course = enrollment.courseId
+      const existing = await Certificate.findOne({ userId: req.auth.id, courseId: course._id }).lean()
+      if (existing) {
+        const requiredActivities = getRequiredCertificateActivities(course)
+        return {
+          courseId: String(course._id),
+          courseName: existing.courseName,
+          thumbnailUrl: course.thumbnailUrl || '',
+          eligible: true,
+          pendingRequirements: [],
+          progress: getCertificateCourseProgress(requiredActivities, [], true),
+          certificate: {
+            id: String(existing._id),
+            certificateId: existing.certificateId,
+            studentName: existing.studentName,
+            courseName: existing.courseName,
+            completedAt: existing.completedAt,
+          },
+        }
+      }
+
+      const eligibility = await evaluateCertificateEligibility({ course, enrollment })
+      const pendingRequirements = [...eligibility.pendingRequirements]
+      let certificate = null
+      if (eligibility.eligible && req.auth.user.fullName?.trim()) {
+        certificate = await issueCertificateIfEligible({
+          userId: req.auth.id,
+          studentName: req.auth.user.fullName,
+          enrollment,
+          course,
+          eligibility,
+        })
+      }
+      if (eligibility.eligible && !req.auth.user.fullName?.trim()) {
+        pendingRequirements.push({ type: 'profile', title: 'Add your full name to your account', status: 'name-required' })
+      }
+      return {
+        courseId: String(course._id),
+        courseName: course.title,
+        thumbnailUrl: course.thumbnailUrl || '',
+        eligible: Boolean(certificate),
+        pendingRequirements: certificate ? [] : pendingRequirements,
+        progress: getCertificateCourseProgress(eligibility.activities, pendingRequirements, Boolean(certificate)),
+        certificate: certificate ? {
+          id: String(certificate._id),
+          certificateId: certificate.certificateId,
+          studentName: certificate.studentName,
+          courseName: certificate.courseName,
+          completedAt: certificate.completedAt,
+        } : null,
+      }
+    }))
+
+    return res.json({ certificates })
+  } catch (error) {
+    return next(error)
+  }
+})
+
+router.get('/certificates/:certificateId/pdf', ...requireStudent, async (req, res, next) => {
+  try {
+    const { certificateId } = req.params
+    if (!isValidObjectId(certificateId)) return res.status(404).json({ message: 'The certificate was not found.' })
+    const activeTemplateId = await getActiveCertificateTemplateId()
+    const certificate = await Certificate.findOne({ _id: certificateId, userId: req.auth.id }).lean()
+    if (!certificate) return res.status(404).json({ message: 'The certificate was not found.' })
+    const templateId = certificate.templateId || activeTemplateId
+    const template = templateId === 'builtin'
+      ? null
+      : await CertificateTemplate.findById(templateId).select('+imageData secureUrl').lean()
+    if (templateId !== 'builtin' && !template) {
+      throw new Error('The certificate background used for this certificate is unavailable.')
+    }
+    const templateImage = templateId === 'builtin' ? undefined : await loadCertificateTemplateImage(template)
+    const pdf = await generateCertificatePdf(certificate, templateImage)
+    const download = req.query.download === 'true'
+    res.setHeader('Content-Type', 'application/pdf')
+    res.setHeader('Content-Disposition', `${download ? 'attachment' : 'inline'}; filename="aiHustle-certificate-${certificate.certificateId}.pdf"`)
+    res.setHeader('Cache-Control', 'private, no-store')
+    return res.send(pdf)
+  } catch (error) {
+    return next(error)
+  }
+})
+
 router.patch('/enrollments/:enrollmentId/progress', ...requireStudent, async (req, res, next) => {
   try {
     const { enrollmentId } = req.params
-    const { lessonId, completed, started } = req.body ?? {}
+    const { lessonId, completed, started, positionSeconds } = req.body ?? {}
+    const hasPositionSeconds = Object.prototype.hasOwnProperty.call(req.body || {}, 'positionSeconds')
     if (
       !isValidObjectId(enrollmentId)
       || !isValidObjectId(lessonId)
-      || (typeof completed !== 'boolean' && started !== true)
+      || (typeof completed !== 'boolean' && started !== true && !hasPositionSeconds)
+      || (hasPositionSeconds && (!Number.isFinite(positionSeconds) || positionSeconds < 0 || positionSeconds > 43200))
     ) {
       return res.status(400).json({ message: 'A valid enrollment, lesson, and progress state are required.' })
     }
@@ -1126,7 +1789,7 @@ router.patch('/enrollments/:enrollmentId/progress', ...requireStudent, async (re
       status: { $ne: 'cancelled' },
     }
     const enrollment = await Enrollment.findOne(enrollmentQuery)
-      .populate('courseId', 'title modules')
+      .populate('courseId', 'title modules assignments quizzes generateCertificate')
       .lean()
     if (!enrollment) return res.status(404).json({ message: 'The enrollment was not found.' })
     if (!courseHasLesson(enrollment.courseId, lessonId)) {
@@ -1146,6 +1809,12 @@ router.patch('/enrollments/:enrollmentId/progress', ...requireStudent, async (re
         update.$unset = { [`lessonCompletionDates.${lessonId}`]: 1 }
       }
     }
+    if (hasPositionSeconds) {
+      update.$set = {
+        ...update.$set,
+        [`lessonPlaybackPositions.${lessonId}`]: positionSeconds,
+      }
+    }
     const result = await Enrollment.updateOne(enrollmentQuery, update)
     if (!result.matchedCount) return res.status(404).json({ message: 'The enrollment was not found.' })
 
@@ -1155,14 +1824,19 @@ router.patch('/enrollments/:enrollmentId/progress', ...requireStudent, async (re
     if (completed === true) completedLessonIds.add(lessonId)
     if (completed === false) completedLessonIds.delete(lessonId)
     if (completed === true) {
-      const currentEnrollment = await Enrollment.findOne(enrollmentQuery)
-        .populate('courseId', 'title modules')
-        .lean()
-      if (currentEnrollment) await issueCourseCertificate(req, currentEnrollment)
+      await issueCertificateIfEligible({
+        userId: req.auth.id,
+        studentName: req.auth.user.fullName,
+        enrollment: { ...enrollment, completedLessonIds: [...completedLessonIds] },
+        course: enrollment.courseId,
+      })
     }
+    const lessonPlaybackPositions = getLessonPlaybackPositions(enrollment)
+    if (hasPositionSeconds) lessonPlaybackPositions[lessonId] = positionSeconds
     return res.json({
       completedLessonIds: [...completedLessonIds],
       startedLessonIds: [...startedLessonIds],
+      lessonPlaybackPositions,
     })
   } catch (error) {
     return next(error)

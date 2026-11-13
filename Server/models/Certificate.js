@@ -7,7 +7,7 @@ const certificateSchema = new mongoose.Schema(
       required: true,
       unique: true,
       immutable: true,
-      match: /^AIH-[A-F0-9]{32}$/,
+      match: /^AIH-(?:[A-F0-9]{32}|\d{4}-[A-Z0-9]{12})$/,
     },
     studentId: { type: mongoose.Schema.Types.ObjectId, required: true },
     studentType: { type: String, enum: ['independent', 'college'], required: true },
@@ -22,6 +22,8 @@ const certificateSchema = new mongoose.Schema(
     completedAt: { type: Date },
     viewUrl: { type: String, required: true, maxlength: 2048 },
     downloadUrl: { type: String, required: true, maxlength: 2048 },
+    templateId: { type: String, trim: true, default: 'builtin' },
+    requirementSnapshot: { type: [String], default: [] },
   },
   {
     autoCreate: false,
@@ -44,6 +46,17 @@ certificateSchema.index(
   },
 )
 certificateSchema.index({ studentType: 1, studentId: 1, issuedAt: -1 })
+certificateSchema.index(
+  { userId: 1, courseId: 1 },
+  {
+    unique: true,
+    name: 'unique_user_course_certificate',
+    partialFilterExpression: {
+      userId: { $type: 'objectId' },
+      courseId: { $type: 'objectId' },
+    },
+  },
+)
 
 const Certificate = mongoose.models.Certificate
   || mongoose.model('Certificate', certificateSchema, 'certificates')

@@ -12,16 +12,41 @@ const resourceSchema = new mongoose.Schema(
   { _id: true },
 )
 
+const attentionCheckQuestionSchema = new mongoose.Schema(
+  {
+    prompt: { type: String, required: true, trim: true, maxlength: 2000 },
+    type: { type: String, enum: ['multiple-choice', 'multiple-select', 'true-false'], default: 'multiple-choice' },
+    options: { type: [String], required: true, validate: (options) => options.length >= 2 && options.length <= 10 },
+    selectedForPlayback: { type: Boolean, default: false },
+    correctOptionIndices: { type: [Number], required: true, select: false },
+  },
+  { _id: true },
+)
+
+const attentionCheckSchema = new mongoose.Schema(
+  {
+    enabled: { type: Boolean, default: false },
+    questionsDuringVideo: { type: Number, min: 1, max: 100, default: 1 },
+    minIntervalSeconds: { type: Number, min: 10, max: 7200, default: 120 },
+    maxIntervalSeconds: { type: Number, min: 10, max: 7200, default: 300 },
+    questions: { type: [attentionCheckQuestionSchema], default: [] },
+  },
+  { _id: false },
+)
+
 const lessonSchema = new mongoose.Schema(
   {
     title: { type: String, required: true, trim: true, maxlength: 200 },
+    description: { type: String, trim: true, maxlength: 10000 },
     content: { type: String, trim: true, maxlength: 20000 },
     videoUrl: { type: String, trim: true, maxlength: 2048 },
     videoPublicId: { type: String, trim: true, maxlength: 255 },
     videoFormat: { type: String, trim: true, maxlength: 20 },
     videoBytes: { type: Number, min: 0 },
     durationSeconds: { type: Number, min: 0, default: 0 },
+    requiredForCertificate: { type: Boolean, default: true },
     resources: { type: [resourceSchema], default: [] },
+    attentionCheck: { type: attentionCheckSchema, default: undefined },
     order: { type: Number, min: 0, default: 0 },
   },
   { _id: true, timestamps: true },
@@ -46,6 +71,7 @@ const moduleQuizSchema = new mongoose.Schema(
     passingPercentage: { type: Number, min: 1, max: 100, default: 70 },
     maxAttempts: { type: Number, min: 1, max: 20, default: 3 },
     timeLimitMinutes: { type: Number, min: 0, max: 600, default: 0 },
+    requiredForCertificate: { type: Boolean, default: true },
     questions: { type: [moduleQuizQuestionSchema], default: [] },
   },
   { _id: true },
@@ -65,6 +91,8 @@ const moduleContentItemSchema = new mongoose.Schema(
     resources: { type: [resourceSchema], default: [] },
     dueDate: { type: Date },
     points: { type: Number, min: 0, default: 0 },
+    requiredForCertificate: { type: Boolean, default: true },
+    attentionCheck: { type: attentionCheckSchema, default: undefined },
     quiz: { type: moduleQuizSchema, default: undefined },
     order: { type: Number, min: 0, default: 0 },
   },
@@ -89,6 +117,7 @@ const assignmentSchema = new mongoose.Schema(
     description: { type: String, trim: true, maxlength: 10000 },
     dueDate: { type: Date },
     points: { type: Number, min: 0, default: 0 },
+    requiredForCertificate: { type: Boolean, default: true },
   },
   { _id: true },
 )
@@ -110,6 +139,7 @@ const quizSchema = new mongoose.Schema(
     passingPercentage: { type: Number, min: 1, max: 100, default: 70 },
     maxAttempts: { type: Number, min: 1, max: 20, default: 3 },
     timeLimitMinutes: { type: Number, min: 0, max: 600, default: 0 },
+    requiredForCertificate: { type: Boolean, default: true },
     questions: { type: [quizQuestionSchema], default: [] },
   },
   { _id: true },
@@ -127,6 +157,7 @@ const courseSchema = new mongoose.Schema(
     learningObjectives: { type: [String], default: [] },
     prerequisites: { type: [String], default: [] },
     estimatedDurationMinutes: { type: Number, min: 0, default: 0 },
+    generateCertificate: { type: Boolean, default: true },
     modules: { type: [moduleSchema], default: [] },
     assignments: { type: [assignmentSchema], default: [] },
     quizzes: { type: [quizSchema], default: [] },

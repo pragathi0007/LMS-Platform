@@ -26,6 +26,11 @@ const enrollmentSchema = new mongoose.Schema(
       type: [{ type: mongoose.Schema.Types.ObjectId }],
       default: [],
     },
+    lessonPlaybackPositions: {
+      type: Map,
+      of: { type: Number, min: 0, max: 43200 },
+      default: () => new Map(),
+    },
     lessonCompletionDates: {
       type: Map,
       of: Date,

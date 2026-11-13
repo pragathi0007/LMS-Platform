@@ -6,13 +6,17 @@ import Course from '../models/Course.js'
 import College from '../models/College.js'
 import Enrollment from '../models/Enrollment.js'
 import QuizAttempt from '../models/QuizAttempt.js'
+import QuizAttemptState from '../models/QuizAttemptState.js'
 import AssignmentSubmission from '../models/AssignmentSubmission.js'
+import VideoAttentionResponse from '../models/VideoAttentionResponse.js'
+import Certificate from '../models/Certificate.js'
+import CertificateTemplate from '../models/CertificateTemplate.js'
 import SupportTicket from '../models/SupportTicket.js'
 import EmailOtpChallenge from '../models/EmailOtpChallenge.js'
 import RegistrationEmailVerification from '../models/RegistrationEmailVerification.js'
 import ReferralCode from '../models/ReferralCode.js'
 import ReferralCodeDailyLimit from '../models/ReferralCodeDailyLimit.js'
-import Certificate from '../models/Certificate.js'
+import RefreshSession from '../models/RefreshSession.js'
 
 const requiredModels = [
   Admin,
@@ -24,13 +28,17 @@ const requiredModels = [
   College,
   Enrollment,
   QuizAttempt,
+  QuizAttemptState,
   AssignmentSubmission,
+  VideoAttentionResponse,
+  Certificate,
+  CertificateTemplate,
   SupportTicket,
   EmailOtpChallenge,
   RegistrationEmailVerification,
   ReferralCode,
   ReferralCodeDailyLimit,
-  Certificate,
+  RefreshSession,
 ]
 
 async function runDatabaseOperation(operation, collection, callback) {
@@ -83,6 +91,13 @@ export async function connectToDatabase() {
       model.collection.name,
       () => model.createIndexes(),
     )
+  }
+  const certificateDefaults = await Course.updateMany(
+    { generateCertificate: { $exists: false } },
+    { $set: { generateCertificate: true } },
+  )
+  if (certificateDefaults.modifiedCount > 0) {
+    console.log(`Enabled certificate generation for ${certificateDefaults.modifiedCount} existing courses.`)
   }
   console.log('Connected to MongoDB Atlas.')
 }

@@ -35,6 +35,7 @@ function normalizeModuleQuiz(quiz, moduleIndex) {
     typeof quiz !== 'object' || Array.isArray(quiz) ||
     (quiz._id !== undefined && !validDocumentId(quiz._id)) ||
     (quiz.title !== undefined && (typeof quiz.title !== 'string' || quiz.title.length > 200)) ||
+    (quiz.requiredForCertificate !== undefined && typeof quiz.requiredForCertificate !== 'boolean') ||
     (quiz.questions !== undefined && (!Array.isArray(quiz.questions) || quiz.questions.length > 100))
   ) return { error: `Check the quiz settings for module ${moduleIndex + 1}.` }
 
@@ -84,6 +85,106 @@ function normalizeModuleQuiz(quiz, moduleIndex) {
       passingPercentage,
       maxAttempts,
       timeLimitMinutes,
+      requiredForCertificate: quiz.requiredForCertificate !== false,
+      questions,
+    },
+  }
+}
+
+function normalizeAttentionCheck(attentionCheck, lessonIndex, moduleIndex) {
+  if (attentionCheck === undefined || attentionCheck === null) return { value: undefined }
+  if (
+    typeof attentionCheck !== 'object' ||
+    Array.isArray(attentionCheck) ||
+    (attentionCheck.enabled !== undefined && typeof attentionCheck.enabled !== 'boolean') ||
+    (attentionCheck.questions !== undefined &&
+      (!Array.isArray(attentionCheck.questions) || attentionCheck.questions.length > 100))
+  ) {
+    return { error: `Check the attention check settings for lesson ${lessonIndex + 1} in module ${moduleIndex + 1}.` }
+  }
+
+  const legacyQuestionSelection = attentionCheck.questionsDuringVideo === undefined
+    && (attentionCheck.questions || []).every((question) => question?.selectedForPlayback === undefined)
+  const questionsDuringVideo = attentionCheck.questionsDuringVideo === undefined
+    ? Math.max(1, (attentionCheck.questions || []).length)
+    : Number(attentionCheck.questionsDuringVideo)
+  const minIntervalSeconds = attentionCheck.minIntervalSeconds === undefined
+    ? 120
+    : Number(attentionCheck.minIntervalSeconds)
+  const maxIntervalSeconds = attentionCheck.maxIntervalSeconds === undefined
+    ? 300
+    : Number(attentionCheck.maxIntervalSeconds)
+  if (
+    !Number.isInteger(questionsDuringVideo) ||
+    questionsDuringVideo < 1 ||
+    questionsDuringVideo > 100 ||
+    !Number.isInteger(minIntervalSeconds) ||
+    minIntervalSeconds < 10 ||
+    minIntervalSeconds > 7200 ||
+    !Number.isInteger(maxIntervalSeconds) ||
+    maxIntervalSeconds < minIntervalSeconds ||
+    maxIntervalSeconds > 7200
+  ) {
+    return { error: `Choose valid minimum and maximum attention check intervals for lesson ${lessonIndex + 1} in module ${moduleIndex + 1}.` }
+  }
+
+  const questions = []
+  for (const [questionIndex, question] of (attentionCheck.questions || []).entries()) {
+    const type = question?.type || 'multiple-choice'
+    const correctOptionIndices = question?.correctOptionIndices
+    if (
+      !question ||
+      typeof question !== 'object' ||
+      Array.isArray(question) ||
+      (question._id !== undefined && !validDocumentId(question._id)) ||
+      (question.selectedForPlayback !== undefined && typeof question.selectedForPlayback !== 'boolean') ||
+      typeof question.prompt !== 'string' ||
+      !question.prompt.trim() ||
+      question.prompt.trim().length > 2000 ||
+      !['multiple-choice', 'multiple-select', 'true-false'].includes(type) ||
+      !Array.isArray(question.options) ||
+      question.options.length < 2 ||
+      question.options.length > 10 ||
+      question.options.some((option) => (
+        typeof option !== 'string' || !option.trim() || option.length > 500
+      )) ||
+      !Array.isArray(correctOptionIndices) ||
+      correctOptionIndices.length < (type === 'multiple-select' ? 2 : 1) ||
+      (type !== 'multiple-select' && correctOptionIndices.length !== 1) ||
+      correctOptionIndices.some((index) => (
+        !Number.isInteger(index) || index < 0 || index >= question.options.length
+      )) ||
+      new Set(correctOptionIndices).size !== correctOptionIndices.length ||
+      (type === 'true-false' &&
+        (question.options.length !== 2 || question.options[0] !== 'True' || question.options[1] !== 'False'))
+    ) {
+      return { error: `Check attention check question ${questionIndex + 1} for lesson ${lessonIndex + 1} in module ${moduleIndex + 1}.` }
+    }
+    questions.push({
+      ...(question._id ? { _id: normalizedDocumentId(question._id) } : {}),
+      prompt: question.prompt.trim(),
+      type,
+      options: question.options.map((option) => option.trim()),
+      selectedForPlayback: legacyQuestionSelection && attentionCheck.enabled === true
+        ? true
+        : question.selectedForPlayback === true,
+      correctOptionIndices,
+    })
+  }
+
+  const enabled = attentionCheck.enabled === true
+  if (enabled && questions.length === 0) {
+    return { error: `Add at least one attention check question for lesson ${lessonIndex + 1} in module ${moduleIndex + 1}, or disable attention checks.` }
+  }
+  if (enabled && questions.filter((question) => question.selectedForPlayback).length !== questionsDuringVideo) {
+    return { error: `Select exactly ${questionsDuringVideo} attention check question${questionsDuringVideo === 1 ? '' : 's'} for lesson ${lessonIndex + 1} in module ${moduleIndex + 1}.` }
+  }
+  return {
+    value: {
+      enabled,
+      questionsDuringVideo,
+      minIntervalSeconds,
+      maxIntervalSeconds,
       questions,
     },
   }
@@ -102,6 +203,7 @@ export function normalizeCourseDetails(input) {
     learningObjectives,
     prerequisites,
     estimatedDurationMinutes = 0,
+    generateCertificate = true,
     status = 'draft',
     modules = [],
     assignments = [],
@@ -115,6 +217,7 @@ export function normalizeCourseDetails(input) {
   if (!validHttpUrl(thumbnailUrl) || typeof thumbnailUrl !== 'string' || thumbnailUrl.length > 2048) return { error: 'Enter a valid thumbnail URL.' }
   if (typeof thumbnailPublicId !== 'string' || thumbnailPublicId.length > 255) return { error: 'The course thumbnail reference is invalid.' }
   if (!['draft', 'published'].includes(status)) return { error: 'Choose draft or published for the course status.' }
+  if (typeof generateCertificate !== 'boolean') return { error: 'Choose whether course completion certificates are enabled.' }
   if (!Number.isInteger(Number(estimatedDurationMinutes)) || Number(estimatedDurationMinutes) < 0 || Number(estimatedDurationMinutes) > 100000) return { error: 'Enter a valid estimated course duration.' }
   if (!Array.isArray(modules) || modules.length > 100) return { error: 'A course can contain up to 100 modules.' }
   if (!Array.isArray(assignments) || assignments.length > 100) return { error: 'A course can contain up to 100 assignments.' }
@@ -138,7 +241,9 @@ export function normalizeCourseDetails(input) {
     for (const [lessonIndex, lesson] of (module.lessons || []).entries()) {
       if (!lesson || typeof lesson !== 'object' || Array.isArray(lesson) ||
         (lesson._id !== undefined && !validDocumentId(lesson._id)) ||
+        (lesson.requiredForCertificate !== undefined && typeof lesson.requiredForCertificate !== 'boolean') ||
         typeof lesson.title !== 'string' || !lesson.title.trim() || lesson.title.trim().length > 200 ||
+        (lesson.description !== undefined && (typeof lesson.description !== 'string' || lesson.description.length > 10000)) ||
         (lesson.content !== undefined && (typeof lesson.content !== 'string' || lesson.content.length > 20000)) ||
         (lesson.videoUrl !== undefined && (typeof lesson.videoUrl !== 'string' || lesson.videoUrl.length > 2048 || !validHttpUrl(lesson.videoUrl))) ||
         (lesson.durationSeconds !== undefined && (!Number.isFinite(Number(lesson.durationSeconds)) || Number(lesson.durationSeconds) < 0 || Number(lesson.durationSeconds) > 43200)) ||
@@ -156,15 +261,20 @@ export function normalizeCourseDetails(input) {
           !['raw', 'image', 'video'].includes(resource.resourceType || 'raw'))) {
         return { error: `Check lesson ${lessonIndex + 1} in module ${moduleIndex + 1}.` }
       }
+      const attentionCheck = normalizeAttentionCheck(lesson.attentionCheck, lessonIndex, moduleIndex)
+      if (attentionCheck.error) return attentionCheck
       lessons.push({
         ...(lesson._id ? { _id: normalizedDocumentId(lesson._id) } : {}),
         title: lesson.title.trim(),
+        description: lesson.description?.trim() || '',
         content: lesson.content?.trim() || '',
         videoUrl: lesson.videoUrl?.trim() || '',
         videoPublicId: lesson.videoPublicId?.trim() || '',
         videoFormat: lesson.videoFormat?.trim() || '',
         videoBytes: lesson.videoBytes === undefined ? undefined : Number(lesson.videoBytes),
         durationSeconds: lesson.durationSeconds === undefined ? 0 : Number(lesson.durationSeconds),
+        requiredForCertificate: lesson.requiredForCertificate !== false,
+        ...(attentionCheck.value ? { attentionCheck: attentionCheck.value } : {}),
         resources: (lesson.resources || []).map((resource) => ({
           ...(resource._id ? { _id: normalizedDocumentId(resource._id) } : {}),
           title: resource.title.trim(),
@@ -183,6 +293,7 @@ export function normalizeCourseDetails(input) {
     for (const [itemIndex, item] of (module.contentItems || []).entries()) {
       if (!item || typeof item !== 'object' || Array.isArray(item) ||
         (item._id !== undefined && !validDocumentId(item._id)) ||
+        (item.requiredForCertificate !== undefined && typeof item.requiredForCertificate !== 'boolean') ||
         !['video-lesson', 'quiz', 'assignment', 'note'].includes(item.type) ||
         typeof item.title !== 'string' || !item.title.trim() || item.title.trim().length > 200 ||
         (item.description !== undefined && (typeof item.description !== 'string' || item.description.length > 10000)) ||
@@ -207,6 +318,10 @@ export function normalizeCourseDetails(input) {
       }
       const itemQuiz = item.type === 'quiz' ? normalizeModuleQuiz(item.quiz, moduleIndex) : { value: undefined }
       if (itemQuiz.error || (item.type === 'quiz' && !itemQuiz.value)) return itemQuiz.error ? itemQuiz : { error: `Check the quiz for content item ${itemIndex + 1} in module ${moduleIndex + 1}.` }
+      const attentionCheck = item.type === 'video-lesson'
+        ? normalizeAttentionCheck(item.attentionCheck, itemIndex, moduleIndex)
+        : { value: undefined }
+      if (attentionCheck.error) return attentionCheck
       contentItems.push({
         ...(item._id ? { _id: normalizedDocumentId(item._id) } : {}),
         type: item.type,
@@ -218,6 +333,7 @@ export function normalizeCourseDetails(input) {
         videoFormat: item.videoFormat?.trim() || '',
         videoBytes: item.videoBytes === undefined ? undefined : Number(item.videoBytes),
         durationSeconds: item.durationSeconds === undefined ? 0 : Number(item.durationSeconds),
+        requiredForCertificate: item.requiredForCertificate !== false,
         resources: (item.resources || []).map((resource) => ({
           ...(resource._id ? { _id: normalizedDocumentId(resource._id) } : {}),
           title: resource.title.trim(),
@@ -229,6 +345,7 @@ export function normalizeCourseDetails(input) {
         })),
         dueDate: item.dueDate || undefined,
         points: item.points === undefined ? 0 : Number(item.points),
+        ...(attentionCheck.value ? { attentionCheck: attentionCheck.value } : {}),
         ...(itemQuiz.value ? { quiz: itemQuiz.value } : {}),
         order: itemIndex,
       })
@@ -248,19 +365,21 @@ export function normalizeCourseDetails(input) {
   for (const [index, assignment] of assignments.entries()) {
     if (!assignment || typeof assignment !== 'object' ||
         (assignment._id !== undefined && !validDocumentId(assignment._id)) ||
+      (assignment.requiredForCertificate !== undefined && typeof assignment.requiredForCertificate !== 'boolean') ||
       typeof assignment.title !== 'string' || !assignment.title.trim() || assignment.title.trim().length > 200 ||
       (assignment.description !== undefined && (typeof assignment.description !== 'string' || assignment.description.length > 10000)) ||
       (assignment.dueDate !== undefined && assignment.dueDate !== '' && (typeof assignment.dueDate !== 'string' || Number.isNaN(Date.parse(assignment.dueDate)))) ||
       (assignment.points !== undefined && (!Number.isFinite(Number(assignment.points)) || Number(assignment.points) < 0))) {
       return { error: `Check assignment ${index + 1}.` }
     }
-    normalizedAssignments.push({ ...(assignment._id ? { _id: normalizedDocumentId(assignment._id) } : {}), title: assignment.title.trim(), description: assignment.description?.trim() || '', dueDate: assignment.dueDate || undefined, points: assignment.points === undefined ? 0 : Number(assignment.points) })
+    normalizedAssignments.push({ ...(assignment._id ? { _id: normalizedDocumentId(assignment._id) } : {}), title: assignment.title.trim(), description: assignment.description?.trim() || '', dueDate: assignment.dueDate || undefined, points: assignment.points === undefined ? 0 : Number(assignment.points), requiredForCertificate: assignment.requiredForCertificate !== false })
   }
 
   const normalizedQuizzes = []
   for (const [quizIndex, quiz] of quizzes.entries()) {
     if (!quiz || typeof quiz !== 'object' || typeof quiz.title !== 'string' || !quiz.title.trim() || quiz.title.trim().length > 200 ||
         (quiz._id !== undefined && !validDocumentId(quiz._id)) ||
+      (quiz.requiredForCertificate !== undefined && typeof quiz.requiredForCertificate !== 'boolean') ||
       (quiz.description !== undefined && (typeof quiz.description !== 'string' || quiz.description.length > 10000)) ||
       !Array.isArray(quiz.questions) || quiz.questions.length > 100) return { error: `Check quiz ${quizIndex + 1}.` }
     const passingPercentage = quiz.passingPercentage === undefined ? 70 : Number(quiz.passingPercentage)
@@ -283,7 +402,7 @@ export function normalizeCourseDetails(input) {
       }
       questions.push({ ...(question._id ? { _id: normalizedDocumentId(question._id) } : {}), prompt: question.prompt.trim(), options: question.options.map((option) => option.trim()), correctOptionIndex: question.correctOptionIndex, explanation: typeof question.explanation === 'string' ? question.explanation.trim() : '' })
     }
-    normalizedQuizzes.push({ ...(quiz._id ? { _id: normalizedDocumentId(quiz._id) } : {}), title: quiz.title.trim(), description: quiz.description?.trim() || '', passingPercentage, maxAttempts, timeLimitMinutes, questions })
+    normalizedQuizzes.push({ ...(quiz._id ? { _id: normalizedDocumentId(quiz._id) } : {}), title: quiz.title.trim(), description: quiz.description?.trim() || '', passingPercentage, maxAttempts, timeLimitMinutes, requiredForCertificate: quiz.requiredForCertificate !== false, questions })
   }
 
   return {
@@ -298,6 +417,7 @@ export function normalizeCourseDetails(input) {
       learningObjectives: objectives.value,
       prerequisites: required.value,
       estimatedDurationMinutes: Number(estimatedDurationMinutes),
+      generateCertificate,
       status,
       modules: normalizedModules,
       assignments: normalizedAssignments,

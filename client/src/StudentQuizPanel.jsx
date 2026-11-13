@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react'
-import { isInvalidSessionResponse } from './auth-session.js'
+import { fetchWithAuth, isInvalidSessionResponse } from './auth-session.js'
 import { buildQuizSubmissionAnswers, getQuestionKey } from './student-quiz-answers.js'
 import { API_BASE_URL } from './api-base-url.js'
 
@@ -12,6 +12,13 @@ function formatDuration(seconds) {
   const minutes = Math.floor(seconds / 60)
   const remainder = seconds % 60
   return minutes ? `${minutes}m ${remainder}s` : `${remainder}s`
+}
+
+function formatCooldown(seconds) {
+  const hours = Math.floor(seconds / 3600)
+  const minutes = Math.floor((seconds % 3600) / 60)
+  const remainder = seconds % 60
+  return `${hours}h ${minutes}m ${remainder}s`
 }
 
 export default function StudentQuizPanel({
@@ -27,7 +34,7 @@ export default function StudentQuizPanel({
   const quizAttempts = getQuizAttempts(quiz._id, attempts)
   const latestSubmittedAttempt = quizAttempts.find((attempt) => attempt.status !== 'started')
   const savedActiveAttempt = quizAttempts.find((attempt) => attempt.status === 'started')
-  const maxAttempts = quiz.maxAttempts || 3
+  const maxAttempts = 3
   const [questionSet, setQuestionSet] = useState(() => (
     savedActiveAttempt?.questions?.length
       ? savedActiveAttempt.questions
@@ -47,6 +54,18 @@ export default function StudentQuizPanel({
   const [secondsRemaining, setSecondsRemaining] = useState(null)
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState('')
+  const [quizStatus, setQuizStatus] = useState(() => ({
+    maxAttempts,
+    attemptsUsed: Math.min(quizAttempts.length, maxAttempts),
+    attemptsRemaining: Math.max(0, maxAttempts - quizAttempts.length),
+    passed: quizAttempts.some((attempt) => attempt.passed),
+    lockedUntil: null,
+    serverTime: null,
+  }))
+  const [quizStatusLoading, setQuizStatusLoading] = useState(true)
+  const [statusRefresh, setStatusRefresh] = useState(0)
+  const [serverClockOffset, setServerClockOffset] = useState(0)
+  const [lockSecondsRemaining, setLockSecondsRemaining] = useState(0)
   const submitLock = useRef(false)
   const submitRef = useRef(null)
   const timerSubmissionRequested = useRef(false)
@@ -57,9 +76,83 @@ export default function StudentQuizPanel({
   const answeredCount = questions.filter((question) => (
     (answers[getQuestionKey(question)] || []).length > 0
   )).length
-  const hasAttemptsLeft = quizAttempts.length < maxAttempts
+  const isLocked = Boolean(quizStatus.lockedUntil && lockSecondsRemaining > 0)
+  const hasAttemptsLeft = quizStatus.attemptsRemaining > 0 && !quizStatus.passed && !isLocked
   const latestResult = activeAttempt?.status === 'submitted' ? activeAttempt : latestSubmittedAttempt
   const timeLimitMinutes = activeAttempt?.timeLimitMinutes ?? quiz.timeLimitMinutes ?? 0
+
+  function applyQuizStatus(status) {
+    if (!status || typeof status !== 'object') return
+    setQuizStatus(status)
+    if (status.serverTime) {
+      const offset = new Date(status.serverTime).getTime() - Date.now()
+      setServerClockOffset(offset)
+      setLockSecondsRemaining(status.lockedUntil
+        ? Math.max(0, Math.ceil((new Date(status.lockedUntil).getTime() - (Date.now() + offset)) / 1000))
+        : 0)
+    }
+  }
+
+  useEffect(() => {
+    const controller = new AbortController()
+    async function loadQuizStatus() {
+      setQuizStatusLoading(true)
+      try {
+        const savedAuth = sessionStorage.getItem('lms.auth')
+        const auth = savedAuth ? JSON.parse(savedAuth) : null
+        if (typeof auth?.token !== 'string') {
+          onLogout()
+          return
+        }
+        const response = await fetchWithAuth(
+          `${API_BASE_URL}/courses/${encodeURIComponent(courseId)}/quizzes/${encodeURIComponent(quiz._id)}/attempts/status`,
+          { headers: { Authorization: `Bearer ${auth.token}` }, signal: controller.signal },
+          API_BASE_URL,
+          auth.token,
+        )
+        const result = await response.json()
+        if (isInvalidSessionResponse(response, result)) {
+          onLogout()
+          return
+        }
+        if (response.status === 404 && result.message === 'API route not found.') {
+          console.warn('Quiz attempt status endpoint is unavailable; using the loaded attempt history.')
+          return
+        }
+        if (!response.ok) throw new Error(result.message || 'Quiz attempt status could not be loaded.')
+        applyQuizStatus(result.quizStatus)
+      } catch (statusError) {
+        if (statusError.name !== 'AbortError') {
+          setError(statusError instanceof Error ? statusError.message : 'Quiz attempt status could not be loaded.')
+        }
+      } finally {
+        if (!controller.signal.aborted) setQuizStatusLoading(false)
+      }
+    }
+    void loadQuizStatus()
+    return () => controller.abort()
+  }, [courseId, enrollmentId, quiz._id, statusRefresh, onLogout])
+
+  useEffect(() => {
+    if (!quizStatus.lockedUntil) {
+      setLockSecondsRemaining(0)
+      return undefined
+    }
+    let refreshRequested = false
+    const updateCountdown = () => {
+      const remaining = Math.max(0, Math.ceil(
+        (new Date(quizStatus.lockedUntil).getTime() - (Date.now() + serverClockOffset)) / 1000,
+      ))
+      setLockSecondsRemaining(remaining)
+      if (remaining === 0 && !refreshRequested) {
+        refreshRequested = true
+        setStatusRefresh((value) => value + 1)
+      }
+    }
+    updateCountdown()
+    const timerId = window.setInterval(updateCountdown, 1000)
+    return () => window.clearInterval(timerId)
+  }, [quizStatus.lockedUntil, serverClockOffset])
 
   function setAnswer(questionId, optionIndex, multiple) {
     const questionKey = getQuestionKey({ _id: questionId })
@@ -85,20 +178,24 @@ export default function StudentQuizPanel({
         onLogout()
         return
       }
-      const response = await fetch(`${API_BASE_URL}/courses/${encodeURIComponent(courseId)}/quizzes/${encodeURIComponent(quiz._id)}/attempts/start`, {
+      const response = await fetchWithAuth(`${API_BASE_URL}/courses/${encodeURIComponent(courseId)}/quizzes/${encodeURIComponent(quiz._id)}/attempts/start`, {
         method: 'POST',
         headers: {
           Authorization: `Bearer ${auth.token}`,
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({ enrollmentId }),
-      })
+      }, API_BASE_URL, auth.token)
       const result = await response.json()
       if (isInvalidSessionResponse(response, result)) {
         onLogout()
         return
       }
-      if (!response.ok) throw new Error(result.message || 'This quiz could not be started.')
+      if (result.quizStatus) applyQuizStatus(result.quizStatus)
+      if (!response.ok) {
+        if (response.status !== 423) throw new Error(result.message || 'This quiz could not be started.')
+        return
+      }
       if (!result.attempt?._id || !result.attempt.startedAt) {
         throw new Error('The server did not confirm the quiz attempt start.')
       }
@@ -112,6 +209,7 @@ export default function StudentQuizPanel({
       timerSubmissionRequested.current = false
       setQuestionIndex(0)
       setView('quiz')
+      setError('')
       onAttemptAdded(result.attempt)
     } catch (startError) {
       setError(startError instanceof Error ? startError.message : 'This quiz could not be started.')
@@ -140,20 +238,21 @@ export default function StudentQuizPanel({
         onLogout()
         return
       }
-      const response = await fetch(`${API_BASE_URL}/courses/${encodeURIComponent(courseId)}/quizzes/${encodeURIComponent(quiz._id)}/attempts/${encodeURIComponent(activeAttempt._id)}/submit`, {
+      const response = await fetchWithAuth(`${API_BASE_URL}/courses/${encodeURIComponent(courseId)}/quizzes/${encodeURIComponent(quiz._id)}/attempts/${encodeURIComponent(activeAttempt._id)}/submit`, {
         method: 'POST',
         headers: {
           Authorization: `Bearer ${auth.token}`,
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({ answers: quizAnswers }),
-      })
+      }, API_BASE_URL, auth.token)
       const result = await response.json()
       if (isInvalidSessionResponse(response, result)) {
         onLogout()
         return
       }
       if (!response.ok) throw new Error(result.message || 'Your quiz answers could not be submitted.')
+      if (result.quizStatus) applyQuizStatus(result.quizStatus)
       if (!result.attempt?._id || result.attempt.status !== 'submitted') {
         throw new Error('The server did not confirm your quiz submission.')
       }
@@ -219,11 +318,22 @@ export default function StudentQuizPanel({
             <span><small>Questions</small><strong>{questionCount}</strong></span>
             <span><small>Time limit</small><strong>{timeLimitMinutes > 0 ? `${timeLimitMinutes} minutes` : 'No time limit'}</strong></span>
             <span><small>Passing score</small><strong>{quiz.passingPercentage || 70}%</strong></span>
-            <span><small>Attempts</small><strong>{maxAttempts} allowed · {maxAttempts - quizAttempts.length} remaining</strong></span>
+            <span><small>Attempts</small><strong>{quizStatus.attemptsRemaining} remaining of {maxAttempts}</strong></span>
           </div>
-          <button className="student-button" type="button" onClick={startQuiz} disabled={submitting}>
-            {submitting ? 'Starting…' : 'Start Quiz'}
-          </button>
+          {isLocked && (
+            <p className="student-quiz-lock" role="status">
+              All 3 attempts were unsuccessful. You can try again in <strong>{formatCooldown(lockSecondsRemaining)}</strong>.
+            </p>
+          )}
+          {quizStatus.passed && <p className="student-quiz-lock" role="status">You have passed this quiz.</p>}
+          {!quizStatusLoading && !isLocked && !quizStatus.passed && quizStatus.attemptsRemaining === 0 && (
+            <p className="student-quiz-lock" role="status">No new attempts are available. Finish an active attempt or wait for the cooldown after three failed submissions.</p>
+          )}
+          {hasAttemptsLeft && (
+            <button className="student-button" type="button" onClick={startQuiz} disabled={submitting || quizStatusLoading}>
+              {submitting ? 'Starting…' : quizStatusLoading ? 'Checking attempts…' : 'Start Quiz'}
+            </button>
+          )}
         </div>
       )}
 
@@ -353,21 +463,19 @@ export default function StudentQuizPanel({
               )
             })}
           </div>
-          <div className="student-quiz-history">
-            <h3>Attempt history</h3>
-            {quizAttempts.filter((attempt) => attempt.status !== 'started').map((attempt, index, history) => (
-              <p key={attempt._id}>Attempt {history.length - index}: {attempt.scorePercentage}% · {attempt.passed ? 'Passed' : 'Failed'}</p>
-            ))}
-          </div>
           {hasAttemptsLeft && (
             <button className="student-button" type="button" onClick={startQuiz} disabled={submitting}>
               {submitting ? 'Starting…' : 'Retake Quiz'}
             </button>
           )}
+          {isLocked && (
+            <p className="student-quiz-lock" role="status">
+              All 3 attempts were unsuccessful. You can try again in <strong>{formatCooldown(lockSecondsRemaining)}</strong>.
+            </p>
+          )}
         </div>
       )}
 
-      <small className="student-course-activity__attempts">{quizAttempts.length} of {maxAttempts} attempts used</small>
     </section>
   )
 }

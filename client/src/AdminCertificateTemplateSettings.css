@@ -1,0 +1,156 @@
+.certificate-template-settings {
+  display: grid;
+  gap: 12px;
+}
+
+.certificate-template-settings__layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(240px, 360px);
+  align-items: start;
+  gap: 22px;
+}
+
+.certificate-template-settings__preview {
+  display: grid;
+  min-width: 0;
+  gap: 8px;
+}
+
+.certificate-template-settings__preview-frame {
+  display: grid;
+  min-height: 220px;
+  aspect-ratio: 1.414 / 1;
+  place-items: center;
+  overflow: hidden;
+  border: 1px solid #d6d2c7;
+  border-radius: 9px;
+  background: #f7f5ee;
+}
+
+.certificate-template-settings__preview-frame img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.certificate-template-settings__fallback {
+  display: grid;
+  width: 88%;
+  min-height: 75%;
+  align-content: center;
+  justify-items: center;
+  gap: 12px;
+  border: 2px solid #34796e;
+  outline: 1px solid #8eb6ad;
+  outline-offset: -8px;
+  background: #fff;
+  color: #174c47;
+  text-align: center;
+}
+
+.certificate-template-settings__fallback strong {
+  font-size: 13px;
+}
+
+.certificate-template-settings__fallback span {
+  font-family: Georgia, serif;
+  font-size: clamp(14px, 2vw, 22px);
+  font-weight: 700;
+}
+
+.certificate-template-settings__fallback small,
+.certificate-template-settings__preview > p,
+.certificate-template-settings__form small,
+.certificate-template-settings__note {
+  margin: 0;
+  color: #626d67;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.certificate-template-settings__form {
+  display: grid;
+  align-content: start;
+  gap: 10px;
+}
+
+.certificate-template-settings__form > label {
+  color: #3c4741;
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.certificate-template-settings__form input[type='file'] {
+  width: 100%;
+  padding: 9px;
+  border: 1px solid #d6d2c7;
+  border-radius: 7px;
+  background: #fff;
+  color: #293630;
+  font: inherit;
+  font-size: 11px;
+}
+
+.certificate-template-settings__form .student-button {
+  width: fit-content;
+}
+
+.settings-page .certificate-template-settings__form .student-button {
+  border: 1px solid #17212b;
+  background: #17212b;
+  color: #fff;
+  font-weight: 700;
+  transition: background-color 140ms ease, border-color 140ms ease, transform 140ms ease;
+}
+
+.settings-page .certificate-template-settings__form .student-button:hover:not(:disabled) {
+  border-color: #273545;
+  background: #273545;
+  color: #fff;
+}
+
+.settings-page .certificate-template-settings__form .student-button:active:not(:disabled) {
+  border-color: #111923;
+  background: #111923;
+}
+
+.settings-page .certificate-template-settings__form .student-button:disabled {
+  border-color: #17212b;
+  background: #17212b;
+  color: #fff;
+  opacity: 1;
+  cursor: not-allowed;
+}
+
+.certificate-template-settings__note {
+  padding-top: 8px;
+  border-top: 1px solid #dedace;
+}
+
+:root[data-theme='dark'] .certificate-template-settings__preview-frame,
+:root[data-theme='dark'] .certificate-template-settings__form input[type='file'] {
+  border-color: #3b4943;
+  background: #17211d;
+  color: #e7ece8;
+}
+
+:root[data-theme='dark'] .certificate-template-settings__form > label {
+  color: #e1e9e3;
+}
+
+:root[data-theme='dark'] .certificate-template-settings__preview > p,
+:root[data-theme='dark'] .certificate-template-settings__form small,
+:root[data-theme='dark'] .certificate-template-settings__note {
+  color: #aab8b0;
+}
+
+:root[data-theme='dark'] .certificate-template-settings__note {
+  border-color: #394740;
+}
+
+@media (max-width: 720px) {
+  .certificate-template-settings__layout {
+    grid-template-columns: 1fr;
+  }
+}

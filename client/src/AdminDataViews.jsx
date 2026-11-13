@@ -785,6 +785,7 @@ export function CourseManagement({ onLogout }) {
 export function EnrollmentManagement({ onLogout }) {
   const [courses, setCourses] = useState([])
   const [enrollments, setEnrollments] = useState([])
+  const [attentionResponses, setAttentionResponses] = useState([])
   const [error, setError] = useState('')
   const [isLoading, setIsLoading] = useState(true)
   const [search, setSearch] = useState('')
@@ -796,9 +797,10 @@ export function EnrollmentManagement({ onLogout }) {
       setIsLoading(true)
       setError('')
       try {
-        const [coursesResponse, enrollmentsResponse] = await Promise.all([
+        const [coursesResponse, enrollmentsResponse, attentionResponse] = await Promise.all([
           adminRequest('/admin/courses', onLogout),
           adminRequest('/admin/enrollments', onLogout),
+          adminRequest('/admin/video-attention-responses', onLogout),
         ])
         if (!coursesResponse.response.ok) {
           throw new Error(coursesResponse.result.message || 'Unable to load courses.')
@@ -806,9 +808,15 @@ export function EnrollmentManagement({ onLogout }) {
         if (!enrollmentsResponse.response.ok) {
           throw new Error(enrollmentsResponse.result.message || 'Unable to load enrollments.')
         }
+        if (!attentionResponse.response.ok) {
+          throw new Error(attentionResponse.result.message || 'Unable to load video attention check responses.')
+        }
         setCourses(Array.isArray(coursesResponse.result.courses) ? coursesResponse.result.courses : [])
         setEnrollments(Array.isArray(enrollmentsResponse.result.enrollments)
           ? enrollmentsResponse.result.enrollments
+          : [])
+        setAttentionResponses(Array.isArray(attentionResponse.result.responses)
+          ? attentionResponse.result.responses
           : [])
       } catch (loadError) {
         setError(loadError instanceof Error ? loadError.message : 'Unable to load enrollments.')
@@ -863,7 +871,7 @@ export function EnrollmentManagement({ onLogout }) {
     <AdminDataPanel
       eyebrow="COURSE MANAGEMENT"
       title="Enrollments"
-      description="View course enrollment totals and the students enrolled in each course."
+      description="View course enrollment totals, enrolled students, and video attention check responses."
       className="admin-enrollments"
     >
       {error && <p className="admin-inline-error" role="alert">{error}</p>}
@@ -1010,6 +1018,28 @@ export function EnrollmentManagement({ onLogout }) {
           </section>
         </div>
       )}
+      <h3 className="admin-data-section-title">Video Attention Check Responses</h3>
+      {attentionResponses.length === 0
+        ? <p>No video attention check responses have been recorded.</p>
+        : (
+          <div className="admin-table-wrap">
+            <table className="admin-table">
+              <thead><tr><th>Student</th><th>Course / lesson</th><th>Question</th><th>Response</th><th>Result</th><th>Response time</th><th>Video position</th><th>Presented</th></tr></thead>
+              <tbody>{attentionResponses.map((entry) => (
+                <tr key={entry._id}>
+                  <td>{entry.userId?.fullName || entry.userId?.email || 'Unknown student'}{entry.collegeId?.name ? ` · ${entry.collegeId.name}` : ''}</td>
+                  <td>{entry.courseId?.title || 'Unknown course'} · {entry.lessonTitle}</td>
+                  <td>{entry.questionPrompt}</td>
+                  <td>{(entry.selectedOptionIndices || []).map((index) => entry.options?.[index]).filter(Boolean).join(', ') || (entry.status === 'presented' ? 'Not answered' : 'No response')}</td>
+                  <td>{entry.status === 'answered' ? (entry.isCorrect ? 'Correct' : 'Incorrect') : 'Pending'}</td>
+                  <td>{Number.isFinite(entry.responseTimeMs) ? `${(entry.responseTimeMs / 1000).toFixed(1)} s` : '—'}</td>
+                  <td>{Number.isFinite(entry.videoPositionSeconds) ? `${Math.floor(entry.videoPositionSeconds)} s` : '—'}</td>
+                  <td>{entry.presentedAt ? new Date(entry.presentedAt).toLocaleString() : '—'}</td>
+                </tr>
+              ))}</tbody>
+            </table>
+          </div>
+        )}
     </AdminDataPanel>
   )
 }

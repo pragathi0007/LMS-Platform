@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { isInvalidSessionResponse } from './auth-session.js'
 import { API_BASE_URL } from './api-base-url.js'
+import AdminCertificateManagement from './AdminCertificateManagement.jsx'
 import './AdminCourseManagement.css'
 
 const defaultCourseCategories = [
@@ -54,6 +55,9 @@ function emptyCourse() {
     learningObjectives: [],
     prerequisites: [],
     estimatedDurationMinutes: 0,
+    generateCertificate: true,
+    assignments: [],
+    quizzes: [],
     status: 'draft',
     modules: [],
   }
@@ -63,16 +67,41 @@ function newModule(index) {
   return { _id: newMongoId(), _localId: localKey(), title: `Module ${index + 1}`, description: '', lessons: [], quiz: null, contentItems: [] }
 }
 
+function emptyAttentionCheck() {
+  return { enabled: false, questionsDuringVideo: 1, minIntervalSeconds: 120, maxIntervalSeconds: 300, questions: [] }
+}
+
+function attentionCheckDraft(attentionCheck) {
+  const questions = attentionCheck?.questions || []
+  const legacySelection = attentionCheck?.enabled === true
+    && attentionCheck.questionsDuringVideo === undefined
+    && questions.every((question) => question.selectedForPlayback === undefined)
+  return {
+    ...emptyAttentionCheck(),
+    ...attentionCheck,
+    questionsDuringVideo: attentionCheck?.questionsDuringVideo ?? Math.max(1, questions.length),
+    questions: questions.map((question) => ({
+      ...question,
+      _localId: question._localId || question._id || localKey(),
+      options: [...(question.options || [])],
+      correctOptionIndices: [...(question.correctOptionIndices || [])],
+      selectedForPlayback: question.selectedForPlayback === true || legacySelection,
+    })),
+  }
+}
+
 function emptyContentItem(type) {
   if (type === 'quiz') {
     return {
       type,
       title: 'New quiz',
+      requiredForCertificate: true,
       quiz: {
         title: 'New quiz',
         passingPercentage: 70,
         maxAttempts: 3,
         timeLimitMinutes: 0,
+        requiredForCertificate: true,
         questions: [],
       },
     }
@@ -87,30 +116,72 @@ function emptyContentItem(type) {
     videoFormat: '',
     videoBytes: 0,
     durationSeconds: 0,
+    requiredForCertificate: true,
     resources: [],
+    ...(type === 'video-lesson' ? { attentionCheck: emptyAttentionCheck() } : {}),
     dueDate: '',
     points: 0,
   }
 }
 
 function emptyLesson() {
-  return { title: '', content: '', videoUrl: '', videoPublicId: '', durationSeconds: 0, resources: [] }
+  return { title: '', description: '', content: '', videoUrl: '', videoPublicId: '', durationSeconds: 0, resources: [], attentionCheck: emptyAttentionCheck() }
 }
 
 function emptyQuestion() {
   return { _localId: localKey(), prompt: '', type: 'multiple-choice', options: ['', ''], correctOptionIndices: [0], marks: 1 }
 }
 
+function emptyAttentionQuestion() {
+  return { _localId: localKey(), prompt: '', type: 'multiple-choice', options: ['', ''], correctOptionIndices: [0], selectedForPlayback: false }
+}
+
+function serializeAttentionCheck(attentionCheck) {
+  return {
+    enabled: attentionCheck.enabled,
+    questionsDuringVideo: Number(attentionCheck.questionsDuringVideo),
+    minIntervalSeconds: Number(attentionCheck.minIntervalSeconds),
+    maxIntervalSeconds: Number(attentionCheck.maxIntervalSeconds),
+    questions: (attentionCheck.questions || []).map((question) => ({
+      ...(question._id ? { _id: question._id } : {}),
+      prompt: question.prompt,
+      type: question.type || 'multiple-choice',
+      options: question.options,
+      correctOptionIndices: question.correctOptionIndices || [],
+      selectedForPlayback: question.selectedForPlayback === true,
+    })),
+  }
+}
+
+function buildAttentionLessonContent(lesson, module) {
+  return [
+    `Module title: ${module.title || ''}`,
+    `Module description: ${module.description || ''}`,
+    `Lesson title: ${lesson.title || ''}`,
+    `Lesson description: ${lesson.description || ''}`,
+    `Lesson content: ${lesson.content || ''}`,
+  ].filter((section) => !section.endsWith(': ')).join('\n\n').slice(0, 30000)
+}
+
 function courseFromServer(course) {
   return {
     ...emptyCourse(),
     ...course,
+    generateCertificate: course.generateCertificate !== false,
     learningObjectives: course.learningObjectives || [],
     prerequisites: course.prerequisites || [],
+    assignments: (course.assignments || []).map((assignment) => ({
+      ...assignment,
+      requiredForCertificate: assignment.requiredForCertificate !== false,
+    })),
+    quizzes: (course.quizzes || []).map((quiz) => ({
+      ...quiz,
+      requiredForCertificate: quiz.requiredForCertificate !== false,
+    })),
     modules: (course.modules || []).map((module) => {
       const legacyItems = [
         ...(module.lessons || []).map((lesson) => ({ ...lesson, type: 'video-lesson' })),
-        ...(module.quiz ? [{ type: 'quiz', title: module.quiz.title, quiz: module.quiz }] : []),
+        ...(module.quiz ? [{ type: 'quiz', title: module.quiz.title, requiredForCertificate: module.quiz.requiredForCertificate !== false, quiz: module.quiz }] : []),
       ]
       return {
         ...module,
@@ -118,6 +189,7 @@ function courseFromServer(course) {
         lessons: (module.lessons || []).map((lesson) => ({
           ...lesson,
           _localId: lesson._id || localKey(),
+          attentionCheck: attentionCheckDraft(lesson.attentionCheck),
           resources: (lesson.resources || []).map((resource) => ({ ...resource, _localId: resource._id || localKey() })),
         })),
         quiz: module.quiz ? {
@@ -131,6 +203,8 @@ function courseFromServer(course) {
         contentItems: (module.contentItems?.length ? module.contentItems : legacyItems).map((item) => ({
           ...item,
           _localId: item._id || localKey(),
+          requiredForCertificate: item.requiredForCertificate !== false && item.quiz?.requiredForCertificate !== false,
+          ...(item.type === 'video-lesson' ? { attentionCheck: attentionCheckDraft(item.attentionCheck) } : {}),
           resources: (item.resources || []).map((resource) => ({ ...resource, _localId: resource._id || localKey() })),
           quiz: item.quiz ? {
             ...item.quiz,
@@ -158,6 +232,31 @@ function serializeCourse(course, status = course.status) {
     learningObjectives: course.learningObjectives,
     prerequisites: course.prerequisites,
     estimatedDurationMinutes: Number(course.estimatedDurationMinutes) || 0,
+    generateCertificate: course.generateCertificate !== false,
+    assignments: (course.assignments || []).map((assignment) => ({
+      ...(assignment._id ? { _id: assignment._id } : {}),
+      title: assignment.title,
+      description: assignment.description || '',
+      dueDate: apiDateValue(assignment.dueDate),
+      points: Number(assignment.points) || 0,
+      requiredForCertificate: assignment.requiredForCertificate !== false,
+    })),
+    quizzes: (course.quizzes || []).map((quiz) => ({
+      ...(quiz._id ? { _id: quiz._id } : {}),
+      title: quiz.title,
+      description: quiz.description || '',
+      passingPercentage: Number(quiz.passingPercentage) || 70,
+      maxAttempts: Number(quiz.maxAttempts) || 3,
+      timeLimitMinutes: Number(quiz.timeLimitMinutes) || 0,
+      requiredForCertificate: quiz.requiredForCertificate !== false,
+      questions: (quiz.questions || []).map((question) => ({
+        ...(question._id ? { _id: question._id } : {}),
+        prompt: question.prompt,
+        options: question.options || [],
+        correctOptionIndex: question.correctOptionIndex,
+        explanation: question.explanation || '',
+      })),
+    })),
     status,
     modules: course.modules.map((module) => ({
       ...(module._id ? { _id: module._id } : {}),
@@ -166,12 +265,15 @@ function serializeCourse(course, status = course.status) {
       lessons: module.contentItems.filter((item) => item.type === 'video-lesson').map((lesson) => ({
         ...(lesson._id ? { _id: lesson._id } : {}),
         title: lesson.title,
+        description: lesson.description || '',
         content: lesson.content,
         videoUrl: lesson.videoUrl,
         videoPublicId: lesson.videoPublicId,
         videoFormat: lesson.videoFormat,
         videoBytes: Number(lesson.videoBytes) || 0,
         durationSeconds: Number(lesson.durationSeconds) || 0,
+        requiredForCertificate: lesson.requiredForCertificate !== false,
+        attentionCheck: serializeAttentionCheck(lesson.attentionCheck || emptyAttentionCheck()),
         resources: lesson.resources.map((resource) => ({
           ...(resource._id ? { _id: resource._id } : {}),
           title: resource.title,
@@ -183,7 +285,10 @@ function serializeCourse(course, status = course.status) {
         })),
       })),
       ...(module.contentItems.find((item) => item.type === 'quiz')?.quiz ? {
-        quiz: serializeModuleQuiz(module.contentItems.find((item) => item.type === 'quiz').quiz),
+        quiz: serializeModuleQuiz(
+          module.contentItems.find((item) => item.type === 'quiz').quiz,
+          module.contentItems.find((item) => item.type === 'quiz').requiredForCertificate !== false,
+        ),
       } : {}),
       contentItems: module.contentItems.map((item, index) => ({
         ...(item._id ? { _id: item._id } : {}),
@@ -196,6 +301,7 @@ function serializeCourse(course, status = course.status) {
         videoFormat: item.videoFormat || '',
         videoBytes: Number(item.videoBytes) || 0,
         durationSeconds: Number(item.durationSeconds) || 0,
+        requiredForCertificate: item.requiredForCertificate !== false,
         resources: (item.resources || []).map((resource) => ({
           ...(resource._id ? { _id: resource._id } : {}),
           title: resource.title,
@@ -205,22 +311,26 @@ function serializeCourse(course, status = course.status) {
           format: resource.format,
           bytes: Number(resource.bytes) || 0,
         })),
-        dueDate: item.dueDate || '',
+        dueDate: apiDateValue(item.dueDate),
         points: Number(item.points) || 0,
-        ...(item.quiz ? { quiz: serializeModuleQuiz(item.quiz) } : {}),
+        ...(item.type === 'video-lesson' ? {
+          attentionCheck: serializeAttentionCheck(item.attentionCheck || emptyAttentionCheck()),
+        } : {}),
+        ...(item.quiz ? { quiz: serializeModuleQuiz(item.quiz, item.requiredForCertificate !== false) } : {}),
         order: index,
       })),
     })),
   }
 }
 
-function serializeModuleQuiz(quiz) {
+function serializeModuleQuiz(quiz, requiredForCertificate = quiz.requiredForCertificate !== false) {
   return {
     ...(quiz._id ? { _id: quiz._id } : {}),
     title: quiz.title,
     passingPercentage: Number(quiz.passingPercentage) || 70,
     maxAttempts: Number(quiz.maxAttempts) || 3,
     timeLimitMinutes: Number(quiz.timeLimitMinutes) || 0,
+    requiredForCertificate,
     questions: (quiz.questions || []).filter((question) => question.prompt.trim()).map((question) => ({
       ...(question._id ? { _id: question._id } : {}),
       prompt: question.prompt,
@@ -355,6 +465,12 @@ function dateTimeLocalValue(value) {
   const date = new Date(value)
   if (Number.isNaN(date.getTime())) return ''
   return new Date(date.getTime() - date.getTimezoneOffset() * 60000).toISOString().slice(0, 16)
+}
+
+function apiDateValue(value) {
+  if (!value) return ''
+  const date = new Date(value)
+  return Number.isNaN(date.getTime()) ? '' : date.toISOString()
 }
 
 function CoverImage({ url, title, className = '' }) {
@@ -991,7 +1107,12 @@ export default function AdminCourseManagement({ onLogout }) {
     const module = course.modules[moduleIndex]
     const existing = itemIndex >= 0 ? module.contentItems[itemIndex] : null
     const draft = existing
-      ? { ...existing, resources: [...(existing.resources || [])], quiz: existing.quiz ? { ...existing.quiz, questions: existing.quiz.questions.map((question) => ({ ...question, options: [...question.options], correctOptionIndices: [...question.correctOptionIndices] })) } : undefined }
+      ? {
+        ...existing,
+        resources: [...(existing.resources || [])],
+        ...(type === 'video-lesson' ? { attentionCheck: attentionCheckDraft(existing.attentionCheck) } : {}),
+        quiz: existing.quiz ? { ...existing.quiz, questions: existing.quiz.questions.map((question) => ({ ...question, options: [...question.options], correctOptionIndices: [...question.correctOptionIndices] })) } : undefined,
+      }
       : emptyContentItem(type)
     setActiveContentEditor({ moduleIndex, itemIndex })
     setContentDraft(draft)
@@ -1029,6 +1150,35 @@ export default function AdminCourseManagement({ onLogout }) {
         return
       }
     }
+    if (contentDraft.type === 'video-lesson') {
+      const { enabled, questionsDuringVideo, minIntervalSeconds, maxIntervalSeconds, questions } = contentDraft.attentionCheck
+      const validIntervals = Number.isInteger(Number(minIntervalSeconds))
+        && Number(minIntervalSeconds) >= 10
+        && Number(minIntervalSeconds) <= 7200
+        && Number.isInteger(Number(maxIntervalSeconds))
+        && Number(maxIntervalSeconds) >= Number(minIntervalSeconds)
+        && Number(maxIntervalSeconds) <= 7200
+      const validQuestionCount = Number.isInteger(Number(questionsDuringVideo))
+        && Number(questionsDuringVideo) >= 1
+        && Number(questionsDuringVideo) <= 100
+      const validQuestions = questions.every((question) => (
+        question.prompt.trim()
+        && typeof question.selectedForPlayback === 'boolean'
+        && question.options.length >= 2
+        && question.options.length <= 10
+        && question.options.every((option) => option.trim())
+        && question.correctOptionIndices.length >= (question.type === 'multiple-select' ? 2 : 1)
+        && (question.type === 'multiple-select' || question.correctOptionIndices.length === 1)
+        && new Set(question.correctOptionIndices).size === question.correctOptionIndices.length
+        && question.correctOptionIndices.every((index) => question.options[index]?.trim())
+        && (question.type !== 'true-false' || (question.options.length === 2 && question.options[0] === 'True' && question.options[1] === 'False'))
+      ))
+      const selectedQuestionCount = questions.filter((question) => question.selectedForPlayback).length
+      if (!validIntervals || !validQuestionCount || (enabled && selectedQuestionCount !== Number(questionsDuringVideo)) || !validQuestions) {
+        setPanelError('Configure valid intervals, select the configured number of playback questions, and finish or remove incomplete questions.')
+        return
+      }
+    }
     const { moduleIndex, itemIndex } = activeContentEditor
     const saved = {
       ...contentDraft,
@@ -1036,6 +1186,13 @@ export default function AdminCourseManagement({ onLogout }) {
       _localId: contentDraft._localId || localKey(),
       ...(contentDraft.type === 'quiz' ? {
         quiz: { ...contentDraft.quiz, title: contentDraft.title.trim(), questions: contentDraft.quiz.questions.filter((question) => question.prompt.trim()) },
+      } : {}),
+      ...(contentDraft.type === 'video-lesson' ? {
+        attentionCheck: {
+          ...contentDraft.attentionCheck,
+          minIntervalSeconds: Number(contentDraft.attentionCheck.minIntervalSeconds),
+          maxIntervalSeconds: Number(contentDraft.attentionCheck.maxIntervalSeconds),
+        },
       } : {}),
     }
     setCourse((current) => ({
@@ -1089,19 +1246,60 @@ export default function AdminCourseManagement({ onLogout }) {
     setIsGeneratingQuiz(true)
     setPanelError('')
     try {
-      const result = await adminCourseRequest('/admin/courses/generate-quiz-questions', onLogout, {
-        method: 'POST',
-        body: { lessonContent: aiLessonContent, questionCount: Number(aiQuestionCount), difficulty: aiDifficulty, questionTypes: aiQuestionTypes },
-      })
-      const questions = (result.questions || []).map((question) => ({
-        ...question,
-        _localId: localKey(),
-        marks: 1,
-        correctOptionIndices: question.correctOptionIndices || [],
-      }))
+      const questions = await fetchGeneratedQuestions(aiLessonContent)
       setContentDraft((current) => ({ ...current, quiz: { ...current.quiz, questions: [...current.quiz.questions, ...questions] } }))
     } catch (generationError) {
       setPanelError(generationError instanceof Error ? generationError.message : 'Quiz questions could not be generated.')
+    } finally {
+      setIsGeneratingQuiz(false)
+    }
+  }
+
+  async function fetchGeneratedQuestions(lessonContent, questionCount = Number(aiQuestionCount)) {
+    const result = await adminCourseRequest('/admin/courses/generate-quiz-questions', onLogout, {
+      method: 'POST',
+      body: { lessonContent, questionCount, difficulty: aiDifficulty, questionTypes: aiQuestionTypes },
+    })
+    return (result.questions || []).map((question) => ({
+      ...question,
+      _localId: localKey(),
+      correctOptionIndices: question.correctOptionIndices || [],
+    }))
+  }
+
+  async function generateAttentionQuestions() {
+    if (!activeContentEditor || !contentDraft) return
+    const module = course.modules[activeContentEditor.moduleIndex]
+    const questionCount = Number(contentDraft.attentionCheck.questionsDuringVideo)
+    const lessonContent = buildAttentionLessonContent(contentDraft, module)
+    if (!lessonContent.trim()) {
+      setPanelError('Add a lesson title, description, or content before generating attention check questions.')
+      return
+    }
+    if (!Number.isInteger(questionCount) || questionCount < 1 || questionCount > 100) {
+      setPanelError('Choose a valid number of attention check questions from 1 to 100.')
+      return
+    }
+    if (!aiQuestionTypes.length) {
+      setPanelError('Choose at least one question type.')
+      return
+    }
+    setIsGeneratingQuiz(true)
+    setPanelError('')
+    try {
+      const questions = await fetchGeneratedQuestions(lessonContent, questionCount)
+      setContentDraft((current) => ({
+        ...current,
+        attentionCheck: {
+          ...current.attentionCheck,
+          questions: [
+            ...current.attentionCheck.questions,
+            ...questions.map((question) => ({ ...question, selectedForPlayback: false })),
+          ],
+        },
+      }))
+    } catch (generationError) {
+      setPanelError(generationError instanceof Error ? generationError.message : 'Attention check questions could not be generated.')
     } finally {
       setIsGeneratingQuiz(false)
     }
@@ -1373,6 +1571,7 @@ export default function AdminCourseManagement({ onLogout }) {
               {cloudinaryHealth === 'unavailable' && <button type="button" onClick={checkCloudinaryHealth}>Retry</button>}
             </div>
             <button type="button" className="ac-button ac-button--gold ac-add-course" onClick={beginNewCourse}><span aria-hidden="true">＋</span> Add new course</button>
+            <button type="button" className="ac-button ac-button--outline" onClick={() => setView('certificate-management')}>Assignment reviews</button>
           </div>
         </div>
         <CourseStats stats={stats} />
@@ -1512,6 +1711,10 @@ export default function AdminCourseManagement({ onLogout }) {
   }
 
   function renderContentStep() {
+    const attentionQuestionCount = Number(contentDraft?.attentionCheck?.questionsDuringVideo)
+    const isAttentionQuestionCountValid = Number.isInteger(attentionQuestionCount)
+      && attentionQuestionCount >= 1
+      && attentionQuestionCount <= 100
     const updateDraft = (field, value) => setContentDraft((current) => ({ ...current, [field]: value }))
     const updateQuiz = (field, value) => setContentDraft((current) => ({ ...current, quiz: { ...current.quiz, [field]: value } }))
     const updateQuestion = (questionIndex, field, value) => setContentDraft((current) => ({
@@ -1522,6 +1725,23 @@ export default function AdminCourseManagement({ onLogout }) {
       },
     }))
     const addQuestion = () => updateQuiz('questions', [...contentDraft.quiz.questions, emptyQuestion()])
+    const updateAttentionCheck = (field, value) => setContentDraft((current) => ({
+      ...current,
+      attentionCheck: { ...current.attentionCheck, [field]: value },
+    }))
+    const updateAttentionQuestion = (questionIndex, field, value) => setContentDraft((current) => ({
+      ...current,
+      attentionCheck: {
+        ...current.attentionCheck,
+        questions: current.attentionCheck.questions.map((question, index) => (
+          index === questionIndex ? { ...question, [field]: value } : question
+        )),
+      },
+    }))
+    const addAttentionQuestion = () => updateAttentionCheck(
+      'questions',
+      [...contentDraft.attentionCheck.questions, emptyAttentionQuestion()],
+    )
     const typeLabels = {
       'video-lesson': 'Video lesson',
       quiz: 'Quiz',
@@ -1600,11 +1820,78 @@ export default function AdminCourseManagement({ onLogout }) {
                   {activeContentEditor?.moduleIndex === moduleIndex && contentDraft && (
                     <form className="ac-content-editor" onSubmit={saveContentItem}>
                       <label className="ac-field"><span>Title <b>*</b></span><input autoFocus required maxLength="200" value={contentDraft.title} onChange={(event) => updateDraft('title', event.target.value)} /></label>
+                      {contentDraft.type !== 'note' && (
+                        <label className="ac-ai-quiz__types">
+                          <input
+                            type="checkbox"
+                            checked={contentDraft.requiredForCertificate !== false}
+                            onChange={(event) => updateDraft('requiredForCertificate', event.target.checked)}
+                          />
+                          Required to earn the course certificate
+                        </label>
+                      )}
                       {contentDraft.type === 'video-lesson' && <>
-                        <label className="ac-field"><span>Lesson description</span><textarea rows="3" maxLength="20000" value={contentDraft.content} onChange={(event) => updateDraft('content', event.target.value)} placeholder="What will learners learn?" /></label>
+                        <label className="ac-field"><span>Lesson description</span><textarea rows="3" maxLength="10000" value={contentDraft.description || ''} onChange={(event) => updateDraft('description', event.target.value)} placeholder="Briefly describe this lesson." /></label>
+                        <label className="ac-field"><span>Lesson content</span><textarea rows="4" maxLength="20000" value={contentDraft.content || ''} onChange={(event) => updateDraft('content', event.target.value)} placeholder="Add the lesson text used to teach or explain this video." /></label>
                         <label className="ac-resource-add ac-content-upload"><span aria-hidden="true">↑</span>{isUploading === 'video' ? `Uploading video · ${uploadProgress}%` : contentDraft.videoPublicId ? 'Replace uploaded video' : 'Upload video'}<input type="file" accept="video/mp4,video/quicktime,video/webm,video/x-msvideo,video/x-matroska,video/ogg,.m4v,.mkv,.avi,.ogv" onChange={uploadContentVideo} disabled={Boolean(isUploading)} /></label>
                         {isUploading === 'video' && <><progress className="ac-content-progress" max="100" value={uploadProgress} aria-label={`Video upload ${uploadProgress}%`} /><small className="ac-content-uploaded">{uploadProgress >= 100 ? 'Finishing upload to Cloudinary…' : `Uploading to server · ${uploadProgress}%`}</small></>}
                         {contentDraft.videoPublicId && <small className="ac-content-uploaded">Video uploaded successfully.</small>}
+                        <section className="ac-ai-quiz" aria-labelledby="ac-attention-check-title">
+                          <h5 id="ac-attention-check-title">Video Attention Check</h5>
+                          <p className="ac-manual-quiz-help">Optionally pause this video at random intervals and ask one of these questions.</p>
+                          <label className="ac-ai-quiz__types">
+                            <input
+                              type="checkbox"
+                              checked={contentDraft.attentionCheck.enabled}
+                              onChange={(event) => updateAttentionCheck('enabled', event.target.checked)}
+                            />
+                            Enable attention checks for this lesson
+                          </label>
+                          {contentDraft.attentionCheck.enabled && (
+                            <label className="ac-field"><span>Number of questions during the video</span><input type="number" min="1" max="100" step="1" value={contentDraft.attentionCheck.questionsDuringVideo} onChange={(event) => updateAttentionCheck('questionsDuringVideo', event.target.value)} /></label>
+                          )}
+                          <div className="ac-form-columns">
+                            <label className="ac-field"><span>Minimum interval (seconds)</span><input type="number" min="10" max="7200" step="1" value={contentDraft.attentionCheck.minIntervalSeconds} onChange={(event) => updateAttentionCheck('minIntervalSeconds', event.target.value)} /></label>
+                            <label className="ac-field"><span>Maximum interval (seconds)</span><input type="number" min="10" max="7200" step="1" value={contentDraft.attentionCheck.maxIntervalSeconds} onChange={(event) => updateAttentionCheck('maxIntervalSeconds', event.target.value)} /></label>
+                          </div>
+                          <p className="ac-manual-quiz-help">AI questions use this lesson’s title, description, and lesson content.</p>
+                          <div className="ac-form-columns">
+                            <label className="ac-field"><span>Difficulty</span><select value={aiDifficulty} onChange={(event) => setAiDifficulty(event.target.value)}>{Object.entries(difficultyLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
+                          </div>
+                          <div className="ac-ai-quiz__types"><span>Question types</span>{[['multiple-choice', 'MCQ'], ['multiple-select', 'Multiple select'], ['true-false', 'True / False']].map(([value, label]) => <label key={value}><input type="checkbox" checked={aiQuestionTypes.includes(value)} onChange={(event) => setAiQuestionTypes((current) => event.target.checked ? [...current, value] : current.filter((type) => type !== value))} />{label}</label>)}</div>
+                          <button type="button" className="ac-button ac-button--outline" disabled={isGeneratingQuiz || !isAttentionQuestionCountValid} onClick={generateAttentionQuestions}>{isGeneratingQuiz ? 'Generating…' : `Generate ${attentionQuestionCount} question${attentionQuestionCount === 1 ? '' : 's'} with AI`}</button>
+                          <h5 className="ac-manual-quiz-heading">Questions (optional)</h5>
+                          <p className="ac-manual-quiz-help">Choose exactly {contentDraft.attentionCheck.questionsDuringVideo} question{Number(contentDraft.attentionCheck.questionsDuringVideo) === 1 ? '' : 's'} for playback. Review generated questions or add and edit questions manually. Correct answers are not sent to students.</p>
+                          <p className="ac-manual-quiz-help">Selected for playback: {contentDraft.attentionCheck.questions.filter((question) => question.selectedForPlayback).length} / {contentDraft.attentionCheck.questionsDuringVideo}</p>
+                          <div className="ac-quiz-question-list">
+                            {contentDraft.attentionCheck.questions.map((question, questionIndex) => (
+                              <section className="ac-quiz-question" key={question._localId || question._id || questionIndex}>
+                                <div className="ac-quiz-question__top"><strong>Question {questionIndex + 1}</strong><button type="button" className="ac-icon-button ac-icon-button--small ac-icon-button--danger" aria-label={`Delete attention question ${questionIndex + 1}`} onClick={() => updateAttentionCheck('questions', contentDraft.attentionCheck.questions.filter((_, index) => index !== questionIndex))}>×</button></div>
+                                <label className="ac-ai-quiz__types"><input type="checkbox" checked={question.selectedForPlayback} onChange={(event) => updateAttentionQuestion(questionIndex, 'selectedForPlayback', event.target.checked)} />Use this question during video playback</label>
+                                <label className="ac-field"><span>Question type</span><select value={question.type} onChange={(event) => {
+                                  const nextType = event.target.value
+                                  const options = nextType === 'true-false' ? ['True', 'False'] : question.options.length >= 2 ? question.options : ['', '']
+                                  updateAttentionQuestion(questionIndex, 'type', nextType)
+                                  updateAttentionQuestion(questionIndex, 'options', options)
+                                  updateAttentionQuestion(questionIndex, 'correctOptionIndices', [0])
+                                }}><option value="multiple-choice">MCQ</option><option value="multiple-select">Multiple select</option><option value="true-false">True / False</option></select></label>
+                                <label className="ac-field"><span>Prompt</span><textarea rows="2" maxLength="2000" value={question.prompt} onChange={(event) => updateAttentionQuestion(questionIndex, 'prompt', event.target.value)} /></label>
+                                <div className="ac-answer-options"><span>Options and correct answer</span>{question.options.map((option, optionIndex) => <label className="ac-answer-option" key={optionIndex}><input type={question.type === 'multiple-select' ? 'checkbox' : 'radio'} name={`attention-question-${question._localId || questionIndex}`} checked={question.correctOptionIndices.includes(optionIndex)} onChange={(event) => {
+                                  const selected = question.type === 'multiple-select'
+                                    ? event.target.checked ? [...question.correctOptionIndices, optionIndex] : question.correctOptionIndices.filter((selectedIndex) => selectedIndex !== optionIndex)
+                                    : [optionIndex]
+                                  updateAttentionQuestion(questionIndex, 'correctOptionIndices', selected)
+                                }} /><input aria-label={`Attention question ${questionIndex + 1}, option ${optionIndex + 1}`} value={option} disabled={question.type === 'true-false'} onChange={(event) => updateAttentionQuestion(questionIndex, 'options', question.options.map((entry, index) => index === optionIndex ? event.target.value : entry))} /><button type="button" className="ac-icon-button ac-icon-button--small ac-icon-button--danger" disabled={question.type === 'true-false' || question.options.length <= 2} aria-label={`Remove option ${optionIndex + 1}`} onClick={() => {
+                                  updateAttentionQuestion(questionIndex, 'options', question.options.filter((_, index) => index !== optionIndex))
+                                  updateAttentionQuestion(questionIndex, 'correctOptionIndices', question.correctOptionIndices.filter((index) => index !== optionIndex).map((index) => index > optionIndex ? index - 1 : index))
+                                }}>×</button></label>)}
+                                  {question.type !== 'true-false' && <button type="button" className="ac-text-button" disabled={question.options.length >= 10} onClick={() => updateAttentionQuestion(questionIndex, 'options', [...question.options, ''])}>+ Add option</button>}
+                                </div>
+                              </section>
+                            ))}
+                          </div>
+                          <button type="button" className="ac-button ac-button--outline" onClick={addAttentionQuestion}>+ Add attention question manually</button>
+                        </section>
                       </>}
                       {contentDraft.type === 'assignment' && <>
                         <label className="ac-field"><span>Instructions</span><textarea rows="4" maxLength="10000" value={contentDraft.description} onChange={(event) => updateDraft('description', event.target.value)} /></label>
@@ -1664,6 +1951,37 @@ export default function AdminCourseManagement({ onLogout }) {
             </div>
           )}
         </section>
+        {(course.assignments.length > 0 || course.quizzes.length > 0) && (
+          <section className="ac-modules-container ac-legacy-activities" aria-label="Course-level activities">
+            <div className="ac-modules-container__heading">
+              <div><h3>Course-level activities</h3><p>These existing course activities remain separate from module content.</p></div>
+            </div>
+            {course.quizzes.map((quiz, index) => (
+              <label className="ac-ai-quiz__types" key={quiz._id || `quiz-${index}`}>
+                <input
+                  type="checkbox"
+                  checked={quiz.requiredForCertificate !== false}
+                  onChange={(event) => updateCourse('quizzes', course.quizzes.map((entry, itemIndex) => (
+                    itemIndex === index ? { ...entry, requiredForCertificate: event.target.checked } : entry
+                  )))}
+                />
+                Quiz: {quiz.title || `Quiz ${index + 1}`} is required for the course certificate
+              </label>
+            ))}
+            {course.assignments.map((assignment, index) => (
+              <label className="ac-ai-quiz__types" key={assignment._id || `assignment-${index}`}>
+                <input
+                  type="checkbox"
+                  checked={assignment.requiredForCertificate !== false}
+                  onChange={(event) => updateCourse('assignments', course.assignments.map((entry, itemIndex) => (
+                    itemIndex === index ? { ...entry, requiredForCertificate: event.target.checked } : entry
+                  )))}
+                />
+                Assignment: {assignment.title || `Assignment ${index + 1}`} is required for the course certificate
+              </label>
+            ))}
+          </section>
+        )}
         {error && <p className="ac-inline-error" role="alert">{error}</p>}
         <div className="ac-builder-footer">
           <button type="button" className="ac-button ac-button--outline" onClick={() => enterStep(1)}>← Back</button>
@@ -1676,7 +1994,18 @@ export default function AdminCourseManagement({ onLogout }) {
   function renderSettingsStep() {
     return (
       <div className="ac-settings-step">
-        <div className="ac-builder-intro"><p className="ac-eyebrow">STEP 03 · SETTINGS</p><h2>Choose how this course is shared</h2><p>Draft courses stay visible only to authorized administrators.</p></div>
+        <div className="ac-builder-intro"><p className="ac-eyebrow">STEP 03 · SETTINGS</p></div>
+        <section className="ac-settings-panel">
+          <div><span className="ac-settings-icon" aria-hidden="true">✓</span><div><h3>Course completion certificate</h3><p>Issue a certificate after all required course activities are completed, using the active Main Admin template.</p></div></div>
+          <label className="ac-ai-quiz__types">
+            <input
+              type="checkbox"
+              checked={course.generateCertificate !== false}
+              onChange={(event) => updateCourse('generateCertificate', event.target.checked)}
+            />
+            Generate course completion certificate
+          </label>
+        </section>
         <section className="ac-settings-panel"><div><span className="ac-settings-icon" aria-hidden="true">◷</span><div><h3>Course visibility</h3><p>Only published courses are served to students.</p></div></div><label className="ac-field"><span>Save status</span><select value={course.status} onChange={(event) => updateCourse('status', event.target.value)}><option value="draft">Draft · Admins only</option><option value="published">Published · Available to students</option></select></label></section>
         <section className="ac-settings-panel"><div><span className="ac-settings-icon" aria-hidden="true">◉</span><div><h3>Course details</h3><p>{course.category} · {difficultyLabels[course.difficulty]} · {formatDuration(course.estimatedDurationMinutes)}</p></div></div><button type="button" className="ac-button ac-button--outline" onClick={() => enterStep(1)}>Edit details</button></section>
         {error && <p className="ac-inline-error" role="alert">{error}</p>}
@@ -1686,6 +2015,7 @@ export default function AdminCourseManagement({ onLogout }) {
   }
 
   if (view === 'list') return <div className="admin-course-workspace">{renderCourseList()}</div>
+  if (view === 'certificate-management') return <AdminCertificateManagement onBack={() => setView('list')} onLogout={onLogout} />
   if (view === 'category') return <div className="admin-course-workspace">{renderCategoryPicker()}</div>
   if (view === 'preview') return <div className="admin-course-workspace"><PreviewContent course={course} onBack={() => previewFromList ? backToList() : setView('builder')} onEdit={() => { setView('builder'); setStep(1); setPreviewFromList(false) }} onSave={saveCourse} isSaving={isSaving} error={error} /></div>
 

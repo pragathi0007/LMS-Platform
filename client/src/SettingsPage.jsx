@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { API_BASE_URL } from './api-base-url.js'
+import AdminCertificateTemplateSettings from './AdminCertificateTemplateSettings.jsx'
 import './SettingsPage.css'
 
 const usernamePattern = /^[a-zA-Z0-9._-]{3,30}$/
@@ -58,6 +59,7 @@ function SettingsPage({
   onAccountUpdated,
   themePreference,
   onSetTheme,
+  onLogout,
   standalone = false,
 }) {
   const hasCachedAccount = Boolean(user?.id && user?.username && user?.email)
@@ -570,6 +572,15 @@ function SettingsPage({
               ))}
             </fieldset>
           </SettingsSection>
+
+          {user?.role === 'main_admin' && (
+            <SettingsSection
+              title="Certificate Management"
+              description="Upload, preview, and replace the background used on automatically generated student certificates."
+            >
+              <AdminCertificateTemplateSettings onLogout={onLogout} />
+            </SettingsSection>
+          )}
 
           <SettingsSection title="Change Password" description="Use a unique password. Passwords must be at least 8 characters and are securely hashed.">
             {account?.hasPassword ? (
