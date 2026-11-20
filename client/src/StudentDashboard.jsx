@@ -5106,7 +5106,7 @@ function StudentCourseLearning({
                         showHeader={false}
                       />
                     ) : courseContentStatus === 'loading' ? (
-                      <div className="student-course-learning__video-state student-course-learning__video-state--loading" role="status" aria-busy="true">
+                      <div className="student-quiz-loading" role="status" aria-busy="true">
                         <span className="student-loader" aria-hidden="true" />
                         <span>Loading quiz…</span>
                       </div>

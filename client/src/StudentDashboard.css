@@ -6435,6 +6435,15 @@ button.student-category {
   padding-top: 14px;
 }
 
+.student-quiz-loading {
+  display: flex;
+  min-height: 220px;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  color: var(--student-muted);
+}
+
 .student-course-learning__tab-empty {
   margin: 8px 0;
   color: var(--student-muted);
