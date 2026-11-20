@@ -44,6 +44,7 @@ let studentDashboardCacheGeneration = 0
 let studentLearningCacheGeneration = 0
 const COURSE_NOTES_KEY = 'course-notes'
 const COURSE_CERTIFICATE_KEY = 'course-certificate'
+const COURSE_RESOURCES_KEY = 'course-resources'
 
 function normalizeLessons(lessons) {
   if (Array.isArray(lessons)) return lessons
@@ -971,20 +972,12 @@ function getInitialStudentCourseLearningEnrollment(courseId) {
     }
   }
   const enrollment = getStudentCourseLearningSeed(courseId)
-<<<<<<< Updated upstream
-  return enrollment
-    ? { ...enrollment, assignmentSubmissions: enrollment.assignmentSubmissions || [], quizAttempts: [] }
-    : null
-=======
-  if (enrollment && enrollment.courseId && typeof enrollment.courseId === 'object') {
-    return {
-      ...enrollment,
-      assignmentSubmissions: enrollment.assignmentSubmissions || [],
-      quizAttempts: enrollment.quizAttempts || [],
-    }
+  if (!enrollment?.courseId || typeof enrollment.courseId !== 'object') return null
+  return {
+    ...enrollment,
+    assignmentSubmissions: normalizeArray(enrollment.assignmentSubmissions),
+    quizAttempts: normalizeArray(enrollment.quizAttempts),
   }
-  return null
->>>>>>> Stashed changes
 }
 
 async function fetchStudentPageCourseContent(courseId, onLogout) {
@@ -2238,17 +2231,9 @@ async function fetchPublishedCourses(onLogout, signal) {
 }
 
 function getCourseCounts(course) {
-<<<<<<< Updated upstream
-  const lessonCount = (course.modules || []).reduce((count, module) => {
-    return count + getModuleVideoLessons(module).length
-=======
   const modules = normalizeArray(course?.modules)
   const lessonCount = modules.reduce((count, module) => {
-    const items = normalizeArray(module?.contentItems)
-    return count + (items.length
-      ? items.filter((item) => item.type === 'video-lesson').length
-      : normalizeLessons(module?.lessons).length)
->>>>>>> Stashed changes
+    return count + getModuleVideoLessons(module).length
   }, 0)
   return { modules: modules.length, lessons: lessonCount }
 }
@@ -2278,18 +2263,11 @@ function getVideoCompletionDuration(video) {
 }
 
 function getCourseLessons(course) {
-<<<<<<< Updated upstream
-  const modules = (course?.modules || [])
+  const modules = normalizeArray(course?.modules)
     .map((module, index) => ({ module, index }))
     .sort((left, right) => (left.module.order ?? left.index) - (right.module.order ?? right.index))
   return modules.flatMap(({ module, index: moduleIndex }) => {
     const lessons = getModuleVideoLessons(module)
-=======
-  return normalizeArray(course?.modules).flatMap((module, moduleIndex) => {
-    const contentItems = normalizeArray(module?.contentItems)
-    const videoItems = contentItems.filter((item) => item.type === 'video-lesson')
-    const lessons = videoItems.length ? videoItems : normalizeLessons(module?.lessons)
->>>>>>> Stashed changes
     return lessons.map((lesson, lessonIndex) => ({
       module,
       lesson,
@@ -2300,12 +2278,12 @@ function getCourseLessons(course) {
 }
 
 function getModuleVideoLessons(module) {
-  const contentItems = (module.contentItems || [])
+  const contentItems = normalizeArray(module?.contentItems)
     .map((item, index) => ({ item, index }))
-    .filter(({ item }) => item.type === 'video-lesson')
+    .filter(({ item }) => item?.type === 'video-lesson')
     .sort((left, right) => (left.item.order ?? left.index) - (right.item.order ?? right.index))
     .map(({ item }) => item)
-  return contentItems.length ? contentItems : module.lessons || []
+  return contentItems.length ? contentItems : normalizeLessons(module?.lessons)
 }
 
 function createEmptyAttentionSession(lessonId = '') {
@@ -2360,23 +2338,17 @@ function getCourseProgress(enrollment) {
 }
 
 function getModuleLearningItems(module, moduleIndex) {
-<<<<<<< Updated upstream
-  const moduleKey = String(module._id || `${module.title}-${moduleIndex}`)
-  const orderedContentItems = module.contentItems?.length
-    ? module.contentItems
-=======
   const moduleKey = String(module?._id || `${module?.title || 'module'}-${moduleIndex}`)
   const rawContentItems = normalizeArray(module?.contentItems)
   const rawLessons = normalizeLessons(module?.lessons)
-  const contentItems = rawContentItems.length
+  const orderedContentItems = rawContentItems.length
     ? rawContentItems
->>>>>>> Stashed changes
       .map((item, index) => ({ item, index }))
       .sort((left, right) => (left.item.order ?? left.index) - (right.item.order ?? right.index))
     : []
   const legacyVideoItems = orderedContentItems.length
     && !orderedContentItems.some(({ item }) => item.type === 'video-lesson')
-    ? (module.lessons || []).map((lesson, index) => ({
+    ? rawLessons.map((lesson, index) => ({
       ...lesson,
       type: 'video-lesson',
       _learningKey: String(lesson._id || `${moduleKey}-lesson-${index}`),
@@ -2390,14 +2362,9 @@ function getModuleLearningItems(module, moduleIndex) {
         ...item,
         _learningKey: String(item._id || `${moduleKey}-item-${index}`),
         _moduleKey: moduleKey,
-<<<<<<< Updated upstream
       })),
     ]
-    : (module.lessons || []).map((lesson, index) => ({
-=======
-      }))
     : rawLessons.map((lesson, index) => ({
->>>>>>> Stashed changes
       ...lesson,
       type: 'video-lesson',
       _learningKey: String(lesson._id || `${moduleKey}-lesson-${index}`),
@@ -3510,21 +3477,15 @@ function StudentCourseLearning({
 }) {
   const location = useLocation()
   const navigate = useNavigate()
-<<<<<<< Updated upstream
-  const course = enrollment.courseId
-  const orderedCourseModules = (course.modules || [])
+  const course = enrollment?.courseId && typeof enrollment.courseId === 'object'
+    ? enrollment.courseId
+    : {}
+  const orderedCourseModules = normalizeArray(course.modules)
     .map((module, index) => ({ module, index }))
-    .sort((left, right) => (left.module.order ?? left.index) - (right.module.order ?? right.index))
+    .sort((left, right) => (left.module?.order ?? left.index) - (right.module?.order ?? right.index))
   const orderedCourse = { ...course, modules: orderedCourseModules.map(({ module }) => module) }
   const lessons = getCourseLessons(orderedCourse)
   const moduleItems = orderedCourseModules.map(({ module, index }) => ({
-=======
-  const course = (enrollment && typeof enrollment.courseId === 'object' && enrollment.courseId)
-    ? enrollment.courseId
-    : {}
-  const lessons = getCourseLessons(course)
-  const moduleItems = normalizeArray(course.modules).map((module, index) => ({
->>>>>>> Stashed changes
     module,
     moduleKey: String(module?._id || `${module?.title || 'module'}-${index}`),
     items: getModuleLearningItems(module, index),
@@ -3545,10 +3506,9 @@ function StudentCourseLearning({
     })),
   ]
   const allContentItems = [...moduleItems.flatMap(({ items }) => items), ...courseLevelItems]
-<<<<<<< Updated upstream
-  const initialCompletedLessonIds = new Set((enrollment.completedLessonIds || []).map(String))
-  const initialQuizAttempts = enrollment.quizAttempts || []
-  const initialAssignmentSubmissions = enrollment.assignmentSubmissions || []
+  const initialCompletedLessonIds = new Set(normalizeArray(enrollment.completedLessonIds).map(String))
+  const initialQuizAttempts = normalizeArray(enrollment.quizAttempts)
+  const initialAssignmentSubmissions = normalizeArray(enrollment.assignmentSubmissions)
   const activityItems = allContentItems.filter((item) => (
     ['video-lesson', 'quiz', 'assignment'].includes(item.type)
   ))
@@ -3599,38 +3559,14 @@ function StudentCourseLearning({
       ? initialActivity._learningKey
       : '',
   )
-=======
-  const [activeLessonId, setActiveLessonId] = useState(() => (
-    lessons.some(({ lesson }) => String(lesson?._id) === requestedLessonId)
-      ? requestedLessonId
-      : lessons[0]?.lessonKey || ''
-  ))
-  const [activeContentItemId, setActiveContentItemId] = useState(() => {
-    if (requestedActivityId && ['quiz', 'assignment'].includes(requestedActivityType)) {
-      const match = allContentItems.find((item) => (
-        item.type === requestedActivityType
-        && String(item.type === 'quiz' ? item.quiz?._id || item._learningKey : item._learningKey) === requestedActivityId
-      ))
-      if (match) return match._learningKey
-    }
-    if (!lessons.length && allContentItems.length) {
-      return allContentItems[0]._learningKey
-    }
-    return ''
-  })
->>>>>>> Stashed changes
   const [detailsTab, setDetailsTab] = useState('overview')
   const [lessonInfoTab, setLessonInfoTab] = useState('overview')
   const [videoOpenSequence, setVideoOpenSequence] = useState(0)
   const [transcriptPlayback, setTranscriptPlayback] = useState({ lessonKey: '', cueIndex: -1 })
   const [expandedModules, setExpandedModules] = useState(() => new Set(
-<<<<<<< Updated upstream
     orderedCourseModules.length
       ? [String(orderedCourseModules[0].module._id || `${orderedCourseModules[0].module.title}-0`)]
       : [],
-=======
-    course.modules?.length ? [String(course.modules[0]?._id || `${course.modules[0]?.title || 'module'}-0`)] : [],
->>>>>>> Stashed changes
   ))
   const [savingLessonId, setSavingLessonId] = useState('')
   const [optimisticallyCompletedLessonIds, setOptimisticallyCompletedLessonIds] = useState(() => new Set())
@@ -3698,18 +3634,6 @@ function StudentCourseLearning({
     ...(enrollment.startedLessonIds || []).map(String),
     ...(enrollment.completedLessonIds || []).map(String),
   ]))
-<<<<<<< Updated upstream
-  const activeIndex = Math.max(0, lessons.findIndex(({ lesson, lessonKey }) => (
-    String(lesson._id || lessonKey) === activeLessonId
-  )))
-  const activeEntry = lessons[activeIndex]
-  const activeVideoKey = `${String(course._id)}:${String(activeEntry?.lesson?._id || activeEntry?.lessonKey || '')}`
-  const activeVideoUrl = activeEntry?.lesson?.videoUrl || ''
-  const videoSourceKey = activeVideoUrl
-    ? `${activeVideoKey}:${activeVideoUrl}:${videoOpenSequence}`
-    : ''
-  const videoMediaFailed = Boolean(videoSourceKey && failedVideoSourceKey === videoSourceKey)
-=======
   const activeIndex = lessons.length
     ? Math.max(0, lessons.findIndex(({ lesson, lessonKey }) => (
         String(lesson?._id || lessonKey) === activeLessonId
@@ -3719,7 +3643,11 @@ function StudentCourseLearning({
   const activeVideoKey = activeEntry
     ? `${String(course._id || '')}:${String(activeEntry.lesson?._id || activeEntry.lessonKey || '')}`
     : ''
->>>>>>> Stashed changes
+  const activeVideoUrl = activeEntry?.lesson?.videoUrl || ''
+  const videoSourceKey = activeVideoUrl
+    ? `${activeVideoKey}:${activeVideoUrl}:${videoOpenSequence}`
+    : ''
+  const videoMediaFailed = Boolean(videoSourceKey && failedVideoSourceKey === videoSourceKey)
   const transcriptCues = Array.isArray(activeEntry?.lesson?.transcriptCues)
     ? activeEntry.lesson.transcriptCues
     : []
@@ -5342,34 +5270,34 @@ function StudentCourseLearning({
                 </button>
               )}
               <button
-<<<<<<< Updated upstream
                 className={detailsTab === 'notes' ? 'is-selected' : ''}
                 type="button"
                 aria-pressed={detailsTab === 'notes'}
-=======
-                className={detailsTab === 'resources' ? 'is-selected' : ''}
-                type="button"
-                aria-pressed={detailsTab === 'resources'}
->>>>>>> Stashed changes
                 onClick={() => {
                   if (attentionCheckChallenge || attentionCheckLoading || attentionSessionRef.current.blocked) return
                   videoPlayerRef.current?.pause()
                   endCurrentAttentionCheckSession()
-<<<<<<< Updated upstream
                   setActiveContentItemId(COURSE_NOTES_KEY)
                   setDetailsTab('notes')
                 }}
               >
                 <span className="student-course-learning__item-icon"><Icon name="pen" size={15} /></span>
                 <strong>Notes</strong>
-=======
+              </button>
+              <button
+                className={detailsTab === 'resources' ? 'is-selected' : ''}
+                type="button"
+                aria-pressed={detailsTab === 'resources'}
+                onClick={() => {
+                  if (attentionCheckChallenge || attentionCheckLoading || attentionSessionRef.current.blocked) return
+                  videoPlayerRef.current?.pause()
+                  endCurrentAttentionCheckSession()
                   setActiveContentItemId(COURSE_RESOURCES_KEY)
                   setDetailsTab('resources')
                 }}
               >
                 <span className="student-course-learning__item-icon"><Icon name="folderOpen" size={15} /></span>
                 <strong>Learning Resources</strong>
->>>>>>> Stashed changes
               </button>
             </section>
             {contentSearch && !filteredModuleItems.some(({ items }) => items.length) && !filteredCourseLevelItems.length && (
@@ -5401,7 +5329,6 @@ function StudentCourseLearning({
               </div>
             )}
             {showVideoPlayer && (
-<<<<<<< Updated upstream
               <div
                 className="student-course-learning__player"
                 ref={videoPlayerContainerRef}
@@ -5412,25 +5339,13 @@ function StudentCourseLearning({
                   ? <video
                     ref={videoPlayerRef}
                     key={videoSourceKey}
-=======
-              <div className="student-course-learning__player">
-                {activeEntry?.lesson?.videoUrl
-                  ? <video
-                    ref={videoPlayerRef}
-                    key={`${String(activeEntry?.lesson?._id || activeEntry?.lessonKey || '')}:${activeEntry?.lesson?.videoUrl || ''}:${videoOpenSequence}`}
->>>>>>> Stashed changes
                     controls
                     controlsList="nodownload noplaybackrate nofullscreen"
                     disablePictureInPicture
                     playsInline
-<<<<<<< Updated upstream
                     preload="auto"
                     src={activeVideoUrl}
                     onClick={toggleVideoPlaybackFromSurface}
-=======
-                    preload="metadata"
-                    src={activeEntry?.lesson?.videoUrl}
->>>>>>> Stashed changes
                     onLoadedMetadata={(event) => {
                       handleVideoMetadata(event.currentTarget, activeEntry)
                       updateTranscriptPlaybackTime(event.currentTarget)
@@ -5442,13 +5357,8 @@ function StudentCourseLearning({
                     onPlay={(event) => {
                       updateTranscriptPlaybackTime(event.currentTarget)
                       resetLearningActivitySample(activeEntry, event.currentTarget)
-<<<<<<< Updated upstream
                       saveLessonPlaybackPosition(activeEntry, event.currentTarget.currentTime, true, true)
                       const settings = activeEntry.lesson.attentionCheck
-=======
-                      saveLessonPlaybackPosition(activeEntry, event.currentTarget.currentTime, true)
-                      const settings = activeEntry?.lesson?.attentionCheck
->>>>>>> Stashed changes
                       if (settings?.enabled === true) {
                         initializeAttentionCheckSession(event.currentTarget)
                         if (attentionSessionRef.current.pending || attentionSessionRef.current.blocked) event.currentTarget.pause()
@@ -5482,13 +5392,8 @@ function StudentCourseLearning({
                       const video = event.currentTarget
                       updateWatchedPosition(activeEntry, video)
                       updateTranscriptPlaybackTime(video)
-<<<<<<< Updated upstream
                       saveLessonPlaybackPosition(activeEntry, video.currentTime, true, false)
-                      if (!completedLessonIds.has(String(activeEntry.lesson._id))) {
-=======
-                      saveLessonPlaybackPosition(activeEntry, video.currentTime, true)
                       if (activeEntry?.lesson?._id && !completedLessonIds.has(String(activeEntry.lesson._id))) {
->>>>>>> Stashed changes
                         void setLessonCompleted(activeEntry, true, video)
                       }
                     }}
@@ -5624,9 +5529,8 @@ function StudentCourseLearning({
               </p>
             )}
             {showVideoPlayer && (
-<<<<<<< Updated upstream
               <div className="student-course-learning__video-actions">
-                {activeEntry && (
+                {activeEntry?.lesson && (
                   <div className="student-course-learning__video-completion">
                     <button
                       className={`student-button${completedLessonIds.has(String(activeEntry.lesson._id)) ? ' student-button--quiet' : ''}`}
@@ -5654,31 +5558,6 @@ function StudentCourseLearning({
                     onClick={() => moveContent(1)}
                   >Next →</button>
                 </div>
-=======
-              <div className="student-course-learning__video-nav">
-                <button type="button" disabled={activeContentIndex <= 0} onClick={() => moveContent(-1)}>← Previous</button>
-                <button type="button" disabled={activeContentIndex < 0 || activeContentIndex >= allContentItems.length - 1} onClick={() => moveContent(1)}>Next →</button>
-              </div>
-            )}
-            {showVideoPlayer && activeEntry?.lesson && (
-              <div className="student-course-learning__video-completion">
-                <button
-                  className={`student-button${completedLessonIds.has(String(activeEntry.lesson._id)) ? ' student-button--quiet' : ''}`}
-                  type="button"
-                  disabled={
-                    savingLessonId === String(activeEntry.lesson._id)
-                    || !activeEntry.lesson._id
-                    || !completedLessonIds.has(String(activeEntry.lesson._id))
-                  }
-                  title={completedLessonIds.has(String(activeEntry.lesson._id))
-                    ? 'This lesson is complete.'
-                    : 'Watch the entire video to complete this lesson.'}
-                >
-                  {savingLessonId === String(activeEntry.lesson._id)
-                    ? 'Saving…'
-                    : completedLessonIds.has(String(activeEntry.lesson._id)) ? 'Completed' : 'Watch video to complete'}
-                </button>
->>>>>>> Stashed changes
               </div>
             )}
             <section className="student-course-learning__details">
@@ -5901,11 +5780,15 @@ function StudentCourseLearning({
                 <span className="student-course-learning__item-icon"><Icon name="award" size={15} /></span>
                 <strong>Certificate</strong>
               </button>
-<<<<<<< Updated upstream
-              <button className={detailsTab === 'notes' ? 'is-selected' : ''} type="button" aria-pressed={detailsTab === 'notes'} onClick={() => setDetailsTab('notes')}>
+              <button
+                className={detailsTab === 'notes' ? 'is-selected' : ''}
+                type="button"
+                aria-pressed={detailsTab === 'notes'}
+                onClick={() => setDetailsTab('notes')}
+              >
                 <span className="student-course-learning__item-icon"><Icon name="pen" size={15} /></span>
                 <strong>Notes</strong>
-=======
+              </button>
               <button
                 className={detailsTab === 'resources' ? 'is-selected' : ''}
                 type="button"
@@ -5914,7 +5797,6 @@ function StudentCourseLearning({
               >
                 <span className="student-course-learning__item-icon"><Icon name="folderOpen" size={15} /></span>
                 <strong>Learning Resources</strong>
->>>>>>> Stashed changes
               </button>
             </section>
           </aside>
@@ -5927,6 +5809,27 @@ function StudentCourseLearning({
             ) : detailsTab === 'resources' ? (
               <div className="student-course-learning__tab-content student-course-learning__tab-content--resources">
                 {renderCourseResources()}
+              </div>
+            ) : detailsTab === 'notes' ? (
+              <div className="student-course-learning__tab-content">
+                {courseNotes.length ? courseNotes.map((note) => (
+                  <article className="student-course-learning__note-card" key={note._learningKey}>
+                    <h3>{note.title}</h3>
+                    {note.content && <p>{note.content}</p>}
+                    {note.resources?.length > 0 && (
+                      <ul className="student-course-note__resources">
+                        {note.resources.map((resource, index) => (
+                          <li key={resource._id || `${resource.url}-${index}`}>
+                            <a href={resource.url} target="_blank" rel="noreferrer" download={resource.resourceType === 'raw' || resource.format === 'pdf' ? resource.title : undefined}>
+                              {resource.title || `Resource ${index + 1}`}
+                            </a>
+                            {resource.format && <small>{resource.format.toUpperCase()}</small>}
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </article>
+                )) : <p className="student-course-learning__tab-empty">No notes have been added to this course.</p>}
               </div>
             ) : <EmptyState icon="book" title="Course content is not available yet" description="This enrolled course does not currently have any lessons or activities." />}
           </div>
@@ -6705,43 +6608,31 @@ function StudentCourseLearningPage({
 
   useEffect(() => {
     let active = true
-<<<<<<< Updated upstream
+    if (!courseId || courseId === 'undefined' || courseId === 'null') {
+      setEnrollment(null)
+      setError('Course ID is missing or invalid.')
+      setLoading(false)
+      setCourseContentStatus('error')
+      return undefined
+    }
+
     const requestSequence = ++courseContentRequestSequence.current
     const initialCourseContent = getCachedStudentPageCourseContent(courseId)
     const initialCourseEnrollment = getInitialStudentCourseLearningEnrollment(courseId)
     setEnrollment(initialCourseEnrollment)
     setLoading(!initialCourseEnrollment)
     setCourseContentStatus(initialCourseContent && hasFreshStudentPageCourseContent(courseId) ? 'ready' : 'loading')
-=======
-    if (!courseId || courseId === 'undefined' || courseId === 'null') {
-      setError('Course ID is missing or invalid.')
-      setLoading(false)
-      return undefined
-    }
-
-    const initialCourseEnrollment = getInitialStudentCourseLearningEnrollment(courseId)
-    if (initialCourseEnrollment) {
-      setEnrollment(initialCourseEnrollment)
-      setLoading(false)
-    } else {
-      setLoading(true)
-    }
->>>>>>> Stashed changes
     setError('')
 
     fetchStudentPageCourseContent(courseId, onLogout)
-<<<<<<< Updated upstream
-      .then(({ enrollment: courseEnrollment, assignmentSubmissions, quizAttempts }) => {
-        if (!active || requestSequence !== courseContentRequestSequence.current) return
-=======
       .then((content) => {
-        if (!active) return
+        if (!active || requestSequence !== courseContentRequestSequence.current) return
         const { enrollment: courseEnrollment, assignmentSubmissions = [], quizAttempts = [] } = content || {}
         if (!courseEnrollment || !courseEnrollment.courseId || typeof courseEnrollment.courseId !== 'object') {
           setError('Course details are unavailable for this course.')
+          setCourseContentStatus('error')
           return
         }
->>>>>>> Stashed changes
         const cacheKey = getStudentCourseContentCacheKey(courseId)
         if (cacheKey) studentCourseLearningSeeds.delete(cacheKey)
         setEnrollment({
@@ -6749,11 +6640,8 @@ function StudentCourseLearningPage({
           assignmentSubmissions,
           quizAttempts,
         })
-<<<<<<< Updated upstream
         setCourseContentStatus('ready')
-=======
         setError('')
->>>>>>> Stashed changes
       })
       .catch((loadError) => {
         if (active && requestSequence === courseContentRequestSequence.current) {
@@ -6762,7 +6650,6 @@ function StudentCourseLearningPage({
         }
       })
       .finally(() => {
-<<<<<<< Updated upstream
         if (active && requestSequence === courseContentRequestSequence.current) setLoading(false)
       })
     return () => {
@@ -6771,12 +6658,6 @@ function StudentCourseLearningPage({
         courseContentRequestSequence.current += 1
       }
     }
-=======
-        if (active) setLoading(false)
-      })
-
-    return () => { active = false }
->>>>>>> Stashed changes
   }, [courseId, onLogout])
 
   useEffect(() => {
@@ -6790,9 +6671,11 @@ function StudentCourseLearningPage({
       setCourseContentStatus('loading')
       try {
         const content = await fetchStudentCourseContent(courseId, onLogout)
-<<<<<<< Updated upstream
         if (!active || requestSequence !== courseContentRequestSequence.current) return
-        const { enrollment: courseEnrollment, assignmentSubmissions, quizAttempts } = content
+        const { enrollment: courseEnrollment, assignmentSubmissions = [], quizAttempts = [] } = content || {}
+        if (!courseEnrollment || !courseEnrollment.courseId || typeof courseEnrollment.courseId !== 'object') {
+          throw new Error('Course details are unavailable for this course.')
+        }
         if (cacheKey) studentCourseContentCache.set(cacheKey, { content, savedAt: Date.now() })
         setEnrollment({ ...courseEnrollment, assignmentSubmissions, quizAttempts })
         setCourseContentStatus('ready')
@@ -6801,19 +6684,6 @@ function StudentCourseLearningPage({
         if (active && requestSequence === courseContentRequestSequence.current) {
           setError(loadError instanceof Error ? loadError.message : 'Your course could not be loaded.')
           setCourseContentStatus('error')
-=======
-        if (!active) return
-        const { enrollment: courseEnrollment, assignmentSubmissions = [], quizAttempts = [] } = content || {}
-        if (courseEnrollment && courseEnrollment.courseId && typeof courseEnrollment.courseId === 'object') {
-          if (cacheKey) studentCourseContentCache.set(cacheKey, { content, savedAt: Date.now() })
-          setEnrollment({ ...courseEnrollment, assignmentSubmissions, quizAttempts })
-          setError('')
-        }
-      } catch (loadError) {
-        if (active && !enrollment?.courseId) {
-          const message = loadError instanceof Error ? loadError.message : ''
-          setError(message || 'Your course could not be loaded.')
->>>>>>> Stashed changes
         }
       }
     }
@@ -6825,33 +6695,57 @@ function StudentCourseLearningPage({
     }
   }, [courseId, onLogout])
 
+  async function retryCourseContent() {
+    const requestSequence = ++courseContentRequestSequence.current
+    setError('')
+    setLoading(true)
+    setCourseContentStatus('loading')
+    try {
+      const content = await fetchStudentPageCourseContent(courseId, onLogout)
+      if (requestSequence !== courseContentRequestSequence.current) return
+      const { enrollment: courseEnrollment, assignmentSubmissions = [], quizAttempts = [] } = content || {}
+      if (!courseEnrollment || !courseEnrollment.courseId || typeof courseEnrollment.courseId !== 'object') {
+        throw new Error('Course details are unavailable for this course.')
+      }
+      setEnrollment({ ...courseEnrollment, assignmentSubmissions, quizAttempts })
+      setCourseContentStatus('ready')
+    } catch (loadError) {
+      if (requestSequence === courseContentRequestSequence.current) {
+        setError(loadError instanceof Error ? loadError.message : 'Your course could not be loaded.')
+        setCourseContentStatus('error')
+      }
+    } finally {
+      if (requestSequence === courseContentRequestSequence.current) setLoading(false)
+    }
+  }
+
   return (
     <StudentRoutePage title={enrollment?.courseId?.title || 'Course learning'} className="student-course-learning-page">
-<<<<<<< Updated upstream
-      {error && <p className="student-courses__message is-error" role="alert">{error}</p>}
-      {loading ? <p role="status">Loading your course…</p> : enrollment && (
-        <StudentCourseLearning
-          enrollment={enrollment}
-          onEnrollmentUpdated={(updates) => setEnrollment((current) => current ? {
-            ...current,
-            ...updates,
-            courseId: current.courseId,
-          } : current)}
-          onLearningDataChanged={onLearningDataChanged}
-          onLogout={onLogout}
-          requestedLessonId={requestedLessonId}
-          requestedActivityId={requestedActivityId}
-          requestedActivityType={requestedActivityType}
-          contentSearch={contentSearch}
-          courseContentStatus={courseContentStatus}
-        />
-=======
-      {loading ? (
+      {error && enrollment && <p className="student-courses__message is-error" role="alert">{error}</p>}
+      {loading && !enrollment ? (
         <div className="student-course-learning-loading" role="status" aria-live="polite">
           <span className="student-loader" />
           <h2>Loading your course…</h2>
           <p>Preparing lessons, quizzes, assignments, and study materials.</p>
         </div>
+      ) : enrollment?.courseId && typeof enrollment.courseId === 'object' ? (
+        <CourseLearningErrorBoundary>
+          <StudentCourseLearning
+            enrollment={enrollment}
+            onEnrollmentUpdated={(updates) => setEnrollment((current) => current ? {
+              ...current,
+              ...updates,
+              courseId: current.courseId,
+            } : current)}
+            onLearningDataChanged={onLearningDataChanged}
+            onLogout={onLogout}
+            requestedLessonId={requestedLessonId}
+            requestedActivityId={requestedActivityId}
+            requestedActivityType={requestedActivityType}
+            contentSearch={contentSearch}
+            courseContentStatus={courseContentStatus}
+          />
+        </CourseLearningErrorBoundary>
       ) : error ? (
         <div className="student-course-learning-error" role="alert">
           <span className="student-state-card__icon"><Icon name="circleX" size={26} /></span>
@@ -6861,18 +6755,7 @@ function StudentCourseLearningPage({
             <button
               type="button"
               className="student-button"
-              onClick={() => {
-                setError('')
-                setLoading(true)
-                fetchStudentPageCourseContent(courseId, onLogout)
-                  .then((content) => {
-                    if (content?.enrollment?.courseId) {
-                      setEnrollment(content.enrollment)
-                    }
-                  })
-                  .catch((err) => setError(err.message || 'Failed to load course.'))
-                  .finally(() => setLoading(false))
-              }}
+              onClick={() => void retryCourseContent()}
             >
               Retry
             </button>
@@ -6895,25 +6778,15 @@ function StudentCourseLearningPage({
             </Link>
           </div>
         </div>
-      ) : (
-        <CourseLearningErrorBoundary>
-          <StudentCourseLearning
-            enrollment={enrollment}
-            onEnrollmentUpdated={(updates) => setEnrollment((current) => current ? {
-              ...current,
-              ...updates,
-              courseId: current.courseId,
-            } : current)}
-            onLearningDataChanged={onLearningDataChanged}
-            onLogout={onLogout}
-            requestedLessonId={requestedLessonId}
-            requestedActivityId={requestedActivityId}
-            requestedActivityType={requestedActivityType}
-            contentSearch={contentSearch}
-          />
-        </CourseLearningErrorBoundary>
->>>>>>> Stashed changes
-      )}
+      ) : <div className="student-course-learning-error" role="alert">
+        <span className="student-state-card__icon"><Icon name="book" size={26} /></span>
+        <h2>Course content unavailable</h2>
+        <p>The requested course content could not be found or you may not be enrolled yet.</p>
+        <div className="student-course-learning-error__actions">
+          <Link to="/student/courses" className="student-button">Browse My Courses</Link>
+          <Link to="/student/dashboard" className="student-button student-button--quiet">Back to Dashboard</Link>
+        </div>
+      </div>}
     </StudentRoutePage>
   )
 }
