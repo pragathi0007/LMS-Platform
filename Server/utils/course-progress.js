@@ -298,7 +298,7 @@ export async function recalculateEnrollmentCourseProgress({ enrollment, course }
   return { ...progress, status }
 }
 
-export async function recalculateEnrollmentsCourseProgress(enrollments) {
+export async function recalculateEnrollmentsCourseProgress(enrollments, activityData) {
   const activeEnrollments = enrollments.filter((enrollment) => (
     enrollment.status !== 'cancelled' && enrollment.courseId
   ))
@@ -344,26 +344,44 @@ export async function recalculateEnrollmentsCourseProgress(enrollments) {
   }
   const quizIds = [...new Set([...activitiesByEnrollmentId.values()].flatMap(({ quizzes }) => quizzes.map(({ id }) => id)))]
   const assignmentIds = [...new Set([...activitiesByEnrollmentId.values()].flatMap(({ assignments }) => assignments.map(({ id }) => id)))]
-  const [quizAttempts, assignmentSubmissions] = await Promise.all([
-    quizIds.length
-      ? QuizAttempt.find({
-        userId,
-        enrollmentId: { $in: enrollmentIds },
-        courseId: { $in: courseIds },
-        quizId: { $in: quizIds },
-        status: 'submitted',
-        passed: true,
-      }).select('enrollmentId quizId status passed').lean()
-      : [],
-    assignmentIds.length
-      ? AssignmentSubmission.find({
-        userId,
-        enrollmentId: { $in: enrollmentIds },
-        courseId: { $in: courseIds },
-        assignmentId: { $in: assignmentIds },
-      }).select('enrollmentId assignmentId reviewStatus submittedAt').sort({ submittedAt: -1, _id: -1 }).lean()
-      : [],
-  ])
+  const eligibleEnrollmentsById = new Map(
+    eligibleEnrollments.map((enrollment) => [documentId(enrollment._id), enrollment]),
+  )
+  const [quizAttempts, assignmentSubmissions] = activityData
+    ? [
+      activityData.quizAttempts.filter((attempt) => {
+        const enrollment = eligibleEnrollmentsById.get(documentId(attempt.enrollmentId))
+        return enrollment
+          && documentId(attempt.userId) === documentId(enrollment.userId)
+          && documentId(attempt.courseId) === documentId(enrollment.courseId)
+      }),
+      activityData.assignmentSubmissions.filter((submission) => {
+        const enrollment = eligibleEnrollmentsById.get(documentId(submission.enrollmentId))
+        return enrollment
+          && documentId(submission.userId) === documentId(enrollment.userId)
+          && documentId(submission.courseId) === documentId(enrollment.courseId)
+      }),
+    ]
+    : await Promise.all([
+      quizIds.length
+        ? QuizAttempt.find({
+          userId,
+          enrollmentId: { $in: enrollmentIds },
+          courseId: { $in: courseIds },
+          quizId: { $in: quizIds },
+          status: 'submitted',
+          passed: true,
+        }).select('enrollmentId quizId status passed').lean()
+        : [],
+      assignmentIds.length
+        ? AssignmentSubmission.find({
+          userId,
+          enrollmentId: { $in: enrollmentIds },
+          courseId: { $in: courseIds },
+          assignmentId: { $in: assignmentIds },
+        }).select('enrollmentId assignmentId reviewStatus submittedAt').sort({ submittedAt: -1, _id: -1 }).lean()
+        : [],
+    ])
   const attemptsByEnrollmentId = new Map()
   const submissionsByEnrollmentId = new Map()
   for (const attempt of quizAttempts) {

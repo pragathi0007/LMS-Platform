@@ -2050,21 +2050,24 @@ router.get('/enrollments/me', ...requireStudent, async (req, res, next) => {
       )
       .sort({ createdAt: -1 })
       .lean()
-    const enrollmentsWithProgress = await recalculateEnrollmentsCourseProgress(enrollments)
     const enrollmentIds = enrollments.map(({ _id }) => _id)
     const [assignmentSubmissions, quizAttempts] = enrollmentIds.length
       ? await Promise.all([
         AssignmentSubmission.find({
           userId: req.auth.id,
           enrollmentId: { $in: enrollmentIds },
-        }).select('enrollmentId assignmentId submittedAt reviewStatus').lean(),
+        }).select('userId courseId enrollmentId assignmentId submittedAt reviewStatus').lean(),
         QuizAttempt.find({
           userId: req.auth.id,
           enrollmentId: { $in: enrollmentIds },
           status: 'submitted',
-        }).select('enrollmentId quizId status passed').lean(),
+        }).select('userId courseId enrollmentId quizId status passed scorePercentage earnedPoints totalPoints').lean(),
       ])
       : [[], []]
+    const enrollmentsWithProgress = await recalculateEnrollmentsCourseProgress(enrollments, {
+      assignmentSubmissions,
+      quizAttempts,
+    })
     return res.json({
       enrollments: enrollmentsWithProgress.map((enrollment) => {
         const enrollmentAssignments = assignmentSubmissions.filter(
@@ -2083,6 +2086,19 @@ router.get('/enrollments/me', ...requireStudent, async (req, res, next) => {
             enrollmentQuizzes,
             enrollmentAssignments,
           ),
+          assignmentSubmissions: enrollmentAssignments.map((submission) => ({
+            assignmentId: submission.assignmentId,
+            submittedAt: submission.submittedAt,
+            reviewStatus: submission.reviewStatus,
+          })),
+          quizAttempts: enrollmentQuizzes.map((attempt) => ({
+            quizId: attempt.quizId,
+            status: attempt.status,
+            passed: attempt.passed,
+            scorePercentage: attempt.scorePercentage,
+            earnedPoints: attempt.earnedPoints,
+            totalPoints: attempt.totalPoints,
+          })),
           courseId: hideLockedCourseActivityContent(
             hideQuizAnswers(enrollment.courseId),
             getAccessibleCourseActivityKeys(

@@ -8,8 +8,14 @@ import {
   NotificationIcon,
   notificationDate,
   notificationIcon,
-  STUDENT_NOTIFICATIONS_UPDATED_EVENT,
 } from './StudentNotificationBell.jsx'
+import {
+  fetchStudentNotifications,
+  getCachedStudentNotifications,
+  getCurrentStudentNotificationUserId,
+  subscribeToStudentNotifications,
+  updateStudentNotificationCache,
+} from './student-notifications-cache.js'
 import './StudentNotificationsPage.css'
 
 function isToday(value) {
@@ -52,68 +58,86 @@ function NotificationsHero() {
 
 export default function StudentNotificationsPage({ onLogout }) {
   const navigate = useNavigate()
-  const [notifications, setNotifications] = useState([])
-  const [unreadCount, setUnreadCount] = useState(0)
-  const [loading, setLoading] = useState(true)
+  const studentUserId = getCurrentStudentNotificationUserId()
+  const cachedNotifications = getCachedStudentNotifications(studentUserId)
+  const [notifications, setNotifications] = useState(cachedNotifications?.notifications || [])
+  const [unreadCount, setUnreadCount] = useState(cachedNotifications?.unreadCount || 0)
+  const [loading, setLoading] = useState(!cachedNotifications)
   const [error, setError] = useState('')
   const [markingAll, setMarkingAll] = useState(false)
   const [busyIds, setBusyIds] = useState([])
 
   const loadNotifications = useCallback(async (signal) => {
-    setLoading(true)
+    if (!getCachedStudentNotifications(studentUserId)) setLoading(true)
     setError('')
     try {
       const savedAuth = sessionStorage.getItem('lms.auth')
       const auth = savedAuth ? JSON.parse(savedAuth) : null
       if (auth?.user?.role !== 'student' || typeof auth.token !== 'string') {
         onLogout()
-        return
+        throw new Error('Your session has ended. Please sign in again.')
       }
 
-      const response = await fetchWithAuth(`${API_BASE_URL}/notifications/me`, {
-        headers: { Authorization: `Bearer ${auth.token}` },
-        signal,
-      }, API_BASE_URL, auth.token)
-      const result = await response.json()
-      if (isInvalidSessionResponse(response, result)) {
-        onLogout()
-        return
-      }
-      if (!response.ok) throw new Error(result.message || 'Notifications could not be loaded.')
-      if (!Array.isArray(result.notifications)) {
-        throw new Error('The server returned invalid notification data.')
-      }
+      const data = await fetchStudentNotifications(studentUserId, async () => {
+        const response = await fetchWithAuth(`${API_BASE_URL}/notifications/me`, {
+          headers: { Authorization: `Bearer ${auth.token}` },
+        }, API_BASE_URL, auth.token)
+        const result = await response.json()
+        if (isInvalidSessionResponse(response, result)) {
+          onLogout()
+          throw new Error('Your session has ended. Please sign in again.')
+        }
+        if (!response.ok) throw new Error(result.message || 'Notifications could not be loaded.')
+        if (!Array.isArray(result.notifications)) {
+          throw new Error('The server returned invalid notification data.')
+        }
 
-      const records = result.notifications.map((notification) => ({
-        ...notification,
-        id: notification.id || (notification._id ? String(notification._id) : ''),
-        isRead: typeof notification.isRead === 'boolean'
-          ? notification.isRead
-          : Boolean(notification.readAt),
-      }))
-      if (records.some((notification) => !notification.id)) {
-        throw new Error('The server returned a notification without an ID.')
-      }
-      setNotifications(records)
-      setUnreadCount(Number.isSafeInteger(result.unreadCount) && result.unreadCount >= 0
-        ? result.unreadCount
-        : records.filter((notification) => !notification.isRead).length)
+        const records = result.notifications.map((notification) => ({
+          ...notification,
+          id: notification.id || (notification._id ? String(notification._id) : ''),
+          isRead: typeof notification.isRead === 'boolean'
+            ? notification.isRead
+            : Boolean(notification.readAt),
+        }))
+        if (records.some((notification) => !notification.id)) {
+          throw new Error('The server returned a notification without an ID.')
+        }
+        return {
+          notifications: records,
+          unreadCount: Number.isSafeInteger(result.unreadCount) && result.unreadCount >= 0
+            ? result.unreadCount
+            : records.filter((notification) => !notification.isRead).length,
+        }
+      })
+      if (signal?.aborted) return
+      setNotifications(data.notifications)
+      setUnreadCount(data.unreadCount)
     } catch (loadError) {
-      if (loadError instanceof Error && loadError.name !== 'AbortError') {
+      if (!signal?.aborted && loadError instanceof Error && loadError.name !== 'AbortError') {
         setError(loadError.message)
-      } else if (!(loadError instanceof Error)) {
+      } else if (!signal?.aborted && !(loadError instanceof Error)) {
         setError('Notifications could not be loaded.')
       }
     } finally {
       if (!signal?.aborted) setLoading(false)
     }
-  }, [onLogout])
+  }, [onLogout, studentUserId])
 
   useEffect(() => {
     const controller = new AbortController()
     void loadNotifications(controller.signal)
     return () => controller.abort()
   }, [loadNotifications])
+
+  useEffect(() => subscribeToStudentNotifications(studentUserId, (data) => {
+    if (!data) {
+      setNotifications([])
+      setUnreadCount(0)
+      return
+    }
+    setNotifications(data.notifications)
+    setUnreadCount(data.unreadCount)
+  }), [studentUserId])
 
   const groups = useMemo(() => {
     const today = []
@@ -158,7 +182,12 @@ export default function StudentNotificationsPage({ onLogout }) {
         entry.id === notification.id ? { ...entry, isRead: true, readAt: result.readAt } : entry
       )))
       setUnreadCount((current) => Math.max(0, current - 1))
-      window.dispatchEvent(new Event(STUDENT_NOTIFICATIONS_UPDATED_EVENT))
+      updateStudentNotificationCache(studentUserId, (current) => ({
+        notifications: current.notifications.map((entry) => (
+          entry.id === notification.id ? { ...entry, isRead: true, readAt: result.readAt } : entry
+        )),
+        unreadCount: Math.max(0, current.unreadCount - 1),
+      }))
     } catch (actionError) {
       setError(actionError instanceof Error ? actionError.message : 'This notification could not be marked as read.')
     }
@@ -177,7 +206,14 @@ export default function StudentNotificationsPage({ onLogout }) {
         readAt: entry.readAt || readAt,
       })))
       setUnreadCount(0)
-      window.dispatchEvent(new Event(STUDENT_NOTIFICATIONS_UPDATED_EVENT))
+      updateStudentNotificationCache(studentUserId, (current) => ({
+        notifications: current.notifications.map((entry) => ({
+          ...entry,
+          isRead: true,
+          readAt: entry.readAt || readAt,
+        })),
+        unreadCount: 0,
+      }))
     } catch (actionError) {
       setError(actionError instanceof Error ? actionError.message : 'Notifications could not be marked as read.')
     } finally {
@@ -193,7 +229,12 @@ export default function StudentNotificationsPage({ onLogout }) {
       await sendAction(`/notifications/${encodeURIComponent(notification.id)}`, 'DELETE')
       setNotifications((current) => current.filter((entry) => entry.id !== notification.id))
       if (!notification.isRead) setUnreadCount((current) => Math.max(0, current - 1))
-      window.dispatchEvent(new Event(STUDENT_NOTIFICATIONS_UPDATED_EVENT))
+      updateStudentNotificationCache(studentUserId, (current) => ({
+        notifications: current.notifications.filter((entry) => entry.id !== notification.id),
+        unreadCount: notification.isRead
+          ? current.unreadCount
+          : Math.max(0, current.unreadCount - 1),
+      }))
     } catch (actionError) {
       setError(actionError instanceof Error ? actionError.message : 'This notification could not be deleted.')
     } finally {

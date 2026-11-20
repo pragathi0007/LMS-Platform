@@ -17,6 +17,7 @@ import NotificationFeed from './NotificationFeed.jsx'
 import StudentNotificationBell from './StudentNotificationBell.jsx'
 import StudentNotificationsPage from './StudentNotificationsPage.jsx'
 import StudentQuizExperience from './StudentQuizPanel.jsx'
+import { clearStudentNotificationCache } from './student-notifications-cache.js'
 import { STUDENT_LEARNING_PROGRESS_UPDATED_EVENT } from './student-notifications-events.js'
 import { filterCoursesByCategory, getCourseCategoryNames, normalizeCourseCategory } from './course-categories.js'
 import { findActiveTranscriptCueIndex, formatTranscriptTime } from './srt-transcript.js'
@@ -29,6 +30,8 @@ const studentCertificateCacheTtlMs = 30_000
 const studentLearningPageCacheTtlMs = 30_000
 const studentEnrollmentCache = new Map()
 const studentEnrollmentRequests = new Map()
+const studentPublishedCourseCache = new Map()
+const studentPublishedCourseRequests = new Map()
 const studentCourseContentCache = new Map()
 const studentCourseContentRequests = new Map()
 const studentCourseLearningSeeds = new Map()
@@ -36,6 +39,8 @@ const studentPageCertificateRequests = new Map()
 const studentResultsCache = new Map()
 const studentReferralCache = new Map()
 const studentReferralRequests = new Map()
+let studentDashboardCacheGeneration = 0
+let studentLearningCacheGeneration = 0
 const COURSE_NOTES_KEY = 'course-notes'
 const COURSE_CERTIFICATE_KEY = 'course-certificate'
 
@@ -46,6 +51,25 @@ function getStudentCertificateCacheKey() {
   } catch {
     return ''
   }
+}
+
+export function clearStudentDashboardCaches() {
+  studentDashboardCacheGeneration += 1
+  studentLearningCacheGeneration += 1
+  studentCertificateCache.clear()
+  studentCertificateRequests.clear()
+  studentEnrollmentCache.clear()
+  studentEnrollmentRequests.clear()
+  studentPublishedCourseCache.clear()
+  studentPublishedCourseRequests.clear()
+  studentCourseContentCache.clear()
+  studentCourseContentRequests.clear()
+  studentCourseLearningSeeds.clear()
+  studentPageCertificateRequests.clear()
+  studentResultsCache.clear()
+  studentReferralCache.clear()
+  studentReferralRequests.clear()
+  clearStudentNotificationCache()
 }
 
 const navigation = [
@@ -763,8 +787,11 @@ async function fetchStudentPageEnrollments(onLogout) {
 
   let request = studentEnrollmentRequests.get(cacheKey)
   if (!request) {
+    const generation = studentLearningCacheGeneration
     request = fetchMyEnrollments(onLogout).then((enrollments) => {
-      studentEnrollmentCache.set(cacheKey, { enrollments, savedAt: Date.now() })
+      if (generation === studentLearningCacheGeneration && cacheKey === getStudentPageCacheKey()) {
+        studentEnrollmentCache.set(cacheKey, { enrollments, savedAt: Date.now() })
+      }
       return enrollments
     })
     studentEnrollmentRequests.set(cacheKey, request)
@@ -773,6 +800,37 @@ async function fetchStudentPageEnrollments(onLogout) {
     return await request
   } finally {
     if (studentEnrollmentRequests.get(cacheKey) === request) studentEnrollmentRequests.delete(cacheKey)
+  }
+}
+
+function getCachedStudentPagePublishedCourses() {
+  const cacheKey = getStudentPageCacheKey()
+  return cacheKey ? studentPublishedCourseCache.get(cacheKey)?.courses || null : null
+}
+
+async function fetchStudentPagePublishedCourses(onLogout) {
+  const cacheKey = getStudentPageCacheKey()
+  if (!cacheKey) return fetchPublishedCourses(onLogout)
+  const cached = studentPublishedCourseCache.get(cacheKey)
+  if (cached && Date.now() - cached.savedAt < studentLearningPageCacheTtlMs) return cached.courses
+
+  let request = studentPublishedCourseRequests.get(cacheKey)
+  if (!request) {
+    const generation = studentDashboardCacheGeneration
+    request = fetchPublishedCourses(onLogout).then((courses) => {
+      if (generation === studentDashboardCacheGeneration && cacheKey === getStudentPageCacheKey()) {
+        studentPublishedCourseCache.set(cacheKey, { courses, savedAt: Date.now() })
+      }
+      return courses
+    })
+    studentPublishedCourseRequests.set(cacheKey, request)
+  }
+  try {
+    return await request
+  } finally {
+    if (studentPublishedCourseRequests.get(cacheKey) === request) {
+      studentPublishedCourseRequests.delete(cacheKey)
+    }
   }
 }
 
@@ -827,8 +885,11 @@ async function fetchStudentPageCourseContent(courseId, onLogout) {
 
   let request = studentCourseContentRequests.get(cacheKey)
   if (!request) {
+    const generation = studentLearningCacheGeneration
     request = fetchStudentCourseContent(courseId, onLogout).then((content) => {
-      studentCourseContentCache.set(cacheKey, { content, savedAt: Date.now() })
+      if (generation === studentLearningCacheGeneration && cacheKey.startsWith(`${getStudentPageCacheKey()}:`)) {
+        studentCourseContentCache.set(cacheKey, { content, savedAt: Date.now() })
+      }
       return content
     })
     studentCourseContentRequests.set(cacheKey, request)
@@ -869,12 +930,20 @@ function invalidateStudentResultsCache() {
 function invalidateStudentLearningPageCaches() {
   const cacheKey = getStudentPageCacheKey()
   if (!cacheKey) return
-  studentEnrollmentCache.delete(cacheKey)
+  studentLearningCacheGeneration += 1
+  const cachedEnrollments = studentEnrollmentCache.get(cacheKey)
+  if (cachedEnrollments) {
+    studentEnrollmentCache.set(cacheKey, { ...cachedEnrollments, savedAt: 0 })
+  }
   studentResultsCache.delete(cacheKey)
   studentCertificateCache.delete(cacheKey)
   const coursePrefix = `${cacheKey}:`
-  studentCourseContentCache.forEach((_, key) => {
-    if (key.startsWith(coursePrefix)) studentCourseContentCache.delete(key)
+  studentEnrollmentRequests.delete(cacheKey)
+  studentCourseContentCache.forEach((cached, key) => {
+    if (key.startsWith(coursePrefix)) {
+      studentCourseContentCache.set(key, { ...cached, savedAt: 0 })
+      studentCourseContentRequests.delete(key)
+    }
   })
   studentCourseLearningSeeds.forEach((_, key) => {
     if (key.startsWith(coursePrefix)) studentCourseLearningSeeds.delete(key)
@@ -1054,6 +1123,16 @@ function createStudentAssignmentRows(courseResults) {
 async function fetchStudentAssignmentRows(onLogout) {
   const enrollments = await fetchStudentPageEnrollments(onLogout)
   const latestEnrollments = getLatestEnrollmentsByCourse(enrollments)
+  const cachedSubmissionsAvailable = [...latestEnrollments.values()].every((enrollment) => (
+    Array.isArray(enrollment.assignmentSubmissions)
+  ))
+  if (cachedSubmissionsAvailable) {
+    return createStudentAssignmentRows([...latestEnrollments.values()].map((enrollment) => ({
+      enrollment,
+      submissions: enrollment.assignmentSubmissions,
+    })))
+  }
+
   const courseResults = await Promise.all([...latestEnrollments.keys()].map(async (courseId) => {
     const result = await fetchStudentPageCourseContent(courseId, onLogout)
     return { enrollment: result.enrollment, submissions: result.assignmentSubmissions }
@@ -1066,6 +1145,10 @@ function getCachedStudentAssignmentRows() {
   if (!enrollments) return null
   const latestEnrollments = getLatestEnrollmentsByCourse(enrollments)
   const courseResults = [...latestEnrollments.keys()].map((courseId) => {
+    const enrollment = latestEnrollments.get(courseId)
+    if (Array.isArray(enrollment?.assignmentSubmissions)) {
+      return { enrollment, submissions: enrollment.assignmentSubmissions }
+    }
     const content = getCachedStudentPageCourseContent(courseId)
     return content
       ? { enrollment: content.enrollment, submissions: content.assignmentSubmissions }
@@ -2636,8 +2719,6 @@ function StudentDashboardCourses({ onLogout, selectedCategory }) {
     fetchStudentPageEnrollments(onLogout)
       .then((loadedEnrollments) => {
         if (!active) return
-        const cacheKey = getStudentPageCacheKey()
-        if (cacheKey) studentEnrollmentCache.set(cacheKey, { enrollments: loadedEnrollments, savedAt: Date.now() })
         setEnrollments(loadedEnrollments)
       })
       .catch((loadError) => {
@@ -2659,11 +2740,34 @@ function StudentDashboardCourses({ onLogout, selectedCategory }) {
     .filter((entry) => entry.courseId && typeof entry.courseId === 'object' && entry.courseId._id)
     .map((entry) => String(entry.courseId._id)))]
   const scoreCourseIdsKey = scoreCourseIds.join('|')
+  const scoreAttemptDataKey = categoryEnrollments.map((entry) => {
+    const courseId = String(entry.courseId?._id || '')
+    const attempts = entry.quizAttempts
+    return `${courseId}:${Array.isArray(attempts)
+      ? attempts.map((attempt) => [
+        attempt.status,
+        attempt.scorePercentage,
+        attempt.earnedPoints,
+        attempt.totalPoints,
+      ].join(',')).join(';')
+      : 'missing'}`
+  }).join('|')
 
   useEffect(() => {
     let active = true
-    if (!scoreCourseIdsKey) {
-      setAverageScores({})
+    const knownScores = {}
+    const missingCourseIds = []
+    categoryEnrollments.forEach((entry) => {
+      const courseId = String(entry.courseId?._id || '')
+      if (!courseId) return
+      if (Array.isArray(entry.quizAttempts)) {
+        knownScores[courseId] = getStudentAverageQuizScore(entry.quizAttempts)
+      } else {
+        missingCourseIds.push(courseId)
+      }
+    })
+    setAverageScores(knownScores)
+    if (!missingCourseIds.length) {
       setScoreError('')
       setScoresLoading(false)
       return () => { active = false }
@@ -2671,17 +2775,16 @@ function StudentDashboardCourses({ onLogout, selectedCategory }) {
 
     setScoresLoading(true)
     setScoreError('')
-    const courseIds = scoreCourseIdsKey.split('|')
-    Promise.allSettled(courseIds.map(async (courseId) => {
+    Promise.allSettled(missingCourseIds.map(async (courseId) => {
       const result = await fetchStudentPageCourseContent(courseId, onLogout)
       return getStudentAverageQuizScore(result.quizAttempts)
     }))
       .then((results) => {
         if (!active) return
-        const nextScores = {}
+        const nextScores = { ...knownScores }
         let failed = false
         results.forEach((result, index) => {
-          if (result.status === 'fulfilled') nextScores[courseIds[index]] = result.value
+          if (result.status === 'fulfilled') nextScores[missingCourseIds[index]] = result.value
           else failed = true
         })
         setAverageScores(nextScores)
@@ -2692,7 +2795,7 @@ function StudentDashboardCourses({ onLogout, selectedCategory }) {
       })
 
     return () => { active = false }
-  }, [onLogout, progressRefresh, scoreCourseIdsKey])
+  }, [onLogout, progressRefresh, scoreCourseIdsKey, scoreAttemptDataKey])
 
   return loading
     ? <StudentDashboardCourseTableSkeleton />
@@ -2866,30 +2969,37 @@ function StudentAvailableCourseCard({ course, enrollment }) {
 }
 
 function StudentAvailableCourses({ user, onLogout, onCategoriesLoaded, selectedCategory }) {
-  const [courses, setCourses] = useState([])
-  const [enrollments, setEnrollments] = useState([])
-  const [loading, setLoading] = useState(true)
+  const cachedCourses = getCachedStudentPagePublishedCourses()
+  const cachedEnrollments = getCachedStudentPageEnrollments()
+  const [courses, setCourses] = useState(cachedCourses || [])
+  const [enrollments, setEnrollments] = useState(cachedEnrollments || [])
+  const [loading, setLoading] = useState(cachedCourses === null)
   const [error, setError] = useState('')
 
   useEffect(() => {
-    const controller = new AbortController()
+    let active = true
+    const cachedPublishedCourses = getCachedStudentPagePublishedCourses()
+    if (cachedPublishedCourses) {
+      onCategoriesLoaded(getCourseCategoryNames(cachedPublishedCourses))
+    }
+    if (!cachedPublishedCourses) setLoading(true)
     Promise.all([
-      fetchPublishedCourses(onLogout, controller.signal),
+      fetchStudentPagePublishedCourses(onLogout),
       fetchStudentPageEnrollments(onLogout),
     ])
       .then(([publishedCourses, currentEnrollments]) => {
-        if (controller.signal.aborted) return
+        if (!active) return
         setCourses(publishedCourses)
         setEnrollments(currentEnrollments)
         onCategoriesLoaded(getCourseCategoryNames(publishedCourses))
       })
       .catch((loadError) => {
-        if (!controller.signal.aborted && loadError.name !== 'AbortError') {
+        if (active) {
           setError(loadError instanceof Error ? loadError.message : 'Available courses could not be loaded.')
         }
       })
-      .finally(() => { if (!controller.signal.aborted) setLoading(false) })
-    return () => controller.abort()
+      .finally(() => { if (active) setLoading(false) })
+    return () => { active = false }
   }, [onCategoriesLoaded, onLogout, user?.id])
 
   const enrollmentsByCourseId = new Map()
@@ -2948,8 +3058,9 @@ function StudentAvailableCourses({ user, onLogout, onCategoriesLoaded, selectedC
         <div><span className="student-eyebrow">KEEP LEARNING</span><h2 id="student-available-courses-title">All Courses</h2></div>
       </div>
       {error && <p className="student-courses__message is-error" role="alert">{error}</p>}
-      {loading ? <p role="status">Loading courses…</p> : !error && (
-        categoryCourses.length
+      {loading && !courses.length
+        ? <p role="status">Loading courses…</p>
+        : categoryCourses.length
           ? <div className="student-available-courses__grid">
             {categoryCourses.map((course) => (
               <StudentAvailableCourseCard
@@ -2959,18 +3070,17 @@ function StudentAvailableCourses({ user, onLogout, onCategoriesLoaded, selectedC
               />
             ))}
           </div>
-          : selectedCategory
+          : !error && (selectedCategory
             ? <EmptyState
               icon="book"
               title={`No ${selectedCategory} courses found`}
               description={`Published courses in ${selectedCategory} will appear here.`}
             />
             : <EmptyState
-            icon="book"
-            title="No published courses yet"
-            description="Published courses will appear here when the administrator adds them."
-          />
-      )}
+              icon="book"
+              title="No published courses yet"
+              description="Published courses will appear here when the administrator adds them."
+            />)}
     </section>
   )
 }

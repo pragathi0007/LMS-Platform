@@ -4,7 +4,7 @@ import AdminDashboard from './AdminDashboard.jsx'
 import CollegeAdminDashboard from './CollegeAdminDashboard.jsx'
 import SettingsPage from './SettingsPage.jsx'
 import AdminProfilePage from './AdminProfilePage.jsx'
-import StudentDashboard from './StudentDashboard.jsx'
+import StudentDashboard, { clearStudentDashboardCaches } from './StudentDashboard.jsx'
 import ThemeToggle from './ThemeToggle.jsx'
 import WorkspaceTopbar from './WorkspaceTopbar.jsx'
 import { Link, Navigate, useLocation } from 'react-router-dom'
@@ -1408,6 +1408,7 @@ function DashboardPage({ role, isDark, onToggleTheme, themePreference, onSetThem
           auth = await refreshAuthSession(API_BASE_URL)
         }
         if (typeof auth?.token !== 'string') {
+          if (role === 'student') clearStudentDashboardCaches()
           window.location.replace('/')
           return
         }
@@ -1420,6 +1421,7 @@ function DashboardPage({ role, isDark, onToggleTheme, themePreference, onSetThem
         if (isInvalidSessionResponse(response, result)) {
           const refreshed = role === 'student' ? await refreshAuthSession(API_BASE_URL) : null
           if (!refreshed) {
+            if (role === 'student') clearStudentDashboardCaches()
             sessionStorage.removeItem('lms.auth')
             window.location.replace('/')
             return
@@ -1430,6 +1432,7 @@ function DashboardPage({ role, isDark, onToggleTheme, themePreference, onSetThem
           })
           result = await readApiResponse(response)
           if (isInvalidSessionResponse(response, result)) {
+            if (role === 'student') clearStudentDashboardCaches()
             sessionStorage.removeItem('lms.auth')
             window.location.replace('/')
             return
@@ -1464,6 +1467,7 @@ function DashboardPage({ role, isDark, onToggleTheme, themePreference, onSetThem
   }, [role])
 
   const signOut = useCallback(() => {
+    if (role === 'student') clearStudentDashboardCaches()
     sessionStorage.removeItem('lms.auth')
     void fetch(`${API_BASE_URL}/auth/logout`, {
       method: 'POST',
@@ -1473,7 +1477,7 @@ function DashboardPage({ role, isDark, onToggleTheme, themePreference, onSetThem
     }).catch(() => {
       console.error('The server session could not be revoked because the backend is unreachable.')
     }).finally(() => window.location.replace('/'))
-  }, [])
+  }, [role])
 
   function updateAccount(updatedAccount) {
     setUser((current) => current ? { ...current, ...updatedAccount } : current)
@@ -1481,11 +1485,15 @@ function DashboardPage({ role, isDark, onToggleTheme, themePreference, onSetThem
     if (!storedAuth) return
     try {
       const auth = JSON.parse(storedAuth)
+      if (role === 'student' && updatedAccount.id && updatedAccount.id !== auth.user?.id) {
+        clearStudentDashboardCaches()
+      }
       sessionStorage.setItem('lms.auth', JSON.stringify({
         ...auth,
         user: { ...auth.user, ...updatedAccount },
       }))
     } catch {
+      if (role === 'student') clearStudentDashboardCaches()
       sessionStorage.removeItem('lms.auth')
       window.location.replace('/')
     }
@@ -1494,6 +1502,7 @@ function DashboardPage({ role, isDark, onToggleTheme, themePreference, onSetThem
   if (role === 'student') {
     return (
       <StudentDashboard
+        key={user?.id || 'student-session'}
         user={user}
         loading={!user && !error}
         error={error}

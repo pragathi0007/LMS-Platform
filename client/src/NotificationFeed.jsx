@@ -1,6 +1,13 @@
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import { API_BASE_URL } from './api-base-url.js'
 import { fetchWithAuth } from './auth-session.js'
+import {
+  fetchStudentNotifications,
+  getCachedStudentNotifications,
+  getCurrentStudentNotificationUserId,
+  subscribeToStudentNotifications,
+  updateStudentNotificationCache,
+} from './student-notifications-cache.js'
 import { STUDENT_NOTIFICATIONS_UPDATED_EVENT } from './student-notifications-events.js'
 import './NotificationFeed.css'
 function formatNotificationDate(value) {
@@ -112,63 +119,95 @@ function NotificationIcon({ type }) {
 }
 
 export default function NotificationFeed({ role, onLogout, onOpenApprovals, onUnreadCountChange, limit }) {
-  const [notifications, setNotifications] = useState([])
+  const studentUserId = role === 'student' ? getCurrentStudentNotificationUserId() : ''
+  const cachedNotifications = role === 'student'
+    ? getCachedStudentNotifications(studentUserId)
+    : null
+  const [notifications, setNotifications] = useState(cachedNotifications?.notifications || [])
   const [error, setError] = useState('')
-  const [loading, setLoading] = useState(true)
+  const [loading, setLoading] = useState(!cachedNotifications)
   const [refreshToken, setRefreshToken] = useState(0)
+  const forceRefreshRef = useRef(false)
   const [readError, setReadError] = useState('')
   const [markingReadId, setMarkingReadId] = useState('')
 
   useEffect(() => {
     const controller = new AbortController()
+    let active = true
     async function loadNotifications() {
-      setLoading(true)
+      if (!getCachedStudentNotifications(studentUserId)) setLoading(true)
       setError('')
       try {
         const savedAuth = sessionStorage.getItem('lms.auth')
         const auth = savedAuth ? JSON.parse(savedAuth) : null
         if (auth?.user?.role !== role || typeof auth.token !== 'string') {
           onLogout()
-          return
+          throw new Error('Your session has ended. Please sign in again.')
         }
-        const requestOptions = {
-          headers: { Authorization: `Bearer ${auth.token}` },
-          signal: controller.signal,
+        const fetchData = async () => {
+          const requestOptions = {
+            headers: { Authorization: `Bearer ${auth.token}` },
+            ...(role === 'student' ? {} : { signal: controller.signal }),
+          }
+          const response = role === 'student'
+            ? await fetchWithAuth(`${API_BASE_URL}/notifications/me`, requestOptions, API_BASE_URL, auth.token)
+            : await fetch(`${API_BASE_URL}/notifications/me`, requestOptions)
+          const result = await response.json()
+          if (response.status === 401 || response.status === 403) {
+            onLogout()
+            throw new Error('Your session has ended. Please sign in again.')
+          }
+          if (!response.ok) throw new Error(result.message || 'Unable to load notifications.')
+          if (!Array.isArray(result.notifications)) {
+            throw new Error('The server returned invalid notifications.')
+          }
+          const unreadCount = Number.isSafeInteger(result.unreadCount) && result.unreadCount >= 0
+            ? result.unreadCount
+            : result.notifications.filter((notification) => notification.isRead !== true && !notification.readAt).length
+          return { notifications: result.notifications, unreadCount }
         }
-        const response = role === 'student'
-          ? await fetchWithAuth(`${API_BASE_URL}/notifications/me`, requestOptions, API_BASE_URL, auth.token)
-          : await fetch(`${API_BASE_URL}/notifications/me`, requestOptions)
-        const result = await response.json()
-        if (response.status === 401 || response.status === 403) {
-          onLogout()
-          return
-        }
-        if (!response.ok) throw new Error(result.message || 'Unable to load notifications.')
-        if (!Array.isArray(result.notifications)) {
-          throw new Error('The server returned invalid notifications.')
-        }
-        setNotifications(result.notifications)
-        const unreadCount = Number.isSafeInteger(result.unreadCount) && result.unreadCount >= 0
-          ? result.unreadCount
-          : result.notifications.filter((notification) => notification.isRead !== true && !notification.readAt).length
-        onUnreadCountChange?.(unreadCount)
+        const forceRefresh = forceRefreshRef.current
+        forceRefreshRef.current = false
+        const data = role === 'student'
+          ? await fetchStudentNotifications(studentUserId, fetchData, { forceRefresh })
+          : await fetchData()
+        if (!active || controller.signal.aborted) return
+        setNotifications(data.notifications)
+        onUnreadCountChange?.(data.unreadCount)
       } catch (loadError) {
-        if (loadError.name !== 'AbortError') {
+        if (active && loadError.name !== 'AbortError') {
           setError(loadError instanceof Error ? loadError.message : 'Unable to load notifications.')
         }
       } finally {
-        if (!controller.signal.aborted) setLoading(false)
+        if (active && !controller.signal.aborted) setLoading(false)
       }
     }
 
     loadNotifications()
-    const refresh = () => setRefreshToken((current) => current + 1)
+    const refresh = () => {
+      forceRefreshRef.current = true
+      setRefreshToken((current) => current + 1)
+    }
     if (role === 'student') window.addEventListener(STUDENT_NOTIFICATIONS_UPDATED_EVENT, refresh)
     return () => {
+      active = false
       controller.abort()
       if (role === 'student') window.removeEventListener(STUDENT_NOTIFICATIONS_UPDATED_EVENT, refresh)
     }
-  }, [onLogout, onUnreadCountChange, role, refreshToken])
+  }, [onLogout, onUnreadCountChange, role, refreshToken, studentUserId])
+
+  useEffect(() => {
+    if (role !== 'student') return undefined
+    return subscribeToStudentNotifications(studentUserId, (data) => {
+      if (!data) {
+        setNotifications([])
+        onUnreadCountChange?.(0)
+        return
+      }
+      setNotifications(data.notifications)
+      onUnreadCountChange?.(data.unreadCount)
+    })
+  }, [onUnreadCountChange, role, studentUserId])
 
   async function markAsRead(notificationId) {
     setMarkingReadId(notificationId)
@@ -195,10 +234,18 @@ export default function NotificationFeed({ role, onLogout, onOpenApprovals, onUn
         return
       }
       if (!response.ok) throw new Error(result.message || 'Unable to update notification status.')
+      const currentNotification = notifications.find((notification) => notification.id === notificationId)
+      const wasUnread = currentNotification?.isRead !== true
       setNotifications((current) => current.map((notification) => (
         notification.id === notificationId ? { ...notification, isRead: true } : notification
       )))
       onUnreadCountChange?.((current) => Math.max(0, current - 1))
+      updateStudentNotificationCache(studentUserId, (current) => ({
+        notifications: current.notifications.map((notification) => (
+          notification.id === notificationId ? { ...notification, isRead: true } : notification
+        )),
+        unreadCount: wasUnread ? Math.max(0, current.unreadCount - 1) : current.unreadCount,
+      }))
     } catch (markError) {
       setReadError(markError instanceof Error ? markError.message : 'Unable to update notification status.')
     } finally {
@@ -207,13 +254,13 @@ export default function NotificationFeed({ role, onLogout, onOpenApprovals, onUn
   }
 
   const isMainAdmin = role === 'main_admin'
-  if (loading) {
+  if (loading && !notifications.length) {
     return <p className={`notification-feed__message${isMainAdmin ? ' notification-feed__message--admin' : ''}`} role="status">Loading notifications…</p>
   }
-  if (error) {
+  if (error && !notifications.length) {
     return <p className={`notification-feed__message is-error${isMainAdmin ? ' notification-feed__message--admin' : ''}`} role="alert">{error}</p>
   }
-  if (!notifications.length) {
+  if (!loading && !error && !notifications.length) {
     return <p className="notification-feed__message">{role === 'student' ? 'No notifications yet.' : 'You’re all caught up. There are no notifications yet.'}</p>
   }
 
@@ -223,6 +270,7 @@ export default function NotificationFeed({ role, onLogout, onOpenApprovals, onUn
       : notifications
     return (
       <div className="notification-feed notification-feed--admin">
+        {error && <p className="notification-feed__message is-error" role="alert">{error}</p>}
         {readError && <p className="notification-feed__read-error" role="alert">{readError}</p>}
         {groupByDate(visibleNotifications).map((group) => (
           <section className="notification-feed__group" key={group.label}>
@@ -290,6 +338,8 @@ export default function NotificationFeed({ role, onLogout, onOpenApprovals, onUn
 
   return (
     <div className={`notification-feed${role === 'student' ? ' notification-feed--student' : ''}`}>
+      {error && <p className="notification-feed__message is-error" role="alert">{error}</p>}
+      {readError && <p className="notification-feed__read-error" role="alert">{readError}</p>}
       {visibleNotifications.map((notification) => (
         <article
           className={`notification-feed__item${role === 'student' ? ` is-${notification.isRead ? 'read' : 'unread'}` : ''}`}

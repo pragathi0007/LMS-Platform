@@ -5356,6 +5356,10 @@ test('student enrollment response includes playable course data without quiz ans
   const legacyLessonId = lessonId
   const pendingLessonId = '68a000000000000000000054'
   const futureLessonId = '68a000000000000000000060'
+  const enrollmentId = '68a000000000000000000051'
+  const assignmentId = '68a000000000000000000061'
+  const quizId = '68a000000000000000000062'
+  const submittedAt = new Date('2026-11-12T00:00:00.000Z')
   const restoreStudent = stub(Student, 'findById', async () => ({
     _id: studentId,
     role: 'student',
@@ -5368,7 +5372,7 @@ test('student enrollment response includes playable course data without quiz ans
     populate() { return this },
     sort() { return this },
     lean: async () => [{
-      _id: '68a000000000000000000051',
+      _id: enrollmentId,
       userId: studentId,
       status: 'active',
       completedLessonIds: [lessonId],
@@ -5419,8 +5423,33 @@ test('student enrollment response includes playable course data without quiz ans
     }],
   }))
   const restoreEnrollmentUpdate = stub(Enrollment, 'updateOne', async () => ({ matchedCount: 1 }))
-  const restoreAssignmentSubmissions = stub(AssignmentSubmission, 'find', () => queryResult([]))
-  const restoreQuizAttempts = stub(QuizAttempt, 'find', () => queryResult([]))
+  let assignmentQueryCount = 0
+  let quizQueryCount = 0
+  const restoreAssignmentSubmissions = stub(AssignmentSubmission, 'find', () => {
+    assignmentQueryCount += 1
+    return queryResult([{
+      userId: studentId,
+      courseId: '68a000000000000000000040',
+      enrollmentId,
+      assignmentId,
+      submittedAt,
+      reviewStatus: 'approved',
+    }])
+  })
+  const restoreQuizAttempts = stub(QuizAttempt, 'find', () => {
+    quizQueryCount += 1
+    return queryResult([{
+      userId: studentId,
+      courseId: '68a000000000000000000040',
+      enrollmentId,
+      quizId,
+      status: 'submitted',
+      passed: true,
+      scorePercentage: 90,
+      earnedPoints: 9,
+      totalPoints: 10,
+    }])
+  })
   try {
     const response = await request('/enrollments/me', {
       role: 'student',
@@ -5463,6 +5492,21 @@ test('student enrollment response includes playable course data without quiz ans
     assert.equal(result.enrollments[0].status, 'active')
     assert.equal(result.enrollments[0].lessonCompletionDates[lessonId], '2026-11-11T00:00:00.000Z')
     assert.deepEqual(result.enrollments[0].courseId.modules[0].contentItems[3].quiz.questions, [])
+    assert.deepEqual(result.enrollments[0].assignmentSubmissions, [{
+      assignmentId,
+      submittedAt: submittedAt.toISOString(),
+      reviewStatus: 'approved',
+    }])
+    assert.deepEqual(result.enrollments[0].quizAttempts, [{
+      quizId,
+      status: 'submitted',
+      passed: true,
+      scorePercentage: 90,
+      earnedPoints: 9,
+      totalPoints: 10,
+    }])
+    assert.equal(assignmentQueryCount, 1)
+    assert.equal(quizQueryCount, 1)
   } finally {
     restoreEnrollmentUpdate()
     restoreQuizAttempts()

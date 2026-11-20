@@ -6,6 +6,13 @@ import {
   STUDENT_LEARNING_PROGRESS_UPDATED_EVENT,
   STUDENT_NOTIFICATIONS_UPDATED_EVENT,
 } from './student-notifications-events.js'
+import {
+  fetchStudentNotifications,
+  getCachedStudentNotifications,
+  getCurrentStudentNotificationUserId,
+  subscribeToStudentNotifications,
+  updateStudentNotificationCache,
+} from './student-notifications-cache.js'
 import './StudentNotificationBell.css'
 
 export { STUDENT_NOTIFICATIONS_UPDATED_EVENT }
@@ -71,20 +78,24 @@ function getStudentLink(notification) {
 export default function StudentNotificationBell({ onLogout }) {
   const navigate = useNavigate()
   const rootRef = useRef(null)
-  const hasLoadedRef = useRef(false)
-  const inFlightRef = useRef(null)
+  const studentUserId = getCurrentStudentNotificationUserId()
+  const cachedNotifications = getCachedStudentNotifications(studentUserId)
+  const inFlightRef = useRef({ userId: '', request: null })
+  const activeUserIdRef = useRef('')
   const progressNotificationIdsRef = useRef(new Set())
-  const [notifications, setNotifications] = useState([])
-  const [unreadCount, setUnreadCount] = useState(0)
-  const [loading, setLoading] = useState(true)
+  const [notifications, setNotifications] = useState(cachedNotifications?.notifications || [])
+  const [unreadCount, setUnreadCount] = useState(cachedNotifications?.unreadCount || 0)
+  const [loading, setLoading] = useState(!cachedNotifications)
   const [error, setError] = useState('')
   const [open, setOpen] = useState(false)
   const [busyIds, setBusyIds] = useState([])
   const [markingAll, setMarkingAll] = useState(false)
 
-  const loadNotifications = useCallback((signal) => {
-    if (inFlightRef.current) return inFlightRef.current
-    if (!hasLoadedRef.current) setLoading(true)
+  const loadNotifications = useCallback((forceRefresh = false) => {
+    if (inFlightRef.current.userId === studentUserId && inFlightRef.current.request) {
+      return inFlightRef.current.request
+    }
+    if (!getCachedStudentNotifications(studentUserId)) setLoading(true)
     setError('')
     const request = (async () => {
       try {
@@ -94,21 +105,27 @@ export default function StudentNotificationBell({ onLogout }) {
           onLogout()
           return
         }
-        const response = await fetchWithAuth(`${API_BASE_URL}/notifications/me`, {
-          headers: { Authorization: `Bearer ${auth.token}` },
-          signal,
-        }, API_BASE_URL, auth.token)
-        const result = await response.json()
-        if (isInvalidSessionResponse(response, result)) {
-          onLogout()
-          return
-        }
-        if (!response.ok) throw new Error(result.message || 'Notifications could not be loaded.')
-        if (!Array.isArray(result.notifications)) {
-          throw new Error('The server returned invalid notification data.')
-        }
+        const data = await fetchStudentNotifications(studentUserId, async () => {
+          const response = await fetchWithAuth(`${API_BASE_URL}/notifications/me`, {
+            headers: { Authorization: `Bearer ${auth.token}` },
+          }, API_BASE_URL, auth.token)
+          const result = await response.json()
+          if (isInvalidSessionResponse(response, result)) {
+            onLogout()
+            throw new Error('Your session has ended. Please sign in again.')
+          }
+          if (!response.ok) throw new Error(result.message || 'Notifications could not be loaded.')
+          if (!Array.isArray(result.notifications)) {
+            throw new Error('The server returned invalid notification data.')
+          }
+          const unreadCount = Number.isSafeInteger(result.unreadCount) && result.unreadCount >= 0
+            ? result.unreadCount
+            : result.notifications.filter((notification) => notification.isRead !== true && !notification.readAt).length
+          return { notifications: result.notifications, unreadCount }
+        }, { forceRefresh })
+        if (activeUserIdRef.current !== studentUserId) return
         let hasNewAssignmentReview = false
-        result.notifications.forEach((notification) => {
+        data.notifications.forEach((notification) => {
           if (!['assignment_approved', 'assignment_rejected'].includes(notification.type)) return
           const notificationId = String(notification.id || notification._id || '')
           if (!notificationId || progressNotificationIdsRef.current.has(notificationId)) return
@@ -118,45 +135,55 @@ export default function StudentNotificationBell({ onLogout }) {
         if (hasNewAssignmentReview) {
           window.dispatchEvent(new Event(STUDENT_LEARNING_PROGRESS_UPDATED_EVENT))
         }
-        const unreadCount = Number.isSafeInteger(result.unreadCount) && result.unreadCount >= 0
-          ? result.unreadCount
-          : result.notifications.filter((notification) => notification.isRead !== true && !notification.readAt).length
-        setNotifications(result.notifications)
-        setUnreadCount(unreadCount)
-        hasLoadedRef.current = true
+        setNotifications(data.notifications)
+        setUnreadCount(data.unreadCount)
       } catch (loadError) {
-        if (loadError instanceof Error && loadError.name !== 'AbortError') {
+        if (activeUserIdRef.current === studentUserId && loadError instanceof Error && loadError.name !== 'AbortError') {
           setError(loadError.message)
-        } else if (!(loadError instanceof Error)) {
+        } else if (activeUserIdRef.current === studentUserId && !(loadError instanceof Error)) {
           setError('Notifications could not be loaded.')
         }
       } finally {
-        if (signal?.aborted !== true) setLoading(false)
+        if (activeUserIdRef.current === studentUserId) setLoading(false)
       }
     })()
-    inFlightRef.current = request
+    inFlightRef.current = { userId: studentUserId, request }
     void request.finally(() => {
-      if (inFlightRef.current === request) inFlightRef.current = null
+      if (inFlightRef.current.request === request) {
+        inFlightRef.current = { userId: '', request: null }
+      }
     })
     return request
-  }, [onLogout])
+  }, [onLogout, studentUserId])
 
   useEffect(() => {
-    const controller = new AbortController()
-    void loadNotifications(controller.signal)
-    const refresh = () => {
-      if (document.visibilityState === 'visible') void loadNotifications()
+    activeUserIdRef.current = studentUserId
+    void loadNotifications()
+    const refresh = (force = false) => {
+      if (document.visibilityState === 'visible') void loadNotifications(force)
     }
     const intervalId = window.setInterval(refresh, 60_000)
     window.addEventListener('focus', refresh)
-    window.addEventListener(STUDENT_NOTIFICATIONS_UPDATED_EVENT, refresh)
+    const refreshUpdated = () => refresh(true)
+    window.addEventListener(STUDENT_NOTIFICATIONS_UPDATED_EVENT, refreshUpdated)
+    const unsubscribe = subscribeToStudentNotifications(studentUserId, (data) => {
+      if (!data) {
+        setNotifications([])
+        setUnreadCount(0)
+        setLoading(true)
+        return
+      }
+      setNotifications(data.notifications)
+      setUnreadCount(data.unreadCount)
+    })
     return () => {
-      controller.abort()
+      if (activeUserIdRef.current === studentUserId) activeUserIdRef.current = ''
       window.clearInterval(intervalId)
       window.removeEventListener('focus', refresh)
-      window.removeEventListener(STUDENT_NOTIFICATIONS_UPDATED_EVENT, refresh)
+      window.removeEventListener(STUDENT_NOTIFICATIONS_UPDATED_EVENT, refreshUpdated)
+      unsubscribe()
     }
-  }, [loadNotifications])
+  }, [loadNotifications, studentUserId])
 
   useEffect(() => {
     if (!open) return undefined
@@ -193,6 +220,12 @@ export default function StudentNotificationBell({ onLogout }) {
         entry.id === notificationId ? { ...entry, isRead: true, readAt: result.readAt } : entry
       )))
       setUnreadCount((current) => Math.max(0, current - 1))
+      updateStudentNotificationCache(studentUserId, (current) => ({
+        notifications: current.notifications.map((entry) => (
+          entry.id === notificationId ? { ...entry, isRead: true, readAt: result.readAt } : entry
+        )),
+        unreadCount: Math.max(0, current.unreadCount - 1),
+      }))
     } catch (actionError) {
       setError(actionError instanceof Error ? actionError.message : 'This notification could not be marked as read.')
     } finally {
@@ -217,6 +250,14 @@ export default function StudentNotificationBell({ onLogout }) {
       const readAt = new Date().toISOString()
       setNotifications((current) => current.map((entry) => ({ ...entry, isRead: true, readAt: entry.readAt || readAt })))
       setUnreadCount(0)
+      updateStudentNotificationCache(studentUserId, (current) => ({
+        notifications: current.notifications.map((entry) => ({
+          ...entry,
+          isRead: true,
+          readAt: entry.readAt || readAt,
+        })),
+        unreadCount: 0,
+      }))
     } catch (actionError) {
       setError(actionError instanceof Error ? actionError.message : 'Notifications could not be marked as read.')
     } finally {
@@ -241,6 +282,12 @@ export default function StudentNotificationBell({ onLogout }) {
       }
       setNotifications((current) => current.filter((entry) => entry.id !== notificationId))
       if (!notification.isRead) setUnreadCount((current) => Math.max(0, current - 1))
+      updateStudentNotificationCache(studentUserId, (current) => ({
+        notifications: current.notifications.filter((entry) => entry.id !== notificationId),
+        unreadCount: notification.isRead
+          ? current.unreadCount
+          : Math.max(0, current.unreadCount - 1),
+      }))
     } catch (actionError) {
       setError(actionError instanceof Error ? actionError.message : 'This notification could not be deleted.')
     } finally {
