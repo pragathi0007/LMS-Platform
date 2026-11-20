@@ -873,7 +873,7 @@ function getInitialStudentCourseLearningEnrollment(courseId) {
   }
   const enrollment = getStudentCourseLearningSeed(courseId)
   return enrollment
-    ? { ...enrollment, assignmentSubmissions: [], quizAttempts: [] }
+    ? { ...enrollment, assignmentSubmissions: enrollment.assignmentSubmissions || [], quizAttempts: [] }
     : null
 }
 
@@ -2281,6 +2281,9 @@ function StudentAssignmentPanel({ courseId, enrollmentId, assignment, submission
   const latestSubmission = assignmentSubmissions
     .slice()
     .sort((left, right) => new Date(right.submittedAt || 0).getTime() - new Date(left.submittedAt || 0).getTime())[0]
+  const downloadableSubmissions = assignmentSubmissions.filter((submission) => (
+    submission._id && submission.fileName
+  ))
 
   useEffect(() => {
     if (!file) {
@@ -2476,10 +2479,10 @@ function StudentAssignmentPanel({ courseId, enrollmentId, assignment, submission
           )}
         </div>
       )}
-      {assignmentSubmissions.length > 0 && (
+      {downloadableSubmissions.length > 0 && (
         <div className="student-assignment-submissions">
           <h3>Submissions</h3>
-          {assignmentSubmissions.map((submission) => (
+          {downloadableSubmissions.map((submission) => (
             <a className={showHeader ? 'student-assignment-submissions__file' : undefined} key={submission._id} href={`${API_BASE_URL}/assignment-submissions/${encodeURIComponent(submission._id)}/download`} onClick={async (event) => {
               event.preventDefault()
               try {
@@ -3193,6 +3196,12 @@ function StudentCourseLearning({
   const [autoplayBlockedLessonId, setAutoplayBlockedLessonId] = useState('')
   const [assignmentSubmissions, setAssignmentSubmissions] = useState(enrollment.assignmentSubmissions || [])
   const [quizAttempts, setQuizAttempts] = useState(enrollment.quizAttempts || [])
+  useEffect(() => {
+    setAssignmentSubmissions(enrollment.assignmentSubmissions || [])
+  }, [enrollment.assignmentSubmissions])
+  useEffect(() => {
+    setQuizAttempts(enrollment.quizAttempts || [])
+  }, [enrollment.quizAttempts])
   const [courseCertificate, setCourseCertificate] = useState(null)
   const [courseCertificateLoading, setCourseCertificateLoading] = useState(true)
   const [courseCertificateError, setCourseCertificateError] = useState('')
@@ -3274,6 +3283,11 @@ function StudentCourseLearning({
     && attempt.status === 'submitted'
     && attempt.passed === true
   ))
+  const getLatestAssignmentSubmission = (assignmentId) => assignmentSubmissions
+    .filter((submission) => String(submission.assignmentId) === String(assignmentId))
+    .sort((left, right) => (
+      new Date(right.submittedAt || 0).getTime() - new Date(left.submittedAt || 0).getTime()
+    ))[0]
   const isActivityComplete = (item) => {
     if (item.type === 'video-lesson') {
       return (enrollment.completedLessonIds || []).some((id) => (
@@ -3282,9 +3296,7 @@ function StudentCourseLearning({
     }
     if (item.type === 'quiz') return hasPassedQuiz(item.quiz?._id || item._learningKey)
     if (item.type === 'assignment') {
-      return assignmentSubmissions.some((submission) => (
-        String(submission.assignmentId) === String(item._id || item._learningKey)
-      ))
+      return getLatestAssignmentSubmission(item._id || item._learningKey)?.reviewStatus === 'approved'
     }
     return false
   }
@@ -4007,9 +4019,7 @@ function StudentCourseLearning({
   }
 
   function getAssignmentReviewStatus(assignment) {
-    const submission = assignmentSubmissions.find((entry) => (
-      String(entry.assignmentId) === String(assignment?._id)
-    ))
+    const submission = getLatestAssignmentSubmission(assignment?._id)
     if (!submission) return 'not-submitted'
     if (['approved', 'rejected', 'pending'].includes(submission.reviewStatus)) {
       return submission.reviewStatus
@@ -4694,7 +4704,7 @@ function StudentCourseLearning({
                     controlsList="nodownload noplaybackrate nofullscreen"
                     disablePictureInPicture
                     playsInline
-                    preload="metadata"
+                    preload="auto"
                     src={activeVideoUrl}
                     onClick={toggleVideoPlaybackFromSurface}
                     onLoadedMetadata={(event) => {
@@ -5620,29 +5630,57 @@ function StudentReferrals({ onLogout }) {
 
 function StudentCourseDetailsPage({ user, onLogout, onLearningDataChanged }) {
   const { courseId } = useParams()
-  const [course, setCourse] = useState(null)
-  const [loading, setLoading] = useState(true)
+  const [initialCourseDetails] = useState(() => {
+    const cachedCourse = getCachedStudentPagePublishedCourses()
+      ?.find((item) => String(item._id) === courseId) || null
+    const cachedEnrollment = getCachedStudentPageEnrollments()
+      ?.find((entry) => (
+        String(entry.courseId?._id || entry.courseId) === courseId && entry.status !== 'cancelled'
+      ))
+    return {
+      course: cachedCourse,
+      enrollment: cachedCourse && cachedEnrollment
+        ? { ...cachedEnrollment, courseId: cachedCourse }
+        : null,
+    }
+  })
+  const [course, setCourse] = useState(initialCourseDetails.course)
+  const [loading, setLoading] = useState(!initialCourseDetails.course)
   const [enrolling, setEnrolling] = useState(false)
-  const [isEnrolled, setIsEnrolled] = useState(false)
-  const [courseEnrollment, setCourseEnrollment] = useState(null)
+  const [isEnrolled, setIsEnrolled] = useState(Boolean(initialCourseDetails.enrollment))
+  const [courseEnrollment, setCourseEnrollment] = useState(initialCourseDetails.enrollment)
   const [error, setError] = useState('')
   const isCollegeStudent = user?.studentType === 'college' || Boolean(user?.collegeId)
   const courseCounts = course ? getCourseCounts(course) : { modules: 0, lessons: 0 }
 
   useEffect(() => {
-    const controller = new AbortController()
-    setLoading(true)
-    setCourse(null)
-    setIsEnrolled(false)
-    setCourseEnrollment(null)
+    let active = true
+    const cachedCourse = getCachedStudentPagePublishedCourses()
+      ?.find((item) => String(item._id) === courseId) || null
+    const cachedEnrollment = getCachedStudentPageEnrollments()
+      ?.find((entry) => (
+        String(entry.courseId?._id || entry.courseId) === courseId && entry.status !== 'cancelled'
+      ))
+    setCourse(cachedCourse)
+    setIsEnrolled(Boolean(cachedCourse && cachedEnrollment))
+    setCourseEnrollment(cachedCourse && cachedEnrollment
+      ? { ...cachedEnrollment, courseId: cachedCourse }
+      : null)
+    setLoading(!cachedCourse)
     setError('')
     Promise.all([
-      fetchPublishedCourses(onLogout, controller.signal),
-      fetchMyEnrollments(onLogout, controller.signal),
+      fetchStudentPagePublishedCourses(onLogout),
+      fetchStudentPageEnrollments(onLogout),
     ])
       .then(([publishedCourses, enrollments]) => {
+        if (!active) return
         const selectedCourse = publishedCourses.find((item) => String(item._id) === courseId)
-        if (!selectedCourse) throw new Error('This course is not currently published or available.')
+        if (!selectedCourse) {
+          setCourse(null)
+          setIsEnrolled(false)
+          setCourseEnrollment(null)
+          throw new Error('This course is not currently published or available.')
+        }
         const selectedEnrollment = enrollments.find((entry) => (
           String(entry.courseId?._id || entry.courseId) === courseId && entry.status !== 'cancelled'
         ))
@@ -5651,12 +5689,12 @@ function StudentCourseDetailsPage({ user, onLogout, onLearningDataChanged }) {
         setCourse(selectedCourse)
       })
       .catch((loadError) => {
-        if (loadError.name !== 'AbortError') {
+        if (active) {
           setError(loadError instanceof Error ? loadError.message : 'Course details could not be loaded.')
         }
       })
-      .finally(() => { if (!controller.signal.aborted) setLoading(false) })
-    return () => controller.abort()
+      .finally(() => { if (active) setLoading(false) })
+    return () => { active = false }
   }, [courseId, onLogout])
 
   async function enroll() {

@@ -62,10 +62,10 @@ export default function StudentQuizPanel({
     lockedUntil: null,
     serverTime: null,
   }))
-  const [quizStatusLoading, setQuizStatusLoading] = useState(true)
   const [statusRefresh, setStatusRefresh] = useState(0)
   const [serverClockOffset, setServerClockOffset] = useState(0)
   const [lockSecondsRemaining, setLockSecondsRemaining] = useState(0)
+  const quizStartVersion = useRef(0)
   const submitLock = useRef(false)
   const submitRef = useRef(null)
   const timerSubmissionRequested = useRef(false)
@@ -95,8 +95,8 @@ export default function StudentQuizPanel({
 
   useEffect(() => {
     const controller = new AbortController()
+    const startVersion = quizStartVersion.current
     async function loadQuizStatus() {
-      setQuizStatusLoading(true)
       try {
         const savedAuth = sessionStorage.getItem('lms.auth')
         const auth = savedAuth ? JSON.parse(savedAuth) : null
@@ -120,18 +120,42 @@ export default function StudentQuizPanel({
           return
         }
         if (!response.ok) throw new Error(result.message || 'Quiz attempt status could not be loaded.')
-        applyQuizStatus(result.quizStatus)
+        if (startVersion === quizStartVersion.current) applyQuizStatus(result.quizStatus)
       } catch (statusError) {
-        if (statusError.name !== 'AbortError') {
+        if (statusError.name !== 'AbortError' && startVersion === quizStartVersion.current) {
           setError(statusError instanceof Error ? statusError.message : 'Quiz attempt status could not be loaded.')
         }
-      } finally {
-        if (!controller.signal.aborted) setQuizStatusLoading(false)
       }
     }
     void loadQuizStatus()
     return () => controller.abort()
   }, [courseId, enrollmentId, quiz._id, statusRefresh, onLogout])
+
+  useEffect(() => {
+    const currentAttempts = getQuizAttempts(quiz._id, attempts)
+    const savedAttempt = currentAttempts.find((attempt) => attempt.status === 'started')
+    if (savedAttempt && String(savedAttempt._id) !== String(activeAttempt?._id)) {
+      const savedAnswers = Object.fromEntries((savedAttempt.answers || []).map((answer) => [
+        getQuestionKey({ _id: answer.questionId }),
+        answer.selectedOptionIndices || [],
+      ]))
+      setQuestionSet(savedAttempt.questions?.length ? savedAttempt.questions : quiz.questions || [])
+      setActiveAttempt(savedAttempt)
+      answersRef.current = savedAnswers
+      setAnswers(savedAnswers)
+      setQuestionIndex(0)
+      setView('quiz')
+      return
+    }
+
+    const latestSubmittedAttempt = currentAttempts.find((attempt) => attempt.status !== 'started')
+    if (!activeAttempt && view === 'intro' && latestSubmittedAttempt) {
+      setQuestionSet(latestSubmittedAttempt.questions?.length
+        ? latestSubmittedAttempt.questions
+        : quiz.questions || [])
+      setView('results')
+    }
+  }, [activeAttempt, attempts, quiz._id, quiz.questions, view])
 
   useEffect(() => {
     if (!quizStatus.lockedUntil) {
@@ -169,6 +193,7 @@ export default function StudentQuizPanel({
       setError('This quiz cannot be started because it has no saved ID.')
       return
     }
+    quizStartVersion.current += 1
     setSubmitting(true)
     setError('')
     try {
@@ -326,12 +351,12 @@ export default function StudentQuizPanel({
             </p>
           )}
           {quizStatus.passed && <p className="student-quiz-lock" role="status">You have passed this quiz.</p>}
-          {!quizStatusLoading && !isLocked && !quizStatus.passed && quizStatus.attemptsRemaining === 0 && (
+          {!isLocked && !quizStatus.passed && quizStatus.attemptsRemaining === 0 && (
             <p className="student-quiz-lock" role="status">No new attempts are available. Finish an active attempt or wait for the cooldown after three failed submissions.</p>
           )}
           {hasAttemptsLeft && (
-            <button className="student-button" type="button" onClick={startQuiz} disabled={submitting || quizStatusLoading}>
-              {submitting ? 'Starting…' : quizStatusLoading ? 'Checking attempts…' : 'Start Quiz'}
+            <button className="student-button" type="button" onClick={startQuiz} disabled={submitting}>
+              {submitting ? 'Starting…' : 'Start Quiz'}
             </button>
           )}
         </div>
