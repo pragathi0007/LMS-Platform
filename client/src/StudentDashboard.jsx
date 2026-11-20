@@ -3096,7 +3096,6 @@ function StudentCourseLearning({
   const videoPlayerRef = useRef(null)
   const videoPlayerContainerRef = useRef(null)
   const videoControlsHideTimeoutRef = useRef(null)
-  const [loadedVideoSourceKey, setLoadedVideoSourceKey] = useState('')
   const [failedVideoSourceKey, setFailedVideoSourceKey] = useState('')
   const [isVideoPlayerFullscreen, setIsVideoPlayerFullscreen] = useState(false)
   const [videoPlayerFullscreenError, setVideoPlayerFullscreenError] = useState('')
@@ -3145,11 +3144,6 @@ function StudentCourseLearning({
   const videoSourceKey = activeVideoUrl
     ? `${activeVideoKey}:${activeVideoUrl}:${videoOpenSequence}`
     : ''
-  const isVideoMediaLoading = Boolean(
-    videoSourceKey &&
-    loadedVideoSourceKey !== videoSourceKey &&
-    failedVideoSourceKey !== videoSourceKey,
-  )
   const videoMediaFailed = Boolean(videoSourceKey && failedVideoSourceKey === videoSourceKey)
   const transcriptCues = Array.isArray(activeEntry?.lesson?.transcriptCues)
     ? activeEntry.lesson.transcriptCues
@@ -3710,7 +3704,6 @@ function StudentCourseLearning({
   function toggleVideoPlaybackFromSurface(event) {
     const video = event.currentTarget
     if (
-      isVideoMediaLoading ||
       attentionCheckChallenge ||
       attentionCheckLoading ||
       attentionSessionRef.current.blocked
@@ -4599,7 +4592,6 @@ function StudentCourseLearning({
                       updateTranscriptPlaybackTime(event.currentTarget)
                       setIsVideoMuted(event.currentTarget.muted)
                     }}
-                    onLoadedData={() => setLoadedVideoSourceKey(videoSourceKey)}
                     onError={() => setFailedVideoSourceKey(videoSourceKey)}
                     onVolumeChange={(event) => setIsVideoMuted(event.currentTarget.muted)}
                     onPlaying={(event) => resetLearningActivitySample(activeEntry, event.currentTarget)}
@@ -4661,12 +4653,6 @@ function StudentCourseLearning({
                       : activeEntry
                         ? <div className="student-course-learning__no-video">No video has been uploaded for this lesson.</div>
                         : <div className="student-course-learning__no-video">Select a lesson to view its video.</div>}
-                {isVideoMediaLoading && (
-                  <div className="student-course-learning__video-state student-course-learning__video-state--loading" role="status" aria-busy="true">
-                    <span className="student-loader" aria-hidden="true" />
-                    <span>Loading video…</span>
-                  </div>
-                )}
                 {videoMediaFailed && (
                   <div className="student-course-learning__video-state" role="alert">
                     This video could not be loaded. Please try selecting the lesson again.
