@@ -77,28 +77,32 @@ export async function connectToDatabase() {
     ),
   )
   const database = mongoose.connection.db
-  for (const model of requiredModels) {
-    const collectionExists = await runDatabaseOperation(
-      'listCollections',
-      model.collection.name,
-      async () => database.listCollections({ name: model.collection.name }).hasNext(),
-    )
-    if (!collectionExists) {
-      try {
-        await runDatabaseOperation(
-          'createCollection',
-          model.collection.name,
-          () => database.createCollection(model.collection.name),
-        )
-      } catch (error) {
-        if (error?.cause?.code !== 48) throw error
+  const initializationBatchSize = 6
+  for (let offset = 0; offset < requiredModels.length; offset += initializationBatchSize) {
+    const models = requiredModels.slice(offset, offset + initializationBatchSize)
+    await Promise.all(models.map(async (model) => {
+      const collectionExists = await runDatabaseOperation(
+        'listCollections',
+        model.collection.name,
+        async () => database.listCollections({ name: model.collection.name }).hasNext(),
+      )
+      if (!collectionExists) {
+        try {
+          await runDatabaseOperation(
+            'createCollection',
+            model.collection.name,
+            () => database.createCollection(model.collection.name),
+          )
+        } catch (error) {
+          if (error?.cause?.code !== 48) throw error
+        }
       }
-    }
-    await runDatabaseOperation(
-      'createIndexes',
-      model.collection.name,
-      () => model.createIndexes(),
-    )
+      await runDatabaseOperation(
+        'createIndexes',
+        model.collection.name,
+        () => model.createIndexes(),
+      )
+    }))
   }
   const certificateDefaults = await Course.updateMany(
     { generateCertificate: { $exists: false } },

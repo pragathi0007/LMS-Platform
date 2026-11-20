@@ -1941,14 +1941,17 @@ router.post(
       if (!req.file || !isValidAssignmentFile(req.file)) {
         return res.status(400).json({ message: 'Upload a valid PDF, DOCX, or TXT file up to 10 MB.' })
       }
-      const enrollment = await Enrollment.findOne({
+      const enrollmentQuery = {
         userId: req.auth.id,
         courseId,
         ...getStudentEnrollmentScope(req),
         status: { $ne: 'cancelled' },
-      }).sort({ createdAt: -1 }).lean()
+      }
+      const [enrollment, course] = await Promise.all([
+        Enrollment.findOne(enrollmentQuery).sort({ createdAt: -1 }).lean(),
+        Course.findById(courseId).select('assignments modules quizzes').lean(),
+      ])
       if (!enrollment) return res.status(404).json({ message: 'An active enrollment is required to submit this assignment.' })
-      const course = await Course.findById(courseId).select('assignments modules quizzes').lean()
       const assignment = findAssignment(course, assignmentId)
       if (!course || !assignment) {
         return res.status(404).json({ message: 'This assignment is not available in the enrolled course.' })
@@ -1973,16 +1976,18 @@ router.post(
         fileSize: req.file.size,
         fileData: req.file.buffer,
       })
-      const courseProgress = await recalculateEnrollmentCourseProgress({ enrollment, course })
-      await createStudentNotification({
-        recipientId: req.auth.id,
-        eventKey: `assignment-submitted:${req.auth.id}:${submission._id}`,
-        type: 'assignment_submitted',
-        title: 'Assignment submitted',
-        message: `${assignment.title || 'Your assignment'} is awaiting review.`,
-        link: '/student/assignments',
-        metadata: { courseId, assignmentId, submissionId: String(submission._id) },
-      })
+      const [courseProgress] = await Promise.all([
+        recalculateEnrollmentCourseProgress({ enrollment, course }),
+        createStudentNotification({
+          recipientId: req.auth.id,
+          eventKey: `assignment-submitted:${req.auth.id}:${submission._id}`,
+          type: 'assignment_submitted',
+          title: 'Assignment submitted',
+          message: `${assignment.title || 'Your assignment'} is awaiting review.`,
+          link: '/student/assignments',
+          metadata: { courseId, assignmentId, submissionId: String(submission._id) },
+        }),
+      ])
       return res.status(201).json({
         submission: {
           _id: submission._id,

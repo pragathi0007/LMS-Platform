@@ -2146,6 +2146,28 @@ function getVideoCompletionDuration(video) {
   return 0
 }
 
+function getCloudinaryVideoDeliveryUrl(videoUrl) {
+  if (typeof videoUrl !== 'string') return ''
+  try {
+    const url = new URL(videoUrl)
+    if (url.hostname !== 'res.cloudinary.com') return videoUrl
+    const segments = url.pathname.split('/')
+    const uploadIndex = segments.findIndex((segment, index) => (
+      segment === 'upload' && segments[index - 1] === 'video'
+    ))
+    if (uploadIndex < 0) return videoUrl
+    const firstDeliverySegment = segments[uploadIndex + 1] || ''
+    if (firstDeliverySegment.includes('q_auto') || firstDeliverySegment.includes('f_auto')) {
+      return videoUrl
+    }
+    segments.splice(uploadIndex + 1, 0, 'q_auto,f_auto')
+    url.pathname = segments.join('/')
+    return url.toString()
+  } catch {
+    return videoUrl
+  }
+}
+
 function getCourseLessons(course) {
   const modules = (course?.modules || [])
     .map((module, index) => ({ module, index }))
@@ -3266,6 +3288,7 @@ function StudentCourseLearning({
   const activeEntry = lessons[activeIndex]
   const activeVideoKey = `${String(course._id)}:${String(activeEntry?.lesson?._id || activeEntry?.lessonKey || '')}`
   const activeVideoUrl = activeEntry?.lesson?.videoUrl || ''
+  const activeVideoDeliveryUrl = getCloudinaryVideoDeliveryUrl(activeVideoUrl)
   const videoSourceKey = activeVideoUrl
     ? `${activeVideoKey}:${activeVideoUrl}:${videoOpenSequence}`
     : ''
@@ -4711,7 +4734,7 @@ function StudentCourseLearning({
                     disablePictureInPicture
                     playsInline
                     preload="auto"
-                    src={activeVideoUrl}
+                    src={activeVideoDeliveryUrl}
                     onClick={toggleVideoPlaybackFromSurface}
                     onLoadedMetadata={(event) => {
                       handleVideoMetadata(event.currentTarget, activeEntry)
