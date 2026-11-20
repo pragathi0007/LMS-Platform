@@ -2984,6 +2984,7 @@ function StudentCourseLearning({
   requestedActivityId,
   requestedActivityType,
   contentSearch,
+  courseContentStatus,
 }) {
   const location = useLocation()
   const navigate = useNavigate()
@@ -3095,6 +3096,8 @@ function StudentCourseLearning({
   const videoPlayerRef = useRef(null)
   const videoPlayerContainerRef = useRef(null)
   const videoControlsHideTimeoutRef = useRef(null)
+  const [loadedVideoSourceKey, setLoadedVideoSourceKey] = useState('')
+  const [failedVideoSourceKey, setFailedVideoSourceKey] = useState('')
   const [isVideoPlayerFullscreen, setIsVideoPlayerFullscreen] = useState(false)
   const [videoPlayerFullscreenError, setVideoPlayerFullscreenError] = useState('')
   const [isVideoMuted, setIsVideoMuted] = useState(false)
@@ -3138,6 +3141,16 @@ function StudentCourseLearning({
   )))
   const activeEntry = lessons[activeIndex]
   const activeVideoKey = `${String(course._id)}:${String(activeEntry?.lesson?._id || activeEntry?.lessonKey || '')}`
+  const activeVideoUrl = activeEntry?.lesson?.videoUrl || ''
+  const videoSourceKey = activeVideoUrl
+    ? `${activeVideoKey}:${activeVideoUrl}:${videoOpenSequence}`
+    : ''
+  const isVideoMediaLoading = Boolean(
+    videoSourceKey &&
+    loadedVideoSourceKey !== videoSourceKey &&
+    failedVideoSourceKey !== videoSourceKey,
+  )
+  const videoMediaFailed = Boolean(videoSourceKey && failedVideoSourceKey === videoSourceKey)
   const transcriptCues = Array.isArray(activeEntry?.lesson?.transcriptCues)
     ? activeEntry.lesson.transcriptCues
     : []
@@ -3692,6 +3705,44 @@ function StudentCourseLearning({
     if (!video) return
     video.muted = !video.muted
     setIsVideoMuted(video.muted)
+  }
+
+  function toggleVideoPlaybackFromSurface(event) {
+    const video = event.currentTarget
+    if (
+      isVideoMediaLoading ||
+      attentionCheckChallenge ||
+      attentionCheckLoading ||
+      attentionSessionRef.current.blocked
+    ) return
+
+    const bounds = video.getBoundingClientRect()
+    if (event.clientY >= bounds.bottom - Math.min(72, bounds.height * 0.2)) return
+
+    const pausedBeforeClick = video.paused
+    const timeBeforeClick = video.currentTime
+    const mutedBeforeClick = video.muted
+    const volumeBeforeClick = video.volume
+    const fullscreenBeforeClick = document.fullscreenElement
+    window.setTimeout(() => {
+      if (
+        !video.isConnected ||
+        video.paused !== pausedBeforeClick ||
+        Math.abs(video.currentTime - timeBeforeClick) > 0.1 ||
+        video.muted !== mutedBeforeClick ||
+        video.volume !== volumeBeforeClick ||
+        document.fullscreenElement !== fullscreenBeforeClick
+      ) return
+
+      if (video.paused) {
+        const playback = video.play()
+        if (playback && typeof playback.catch === 'function') {
+          playback.catch(() => setAttentionCheckPlaybackError('Video playback could not start. Press Play to try again.'))
+        }
+      } else {
+        video.pause()
+      }
+    }, 0)
   }
 
   useEffect(() => {
@@ -4532,21 +4583,24 @@ function StudentCourseLearning({
                 onPointerMove={revealVideoControls}
                 onPointerLeave={hideVideoControls}
               >
-                {activeEntry?.lesson.videoUrl
+                {activeVideoUrl
                   ? <video
                     ref={videoPlayerRef}
-                    key={`${String(activeEntry.lesson._id || activeEntry.lessonKey)}:${activeEntry.lesson.videoUrl}:${videoOpenSequence}`}
+                    key={videoSourceKey}
                     controls
                     controlsList="nodownload noplaybackrate nofullscreen"
                     disablePictureInPicture
                     playsInline
                     preload="metadata"
-                    src={activeEntry.lesson.videoUrl}
+                    src={activeVideoUrl}
+                    onClick={toggleVideoPlaybackFromSurface}
                     onLoadedMetadata={(event) => {
                       handleVideoMetadata(event.currentTarget, activeEntry)
                       updateTranscriptPlaybackTime(event.currentTarget)
                       setIsVideoMuted(event.currentTarget.muted)
                     }}
+                    onLoadedData={() => setLoadedVideoSourceKey(videoSourceKey)}
+                    onError={() => setFailedVideoSourceKey(videoSourceKey)}
                     onVolumeChange={(event) => setIsVideoMuted(event.currentTarget.muted)}
                     onPlaying={(event) => resetLearningActivitySample(activeEntry, event.currentTarget)}
                     onPlay={(event) => {
@@ -4595,8 +4649,30 @@ function StudentCourseLearning({
                   >
                     Your browser does not support video playback.
                   </video>
-                  : <div className="student-course-learning__no-video">No video has been uploaded for this lesson.</div>}
-                {activeEntry?.lesson.videoUrl && (
+                  : courseContentStatus === 'loading'
+                    ? <div className="student-course-learning__video-state student-course-learning__video-state--loading" role="status" aria-busy="true">
+                      <span className="student-loader" aria-hidden="true" />
+                      <span>Loading video…</span>
+                    </div>
+                    : courseContentStatus === 'error'
+                      ? <div className="student-course-learning__video-state" role="alert">
+                        Video details could not be loaded.
+                      </div>
+                      : activeEntry
+                        ? <div className="student-course-learning__no-video">No video has been uploaded for this lesson.</div>
+                        : <div className="student-course-learning__no-video">Select a lesson to view its video.</div>}
+                {isVideoMediaLoading && (
+                  <div className="student-course-learning__video-state student-course-learning__video-state--loading" role="status" aria-busy="true">
+                    <span className="student-loader" aria-hidden="true" />
+                    <span>Loading video…</span>
+                  </div>
+                )}
+                {videoMediaFailed && (
+                  <div className="student-course-learning__video-state" role="alert">
+                    This video could not be loaded. Please try selecting the lesson again.
+                  </div>
+                )}
+                {activeVideoUrl && (
                   <div
                     className={`student-course-learning__custom-controls${areVideoControlsVisible ? ' is-visible' : ''}${areVideoControlsKeyboardFocused ? ' is-keyboard-focused' : ''}`}
                     role="group"
@@ -5665,6 +5741,9 @@ function StudentCourseLearningPage({
   const [initialEnrollment] = useState(() => getInitialStudentCourseLearningEnrollment(courseId))
   const [enrollment, setEnrollment] = useState(initialEnrollment)
   const [loading, setLoading] = useState(!initialEnrollment)
+  const [courseContentStatus, setCourseContentStatus] = useState(() => (
+    getCachedStudentPageCourseContent(courseId) ? 'ready' : 'loading'
+  ))
   const [error, setError] = useState('')
   const courseContentRequestSequence = useRef(0)
   const location = useLocation()
@@ -5680,9 +5759,11 @@ function StudentCourseLearningPage({
   useEffect(() => {
     let active = true
     const requestSequence = ++courseContentRequestSequence.current
+    const initialCourseContent = getCachedStudentPageCourseContent(courseId)
     const initialCourseEnrollment = getInitialStudentCourseLearningEnrollment(courseId)
     setEnrollment(initialCourseEnrollment)
     setLoading(!initialCourseEnrollment)
+    setCourseContentStatus(initialCourseContent ? 'ready' : 'loading')
     setError('')
     fetchStudentPageCourseContent(courseId, onLogout)
       .then(({ enrollment: courseEnrollment, assignmentSubmissions, quizAttempts }) => {
@@ -5694,10 +5775,12 @@ function StudentCourseLearningPage({
           assignmentSubmissions,
           quizAttempts,
         })
+        setCourseContentStatus('ready')
       })
       .catch((loadError) => {
         if (active && requestSequence === courseContentRequestSequence.current) {
           setError(loadError instanceof Error ? loadError.message : 'Your course could not be loaded.')
+          setCourseContentStatus('error')
         }
       })
       .finally(() => {
@@ -5723,6 +5806,7 @@ function StudentCourseLearningPage({
         const { enrollment: courseEnrollment, assignmentSubmissions, quizAttempts } = content
         if (cacheKey) studentCourseContentCache.set(cacheKey, { content, savedAt: Date.now() })
         setEnrollment({ ...courseEnrollment, assignmentSubmissions, quizAttempts })
+        setCourseContentStatus('ready')
         setError('')
       } catch (loadError) {
         if (active && requestSequence === courseContentRequestSequence.current) {
@@ -5755,6 +5839,7 @@ function StudentCourseLearningPage({
           requestedActivityId={requestedActivityId}
           requestedActivityType={requestedActivityType}
           contentSearch={contentSearch}
+          courseContentStatus={courseContentStatus}
         />
       )}
     </StudentRoutePage>

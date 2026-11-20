@@ -8152,6 +8152,31 @@ button.student-category {
   box-shadow: none;
 }
 
+.student-course-learning__video-state {
+  position: absolute;
+  z-index: 2;
+  inset: 0;
+  display: grid;
+  align-content: center;
+  justify-items: center;
+  gap: 12px;
+  padding: 20px;
+  background: rgba(9, 21, 47, .92);
+  color: #e6ebe4;
+  font-size: 14px;
+  text-align: center;
+  pointer-events: none;
+}
+
+.student-course-learning__video-state--loading {
+  background: rgba(9, 21, 47, .45);
+}
+
+.student-course-learning__video-state .student-loader {
+  border-color: rgba(230, 235, 228, .3);
+  border-top-color: #e6ebe4;
+}
+
 .student-course-learning__player video::-webkit-media-controls-fullscreen-button,
 .student-course-learning__player video::-webkit-media-controls-overflow-button,
 .student-course-learning__player video::-webkit-media-controls-mute-button,
