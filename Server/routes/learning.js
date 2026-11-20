@@ -431,18 +431,10 @@ function getAccessibleCourseActivityKeys(course, enrollment, quizAttempts, assig
 }
 
 function findCourseLesson(course, lessonId) {
-<<<<<<< Updated upstream
-  for (const module of course?.modules || []) {
-    const lessons = [
-      ...(module.lessons || []),
-      ...(module.contentItems || []).filter((item) => item.type === 'video-lesson'),
-    ]
-=======
   for (const module of normalizeArray(course?.modules)) {
-    const videoItems = normalizeArray(module.contentItems).filter((item) => item.type === 'video-lesson')
+    const videoItems = normalizeArray(module?.contentItems).filter((item) => item?.type === 'video-lesson')
     const lessons = videoItems.length ? videoItems : normalizeLessons(module.lessons)
->>>>>>> Stashed changes
-    const lesson = lessons.find((item) => String(item._id) === String(lessonId))
+    const lesson = lessons.find((item) => String(item?._id) === String(lessonId))
     if (lesson) return lesson
   }
   return null

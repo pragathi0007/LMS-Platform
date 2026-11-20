@@ -296,7 +296,6 @@ export async function sendSupportTicketComplaintEmail({ email, fullName, ticket 
   })
 }
 
-<<<<<<< Updated upstream
 export async function sendEmailSupportMessage({ email, fullName, subject, message }) {
   await sendEmail({
     to: 'aihustle.notification@gmail.com',
@@ -327,7 +326,9 @@ export async function sendEmailSupportReply({ email, fullName, subject, message 
       '',
       message,
     ].join('\n'),
-=======
+  })
+}
+
 export async function sendPasswordResetEmail({ to, fullName, resetUrl, expiresInMinutes = 15 }) {
   const greetingName = escapeHtml(fullName)
   const greetingText = fullName ? `Hello ${fullName},` : 'Hello,'
@@ -409,6 +410,5 @@ export async function sendPasswordResetEmail({ to, fullName, resetUrl, expiresIn
     </table>
   </body>
 </html>`,
->>>>>>> Stashed changes
   })
 }
