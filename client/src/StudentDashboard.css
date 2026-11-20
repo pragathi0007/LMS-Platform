@@ -89,6 +89,47 @@
   object-position: left center;
 }
 
+.student-sidebar__brand {
+  display: flex;
+  width: calc(100% - 20px);
+  flex: 0 0 auto;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  margin: 0 10px 20px;
+  color: #656b61;
+  text-decoration: none;
+  transition: opacity 140ms ease;
+}
+
+.student-sidebar__brand:hover {
+  opacity: 0.88;
+}
+
+.student-sidebar__mark {
+  display: block;
+  width: 74px;
+  height: 40px;
+  flex: 0 0 40px;
+  overflow: hidden;
+}
+
+.student-sidebar__mark img {
+  display: block;
+  width: auto;
+  height: 40px;
+  max-width: none;
+  transform: translateX(-50px);
+}
+
+.student-sidebar__tagline {
+  color: #414b45;
+  font-size: 14px;
+  font-weight: 800;
+  letter-spacing: 0.1em;
+  line-height: 1.2;
+}
+
 .student-sidebar__label,
 .student-sidebar__nav {
   width: calc(var(--student-sidebar-width) - 30px);

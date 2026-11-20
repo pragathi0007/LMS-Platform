@@ -7513,6 +7513,12 @@ function StudentDashboard({
         onPointerDown={handleSidebarInteraction}
         onKeyDown={handleSidebarInteraction}
       >
+        <Link className="student-sidebar__brand" to="/student/dashboard" aria-label="aiHustle home">
+          <span className="student-sidebar__mark" aria-hidden="true">
+            <img src="/logo.png" alt="" />
+          </span>
+          <span className="student-sidebar__tagline">LEARN. BUILD. LEAD.</span>
+        </Link>
         <p className="student-sidebar__label">LEARNING SPACE</p>
         <nav className="student-sidebar__nav">
           {visibleNavigation.map((item) => (
