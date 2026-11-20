@@ -1217,7 +1217,7 @@ function AuthForm({ mode, role, onMessage, onRegistrationSuccess }) {
             </div>
 
             <div className="field">
-              <label htmlFor="living-with-whom">Living With Whom</label>
+              <label htmlFor="living-with-whom">Living Arrangement</label>
               <select
                 id="living-with-whom"
                 name="livingWithWhom"
@@ -1248,13 +1248,12 @@ function AuthForm({ mode, role, onMessage, onRegistrationSuccess }) {
             </svg>
             Your account is secure
           </span>
-          <button
+          <Link
             className="text-button"
-            type="button"
-            onClick={() => onMessage('Password recovery will be available when account services are connected.')}
+            to="/forgot-password"
           >
             Forgot password?
-          </button>
+          </Link>
         </div>
       )}
       {fieldErrors.email && <p id="email-field-error" className="field-error" role="alert">{fieldErrors.email}</p>}
@@ -1359,6 +1358,318 @@ function ActivationPage() {
               {isSubmitting ? 'Activating…' : 'Activate account'}
             </button>
           </form>
+        )}
+      </section>
+    </main>
+  )
+}
+
+function ForgotPasswordPage({ isDark, onToggleTheme }) {
+  const [email, setEmail] = useState('')
+  const [isSubmitting, setIsSubmitting] = useState(false)
+  const [error, setError] = useState('')
+  const [success, setSuccess] = useState(false)
+  const [message, setMessage] = useState('')
+
+  async function handleForgotPasswordSubmit(event) {
+    event.preventDefault()
+    setError('')
+    const trimmedEmail = email.trim().toLowerCase()
+    if (!trimmedEmail) {
+      setError('Enter your registered email address.')
+      return
+    }
+
+    setIsSubmitting(true)
+    try {
+      const response = await fetch(`${API_BASE_URL}/auth/forgot-password`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: trimmedEmail }),
+      })
+      const result = await readApiResponse(response)
+      if (!response.ok) {
+        throw new Error(result.message || 'Unable to process password reset request.')
+      }
+      setSuccess(true)
+      setMessage(result.message || "If an account with that email address exists, we've sent password reset instructions.")
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Unable to send password reset link. Please try again.')
+    } finally {
+      setIsSubmitting(false)
+    }
+  }
+
+  return (
+    <main className="activation-page" data-theme={isDark ? 'dark' : 'light'}>
+      <ThemeToggle isDark={isDark} onToggle={onToggleTheme} />
+      <section className="dashboard-card auth-card">
+        <BrandMark />
+        <p className="dashboard-eyebrow">ACCOUNT RECOVERY</p>
+        <h1>Forgot your password?</h1>
+        <p className="auth-card__description">
+          Enter your registered email address and we&apos;ll send you instructions to reset your password.
+        </p>
+
+        {success ? (
+          <div className="auth-card__state">
+            <div className="auth-card__icon is-success" aria-hidden="true">
+              <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M20 6L9 17l-5-5" />
+              </svg>
+            </div>
+            <h2>Check your email</h2>
+            <p className="auth-card__state-message">{message}</p>
+            <p className="auth-card__state-note">
+              Please check your inbox and spam folder. The password reset link is valid for 15 minutes and can only be used once.
+            </p>
+            <div className="auth-card__actions">
+              <Link className="primary-button" to="/">
+                Return to Login
+              </Link>
+              <button
+                type="button"
+                className="text-button"
+                onClick={() => {
+                  setSuccess(false)
+                  setError('')
+                  setMessage('')
+                }}
+              >
+                Send another link
+              </button>
+            </div>
+          </div>
+        ) : (
+          <form className="activation-form" onSubmit={handleForgotPasswordSubmit}>
+            <div className="field">
+              <label htmlFor="recovery-email">Registered Email Address</label>
+              <input
+                id="recovery-email"
+                type="email"
+                name="email"
+                value={email}
+                onChange={(e) => {
+                  setEmail(e.target.value)
+                  setError('')
+                }}
+                placeholder="e.g. name@example.com"
+                required
+                autoComplete="email"
+                autoFocus
+              />
+            </div>
+            {error && <p className="field-error" role="alert">{error}</p>}
+            <button
+              className="primary-button"
+              type="submit"
+              disabled={isSubmitting}
+              aria-busy={isSubmitting}
+            >
+              {isSubmitting ? 'Sending reset link…' : 'Send Reset Link'}
+              {!isSubmitting && <span aria-hidden="true">→</span>}
+            </button>
+            <div className="auth-card__footer">
+              <Link className="text-button" to="/">
+                ← Return to Login
+              </Link>
+            </div>
+          </form>
+        )}
+      </section>
+    </main>
+  )
+}
+
+function ResetPasswordPage({ isDark, onToggleTheme }) {
+  const location = useLocation()
+  const token = new URLSearchParams(location.search).get('token') || ''
+  const [isValidating, setIsValidating] = useState(true)
+  const [tokenValid, setTokenValid] = useState(false)
+  const [validationError, setValidationError] = useState('')
+  const [password, setPassword] = useState('')
+  const [confirmPassword, setConfirmPassword] = useState('')
+  const [isSubmitting, setIsSubmitting] = useState(false)
+  const [error, setError] = useState('')
+  const [success, setSuccess] = useState(false)
+  const [successMessage, setSuccessMessage] = useState('')
+
+  useEffect(() => {
+    if (!token) {
+      setIsValidating(false)
+      setTokenValid(false)
+      setValidationError('This password reset link is missing a security token. Please request a new link.')
+      return
+    }
+
+    let active = true
+    async function validateToken() {
+      try {
+        const response = await fetch(`${API_BASE_URL}/auth/reset-password/validate?token=${encodeURIComponent(token)}`)
+        const data = await readApiResponse(response)
+        if (!active) return
+        if (!response.ok) {
+          setTokenValid(false)
+          setValidationError(data.message || 'This password reset link is invalid or has expired.')
+        } else {
+          setTokenValid(true)
+          setValidationError('')
+        }
+      } catch {
+        if (!active) return
+        setTokenValid(false)
+        setValidationError('Unable to validate reset link. Please check your network connection.')
+      } finally {
+        if (active) setIsValidating(false)
+      }
+    }
+
+    validateToken()
+    return () => { active = false }
+  }, [token])
+
+  async function handleResetPasswordSubmit(event) {
+    event.preventDefault()
+    setError('')
+    if (password.length < 8) {
+      setError('Password must be at least 8 characters long.')
+      return
+    }
+    if (password.length > 72) {
+      setError('Password cannot exceed 72 characters.')
+      return
+    }
+    if (password !== confirmPassword) {
+      setError('Your passwords do not match.')
+      return
+    }
+
+    setIsSubmitting(true)
+    try {
+      const response = await fetch(`${API_BASE_URL}/auth/reset-password`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token, password, confirmPassword }),
+      })
+      const data = await readApiResponse(response)
+      if (!response.ok) {
+        throw new Error(data.message || 'Password reset failed. Please request a new link.')
+      }
+      setSuccess(true)
+      setSuccessMessage(data.message || 'Your password has been successfully reset.')
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Password reset failed.')
+    } finally {
+      setIsSubmitting(false)
+    }
+  }
+
+  return (
+    <main className="activation-page" data-theme={isDark ? 'dark' : 'light'}>
+      <ThemeToggle isDark={isDark} onToggle={onToggleTheme} />
+      <section className="dashboard-card auth-card">
+        <BrandMark />
+        <p className="dashboard-eyebrow">PASSWORD RESET</p>
+
+        {isValidating ? (
+          <div className="auth-card__state">
+            <span className="username-availability__spinner" aria-hidden="true" style={{ width: 28, height: 28, borderWidth: 3 }} />
+            <h2>Verifying reset link…</h2>
+            <p className="auth-card__state-note">Checking token validity and expiration.</p>
+          </div>
+        ) : !tokenValid ? (
+          <div className="auth-card__state">
+            <div className="auth-card__icon is-error" aria-hidden="true">
+              <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="12" cy="12" r="10" />
+                <line x1="15" y1="9" x2="9" y2="15" />
+                <line x1="9" y1="9" x2="15" y2="15" />
+              </svg>
+            </div>
+            <h2>Reset Link Invalid or Expired</h2>
+            <p className="auth-card__state-message">{validationError}</p>
+            <p className="auth-card__state-note">
+              Password reset links expire after 15 minutes and can only be used once.
+            </p>
+            <div className="auth-card__actions">
+              <Link className="primary-button" to="/forgot-password">
+                Request a new link
+              </Link>
+              <Link className="text-button" to="/">
+                Return to Login
+              </Link>
+            </div>
+          </div>
+        ) : success ? (
+          <div className="auth-card__state">
+            <div className="auth-card__icon is-success" aria-hidden="true">
+              <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M20 6L9 17l-5-5" />
+              </svg>
+            </div>
+            <h2>Password reset successfully!</h2>
+            <p className="auth-card__state-message">{successMessage}</p>
+            <p className="auth-card__state-note">
+              You can now log in using your new password.
+            </p>
+            <div className="auth-card__actions">
+              <Link className="primary-button" to="/">
+                Log In Now →
+              </Link>
+            </div>
+          </div>
+        ) : (
+          <>
+            <h1>Create new password</h1>
+            <p className="auth-card__description">
+              Choose a strong password with at least 8 characters.
+            </p>
+
+            <form className="activation-form" onSubmit={handleResetPasswordSubmit}>
+              <PasswordField
+                id="reset-new-password"
+                name="password"
+                label="New Password"
+                value={password}
+                onChange={(e) => {
+                  setPassword(e.target.value)
+                  setError('')
+                }}
+                autoComplete="new-password"
+                strength={getPasswordStrength(password)}
+              />
+
+              <PasswordField
+                id="reset-confirm-password"
+                name="confirmPassword"
+                label="Confirm Password"
+                value={confirmPassword}
+                onChange={(e) => {
+                  setConfirmPassword(e.target.value)
+                  setError('')
+                }}
+                autoComplete="new-password"
+              />
+
+              {error && <p className="field-error" role="alert">{error}</p>}
+
+              <button
+                className="primary-button"
+                type="submit"
+                disabled={isSubmitting}
+                aria-busy={isSubmitting}
+              >
+                {isSubmitting ? 'Resetting password…' : 'Reset Password'}
+                {!isSubmitting && <span aria-hidden="true">→</span>}
+              </button>
+
+              <div className="auth-card__footer">
+                <Link className="text-button" to="/">
+                  ← Cancel and return to Login
+                </Link>
+              </div>
+            </form>
+          </>
         )}
       </section>
     </main>
@@ -1596,6 +1907,7 @@ function DashboardPage({ role, isDark, onToggleTheme, themePreference, onSetThem
           onAccountUpdated={updateAccount}
           themePreference={themePreference}
           onSetTheme={onSetTheme}
+          onLogout={signOut}
           standalone
         />
       </>
@@ -1648,7 +1960,26 @@ function App() {
   const [mode, setMode] = useState(
     () => new URLSearchParams(window.location.search).get('mode') === 'register' ? 'register' : 'login',
   )
-  const [message, setMessage] = useState(null)
+  const [message, setMessage] = useState(() => {
+    try {
+      const deletedNotice = sessionStorage.getItem('lms.account_deleted_notice')
+      if (deletedNotice) {
+        sessionStorage.removeItem('lms.account_deleted_notice')
+        return { text: deletedNotice, type: 'success' }
+      }
+    } catch {}
+    return null
+  })
+
+  useEffect(() => {
+    try {
+      const deletedNotice = sessionStorage.getItem('lms.account_deleted_notice')
+      if (deletedNotice && location.pathname === '/') {
+        sessionStorage.removeItem('lms.account_deleted_notice')
+        setMessage({ text: deletedNotice, type: 'success' })
+      }
+    } catch {}
+  }, [location.pathname])
   const [themePreference, setThemePreference] = useState(() => {
     const storedTheme = localStorage.getItem('lms.theme')
     return storedTheme === 'dark' ? 'dark' : 'light'
@@ -1727,6 +2058,12 @@ function App() {
   }
   if (location.pathname === '/activate') {
     return <ActivationPage />
+  }
+  if (location.pathname === '/forgot-password') {
+    return <ForgotPasswordPage isDark={isDark} onToggleTheme={toggleTheme} />
+  }
+  if (location.pathname === '/reset-password') {
+    return <ResetPasswordPage isDark={isDark} onToggleTheme={toggleTheme} />
   }
 
   return (

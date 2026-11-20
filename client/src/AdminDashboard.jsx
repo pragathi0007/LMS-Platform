@@ -2784,7 +2784,7 @@ function AdminDashboard({
                 </div>
               </section>
               {activeView === 'settings'
-                ? <SettingsPage user={user} onAccountUpdated={onAccountUpdated} themePreference={themePreference} onSetTheme={onSetTheme} />
+                ? <SettingsPage user={user} onAccountUpdated={onAccountUpdated} themePreference={themePreference} onSetTheme={onSetTheme} onLogout={onLogout} />
                 : (
                   <section className="admin-panel admin-view-panel">
                     {activeView === 'reports'

@@ -103,6 +103,12 @@ function SettingsPage({
   const [pageError, setPageError] = useState('')
   const [isLoading, setIsLoading] = useState(!hasCachedAccount)
   const [exportState, setExportState] = useState({ loading: false, error: '', notice: '' })
+  const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false)
+  const [isDeletingAccount, setIsDeletingAccount] = useState(false)
+  const [deletePassword, setDeletePassword] = useState('')
+  const [deleteConfirmText, setDeleteConfirmText] = useState('')
+  const [deleteError, setDeleteError] = useState('')
+  const [deleteModalError, setDeleteModalError] = useState('')
 
   useEffect(() => {
     let active = true
@@ -440,6 +446,78 @@ function SettingsPage({
     }
   }
 
+  function openDeleteDialog() {
+    setDeleteError('')
+    setDeleteModalError('')
+    setDeletePassword('')
+    setDeleteConfirmText('')
+    setIsDeleteDialogOpen(true)
+  }
+
+  function closeDeleteDialog() {
+    if (isDeletingAccount) return
+    setIsDeleteDialogOpen(false)
+    setDeleteModalError('')
+    setDeletePassword('')
+    setDeleteConfirmText('')
+  }
+
+  async function handleDeleteAccount(event) {
+    if (event) event.preventDefault()
+    if (isDeletingAccount) return
+
+    if (account?.hasPassword && !deletePassword) {
+      setDeleteModalError('Please enter your password to confirm.')
+      return
+    }
+
+    if (deleteConfirmText.trim().toUpperCase() !== 'DELETE') {
+      setDeleteModalError('Please type DELETE to confirm.')
+      return
+    }
+
+    setIsDeletingAccount(true)
+    setDeleteModalError('')
+    setDeleteError('')
+
+    try {
+      const response = await settingsRequest('/account', {
+        method: 'DELETE',
+        body: JSON.stringify({
+          password: deletePassword,
+          confirmText: deleteConfirmText.trim(),
+        }),
+      })
+      const result = await response.json().catch(() => ({}))
+
+      sessionStorage.removeItem('lms.auth')
+      sessionStorage.setItem(
+        'lms.account_deleted_notice',
+        result.message || 'Your account has been permanently deleted.',
+      )
+
+      try {
+        await fetch(`${API_BASE_URL}/auth/logout`, {
+          method: 'POST',
+          credentials: 'include',
+        })
+      } catch {
+        // Continue even if server logout request fails
+      }
+
+      if (typeof onLogout === 'function') {
+        onLogout()
+      } else {
+        window.location.replace('/')
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'The account could not be deleted.'
+      setDeleteModalError(message)
+      setDeleteError(message)
+      setIsDeletingAccount(false)
+    }
+  }
+
   const savedAccount = account || user
   const usernameMessage = {
     checking: 'Checking username availability…',
@@ -469,7 +547,7 @@ function SettingsPage({
           <header className="settings-page__standalone-heading">
           <span className="student-eyebrow">ACCOUNT PREFERENCES</span>
           <h1>Settings</h1>
-          <p>Manage your account, security, and appearance.</p>
+          <p>Manage your account and security.</p>
           </header>
         </>
       )}
@@ -582,21 +660,6 @@ function SettingsPage({
                 {isSavingProfile ? 'Saving…' : 'Save account information'}
               </button>
             </form>
-          </SettingsSection>
-
-          <SettingsSection title="Appearance" description="Choose a theme for the LMS. Your preference applies across pages and is saved on this device.">
-            <fieldset className="settings-theme-options">
-              <legend className="settings-sr-only">Choose appearance</legend>
-              {[
-                ['light', 'Light mode', 'Warm cream backgrounds and dark text'],
-                ['dark', 'Dark mode', 'A darker palette for low-light settings'],
-              ].map(([value, title, detail]) => (
-                <label className={`settings-theme-option${themePreference === value ? ' is-selected' : ''}`} key={value}>
-                  <input type="radio" name="theme" value={value} checked={themePreference === value} onChange={() => onSetTheme(value)} />
-                  <span><strong>{title}</strong><small>{detail}</small></span>
-                </label>
-              ))}
-            </fieldset>
           </SettingsSection>
 
           {user?.role === 'main_admin' && (
@@ -726,12 +789,123 @@ function SettingsPage({
             </>
           )}
 
-          <SettingsSection title="Delete Account" description="This action is not currently available." className="settings-delete-section">
-            <div className="settings-delete-warning">
-              <strong>Account deletion is unavailable</strong>
-              <p>Account deletion requires a documented data-retention policy and a complete review of account relationships. College-managed accounts also require an approved college account policy. No account data will be deleted from this page.</p>
+          {user?.role === 'main_admin' ? (
+            <SettingsSection title="Delete Account" description="Platform administrator accounts cannot be deleted." className="settings-delete-section">
+              <div className="settings-delete-warning">
+                <strong>Platform administrator account</strong>
+                <p>Root platform administrator accounts cannot be deleted from self-service settings.</p>
+              </div>
+            </SettingsSection>
+          ) : user?.role === 'college_admin' ? (
+            <SettingsSection title="Delete Account" description="College administrator accounts cannot be deleted." className="settings-delete-section">
+              <div className="settings-delete-warning">
+                <strong>College administrator account</strong>
+                <p>College administrator accounts cannot be self-deleted. Contact the platform administrator if your access needs to be changed.</p>
+              </div>
+            </SettingsSection>
+          ) : (
+            <SettingsSection
+              title="Delete Account"
+              description="Permanently delete your account and all associated learning records."
+              className="settings-delete-section"
+            >
+              <div className="settings-delete-warning">
+                <strong>Warning: Account deletion is permanent</strong>
+                <p>
+                  Deleting your account will permanently remove your profile, enrollments, course progress, quiz attempts, and certificates. This action cannot be undone.
+                </p>
+                {deleteError && <p className="settings-message is-error" role="alert">{deleteError}</p>}
+                <button
+                  type="button"
+                  className="settings-delete-button"
+                  onClick={openDeleteDialog}
+                  disabled={isDeletingAccount}
+                >
+                  Delete Account
+                </button>
+              </div>
+            </SettingsSection>
+          )}
+
+          {isDeleteDialogOpen && (
+            <div
+              className="settings-delete-confirm-overlay"
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="delete-account-title"
+              onClick={(e) => {
+                if (e.target === e.currentTarget && !isDeletingAccount) closeDeleteDialog()
+              }}
+            >
+              <div className="settings-delete-confirm-modal">
+                <h3 id="delete-account-title">Delete Account Permanently</h3>
+                <p>
+                  Are you sure you want to delete your account? All of your personal details, course progress, quiz attempts, assignment submissions, certificates, and achievements will be permanently erased.
+                </p>
+
+                <form onSubmit={handleDeleteAccount}>
+                  {account?.hasPassword && (
+                    <div className="settings-form-group">
+                      <label htmlFor="settings-delete-password">Current Password</label>
+                      <input
+                        id="settings-delete-password"
+                        type="password"
+                        value={deletePassword}
+                        onChange={(e) => setDeletePassword(e.target.value)}
+                        placeholder="Enter your current password"
+                        autoComplete="current-password"
+                        disabled={isDeletingAccount}
+                        required
+                      />
+                    </div>
+                  )}
+
+                  <div className="settings-form-group">
+                    <label htmlFor="settings-delete-confirm-text">
+                      Type <strong>DELETE</strong> to confirm
+                    </label>
+                    <input
+                      id="settings-delete-confirm-text"
+                      type="text"
+                      value={deleteConfirmText}
+                      onChange={(e) => setDeleteConfirmText(e.target.value)}
+                      placeholder="DELETE"
+                      disabled={isDeletingAccount}
+                      required
+                    />
+                  </div>
+
+                  {deleteModalError && (
+                    <p className="settings-message is-error" role="alert" style={{ marginBottom: '14px' }}>
+                      {deleteModalError}
+                    </p>
+                  )}
+
+                  <div className="settings-delete-confirm-actions">
+                    <button
+                      type="button"
+                      className="settings-secondary-button"
+                      onClick={closeDeleteDialog}
+                      disabled={isDeletingAccount}
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="submit"
+                      className="settings-button-danger"
+                      disabled={
+                        isDeletingAccount ||
+                        (account?.hasPassword && !deletePassword) ||
+                        deleteConfirmText.trim().toUpperCase() !== 'DELETE'
+                      }
+                    >
+                      {isDeletingAccount ? 'Deleting account…' : 'Permanently Delete Account'}
+                    </button>
+                  </div>
+                </form>
+              </div>
             </div>
-          </SettingsSection>
+          )}
         </>
       )}
       </div>

@@ -5,6 +5,7 @@ import Certificate from '../models/Certificate.js'
 import CertificateTemplate from '../models/CertificateTemplate.js'
 import QuizAttempt from '../models/QuizAttempt.js'
 import { createStudentNotification } from './student-notifications.js'
+import { normalizeLessons } from './course-validation.js'
 
 function documentId(value) {
   const id = value?._id ?? value
@@ -23,7 +24,8 @@ function collectModuleActivities(module, includeOptional = false) {
   const quizzes = items.filter((item) => item.type === 'quiz')
   const assignments = items.filter((item) => item.type === 'assignment')
 
-  const lessonActivities = (videos.length ? videos : module?.lessons || [])
+  const moduleLessons = normalizeLessons(module?.lessons)
+  const lessonActivities = (videos.length ? videos : moduleLessons)
     .filter((item) => includeOptional || item.requiredForCertificate !== false)
     .map((item) => requiredActivity(item, 'video'))
   const quizActivities = (quizzes.length ? quizzes : module?.quiz ? [module.quiz] : [])

@@ -32,6 +32,96 @@ const difficultyLabels = {
 }
 const stepLabels = ['Course Details', 'Course Content', 'Settings', 'Review & Publish']
 
+function normalizeLessons(lessons) {
+  if (Array.isArray(lessons)) return lessons
+  if (!lessons) return []
+
+  if (typeof lessons === 'string') {
+    const trimmed = lessons.trim()
+    if ((trimmed.startsWith('[') && trimmed.endsWith(']')) || (trimmed.startsWith('{') && trimmed.endsWith('}'))) {
+      try {
+        const parsed = JSON.parse(trimmed)
+        return normalizeLessons(parsed)
+      } catch {
+        return []
+      }
+    }
+    return []
+  }
+
+  if (typeof lessons === 'object') {
+    if (Array.isArray(lessons.lessons)) return normalizeLessons(lessons.lessons)
+    if (Array.isArray(lessons.items)) return normalizeLessons(lessons.items)
+
+    const entries = Object.entries(lessons)
+    if (entries.length === 0) return []
+
+    const objectEntries = entries.filter(([, val]) => val && typeof val === 'object' && !Array.isArray(val))
+    if (objectEntries.length > 0) {
+      const allNumericKeys = objectEntries.every(([key]) => /^\d+$/.test(key))
+      if (allNumericKeys) {
+        objectEntries.sort(([keyA], [keyB]) => Number(keyA) - Number(keyB))
+      } else {
+        objectEntries.sort(([, a], [, b]) => {
+          if (Number.isFinite(a.order) && Number.isFinite(b.order)) return a.order - b.order
+          return 0
+        })
+      }
+      return objectEntries.map(([, val]) => val)
+    }
+
+    if (
+      typeof lessons.title === 'string'
+      || lessons._id
+      || lessons.videoUrl
+      || lessons.content
+      || lessons.resources
+    ) {
+      return [lessons]
+    }
+
+    return []
+  }
+
+  return []
+}
+
+function normalizeArray(value) {
+  if (Array.isArray(value)) return value
+  if (!value) return []
+  if (typeof value === 'string') {
+    const trimmed = value.trim()
+    if ((trimmed.startsWith('[') && trimmed.endsWith(']')) || (trimmed.startsWith('{') && trimmed.endsWith('}'))) {
+      try {
+        const parsed = JSON.parse(trimmed)
+        return normalizeArray(parsed)
+      } catch {
+        return []
+      }
+    }
+    return []
+  }
+  if (typeof value === 'object') {
+    const entries = Object.entries(value)
+    if (entries.length === 0) return []
+    const objectEntries = entries.filter(([, val]) => val && typeof val === 'object' && !Array.isArray(val))
+    if (objectEntries.length > 0) {
+      const allNumericKeys = objectEntries.every(([key]) => /^\d+$/.test(key))
+      if (allNumericKeys) {
+        objectEntries.sort(([keyA], [keyB]) => Number(keyA) - Number(keyB))
+      } else {
+        objectEntries.sort(([, a], [, b]) => {
+          if (Number.isFinite(a.order) && Number.isFinite(b.order)) return a.order - b.order
+          return 0
+        })
+      }
+      return objectEntries.map(([, val]) => val)
+    }
+    return [value]
+  }
+  return []
+}
+
 function localKey() {
   return globalThis.crypto?.randomUUID?.() || `course-item-${Date.now()}-${Math.random().toString(16).slice(2)}`
 }
@@ -187,19 +277,20 @@ function courseFromServer(course) {
       ...quiz,
       requiredForCertificate: quiz.requiredForCertificate !== false,
     })),
-    modules: (course.modules || []).map((module) => {
+    modules: normalizeArray(course.modules).map((module) => {
+      const moduleLessons = normalizeLessons(module?.lessons)
       const legacyItems = [
-        ...(module.lessons || []).map((lesson) => ({ ...lesson, type: 'video-lesson' })),
+        ...moduleLessons.map((lesson) => ({ ...lesson, type: 'video-lesson' })),
         ...(module.quiz ? [{ type: 'quiz', title: module.quiz.title, requiredForCertificate: module.quiz.requiredForCertificate !== false, quiz: module.quiz }] : []),
       ]
       return {
         ...module,
         _localId: module._id || localKey(),
-        lessons: (module.lessons || []).map((lesson) => ({
+        lessons: moduleLessons.map((lesson) => ({
           ...lesson,
           _localId: lesson._id || localKey(),
           attentionCheck: attentionCheckDraft(lesson.attentionCheck),
-          resources: (lesson.resources || []).map((resource) => ({ ...resource, _localId: resource._id || localKey() })),
+          resources: normalizeArray(lesson.resources).map((resource) => ({ ...resource, _localId: resource._id || localKey() })),
         })),
         quiz: module.quiz ? {
           ...module.quiz,
@@ -469,14 +560,14 @@ function uploadWithProgress(path, file, onLogout, onProgress, fields = {}) {
 function collectCourseAssets(course) {
   const assets = []
   if (course.thumbnailPublicId) assets.push({ publicId: course.thumbnailPublicId, resourceType: 'image' })
-  for (const module of course.modules || []) {
+  for (const module of normalizeArray(course.modules)) {
     const items = module.contentItems?.length ? module.contentItems : [
-      ...(module.lessons || []),
+      ...normalizeLessons(module.lessons),
     ]
     for (const item of items) {
       if (item.videoPublicId) assets.push({ publicId: item.videoPublicId, resourceType: 'video' })
       if (item.transcriptPublicId) assets.push({ publicId: item.transcriptPublicId, resourceType: 'raw' })
-      for (const resource of item.resources || []) {
+      for (const resource of normalizeArray(item.resources)) {
         if (resource.publicId) assets.push({ publicId: resource.publicId, resourceType: resource.resourceType || 'raw' })
       }
     }
@@ -485,12 +576,12 @@ function collectCourseAssets(course) {
 }
 
 function courseCounts(course) {
-  const lessons = (course.modules || []).reduce((total, module) => total + (
+  const lessons = normalizeArray(course.modules).reduce((total, module) => total + (
     module.contentItems?.length
       ? module.contentItems.filter((item) => item.type === 'video-lesson').length
-      : (module.lessons?.length || 0)
+      : normalizeLessons(module.lessons).length
   ), 0)
-  return { modules: course.modules?.length || 0, lessons }
+  return { modules: (course.modules || []).length, lessons }
 }
 
 function formatDuration(minutes) {
@@ -756,7 +847,7 @@ function PreviewContent({ course, onBack, onEdit, onSave, isSaving, error }) {
           <article className="ac-preview-module" key={module._localId || module._id || index}>
             <div><span className="ac-preview-module__number">{String(index + 1).padStart(2, '0')}</span><div><h3>{module.title}</h3>{module.description && <p>{module.description}</p>}</div></div>
             <ul>{(module.contentItems?.length ? module.contentItems : [
-              ...(module.lessons || []).map((lesson) => ({ ...lesson, type: 'video-lesson' })),
+              ...normalizeLessons(module.lessons).map((lesson) => ({ ...lesson, type: 'video-lesson' })),
               ...(module.quiz ? [{ type: 'quiz', title: module.quiz.title, quiz: module.quiz }] : []),
             ]).map((item, itemIndex) => (
               <li key={item._localId || item._id || itemIndex}>

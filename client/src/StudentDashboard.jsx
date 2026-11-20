@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { Link, Navigate, Route, Routes, useLocation, useNavigate, useParams } from 'react-router-dom'
 import { API_BASE_URL } from './api-base-url.js'
 import {
@@ -22,6 +22,7 @@ import { STUDENT_LEARNING_PROGRESS_UPDATED_EVENT } from './student-notifications
 import { filterCoursesByCategory, getCourseCategoryNames, normalizeCourseCategory } from './course-categories.js'
 import { findActiveTranscriptCueIndex, formatTranscriptTime } from './srt-transcript.js'
 import { createAttentionCheckSchedule } from './video-attention-checks.js'
+import StudentProfile from './StudentProfile.jsx'
 import './StudentDashboard.css'
 
 const studentCertificateCache = new Map()
@@ -43,6 +44,96 @@ let studentDashboardCacheGeneration = 0
 let studentLearningCacheGeneration = 0
 const COURSE_NOTES_KEY = 'course-notes'
 const COURSE_CERTIFICATE_KEY = 'course-certificate'
+
+function normalizeLessons(lessons) {
+  if (Array.isArray(lessons)) return lessons
+  if (!lessons) return []
+
+  if (typeof lessons === 'string') {
+    const trimmed = lessons.trim()
+    if ((trimmed.startsWith('[') && trimmed.endsWith(']')) || (trimmed.startsWith('{') && trimmed.endsWith('}'))) {
+      try {
+        const parsed = JSON.parse(trimmed)
+        return normalizeLessons(parsed)
+      } catch {
+        return []
+      }
+    }
+    return []
+  }
+
+  if (typeof lessons === 'object') {
+    if (Array.isArray(lessons.lessons)) return normalizeLessons(lessons.lessons)
+    if (Array.isArray(lessons.items)) return normalizeLessons(lessons.items)
+
+    const entries = Object.entries(lessons)
+    if (entries.length === 0) return []
+
+    const objectEntries = entries.filter(([, val]) => val && typeof val === 'object' && !Array.isArray(val))
+    if (objectEntries.length > 0) {
+      const allNumericKeys = objectEntries.every(([key]) => /^\d+$/.test(key))
+      if (allNumericKeys) {
+        objectEntries.sort(([keyA], [keyB]) => Number(keyA) - Number(keyB))
+      } else {
+        objectEntries.sort(([, a], [, b]) => {
+          if (Number.isFinite(a.order) && Number.isFinite(b.order)) return a.order - b.order
+          return 0
+        })
+      }
+      return objectEntries.map(([, val]) => val)
+    }
+
+    if (
+      typeof lessons.title === 'string'
+      || lessons._id
+      || lessons.videoUrl
+      || lessons.content
+      || lessons.resources
+    ) {
+      return [lessons]
+    }
+
+    return []
+  }
+
+  return []
+}
+
+function normalizeArray(value) {
+  if (Array.isArray(value)) return value
+  if (!value) return []
+  if (typeof value === 'string') {
+    const trimmed = value.trim()
+    if ((trimmed.startsWith('[') && trimmed.endsWith(']')) || (trimmed.startsWith('{') && trimmed.endsWith('}'))) {
+      try {
+        const parsed = JSON.parse(trimmed)
+        return normalizeArray(parsed)
+      } catch {
+        return []
+      }
+    }
+    return []
+  }
+  if (typeof value === 'object') {
+    const entries = Object.entries(value)
+    if (entries.length === 0) return []
+    const objectEntries = entries.filter(([, val]) => val && typeof val === 'object' && !Array.isArray(val))
+    if (objectEntries.length > 0) {
+      const allNumericKeys = objectEntries.every(([key]) => /^\d+$/.test(key))
+      if (allNumericKeys) {
+        objectEntries.sort(([keyA], [keyB]) => Number(keyA) - Number(keyB))
+      } else {
+        objectEntries.sort(([, a], [, b]) => {
+          if (Number.isFinite(a.order) && Number.isFinite(b.order)) return a.order - b.order
+          return 0
+        })
+      }
+      return objectEntries.map(([, val]) => val)
+    }
+    return [value]
+  }
+  return []
+}
 
 function getStudentCertificateCacheKey() {
   try {
@@ -77,10 +168,8 @@ const navigation = [
   { label: 'My Courses', icon: 'book', path: '/student/courses' },
   { label: 'Assignments', icon: 'check', path: '/student/assignments' },
   { label: 'Grades & Results', icon: 'chart', path: '/student/results' },
-  { label: 'Learning Resources', icon: 'folder', path: '/student/resources' },
   { label: 'Certificates', icon: 'award', path: '/student/certificates' },
   { label: 'My Referrals', icon: 'users', path: '/student/referrals' },
-  { label: 'My Profile', icon: 'user', path: '/student/profile' },
   { label: 'Settings', icon: 'settings', path: '/student/settings' },
   { label: 'Help Center', icon: 'help', path: '/student/help' },
 ]
@@ -92,6 +181,8 @@ const secondaryPages = {
   '/student/achievements': { label: 'My Achievements', icon: 'award' },
   '/student/learning-activity': { label: 'Learning Streak', icon: 'chartNoAxesCombined' },
   '/student/study-companion': { label: 'AI Study Companion', icon: 'spark' },
+  '/student/profile': { label: 'My Profile', icon: 'userRound' },
+  '/student/resources': { label: 'Learning Resources', icon: 'folderOpen' },
 }
 
 const stats = [
@@ -851,9 +942,10 @@ function hasFreshStudentPageCourseContent(courseId) {
 }
 
 function seedStudentCourseLearning(enrollment) {
-  const courseId = enrollment?.courseId?._id
-  const cacheKey = getStudentCourseContentCacheKey(courseId)
-  if (!cacheKey || !enrollment?._id || !courseId) return
+  const courseId = enrollment?.courseId?._id || (typeof enrollment?.courseId === 'string' ? enrollment.courseId : null)
+  if (!courseId) return
+  const cacheKey = getStudentCourseContentCacheKey(String(courseId))
+  if (!cacheKey || !enrollment?._id) return
   studentCourseLearningSeeds.set(cacheKey, { enrollment, savedAt: Date.now() })
 }
 
@@ -869,18 +961,30 @@ function getStudentCourseLearningSeed(courseId) {
 }
 
 function getInitialStudentCourseLearningEnrollment(courseId) {
+  if (!courseId) return null
   const cachedContent = getCachedStudentPageCourseContent(courseId)
-  if (cachedContent?.enrollment) {
+  if (cachedContent?.enrollment && cachedContent.enrollment.courseId && typeof cachedContent.enrollment.courseId === 'object') {
     return {
       ...cachedContent.enrollment,
-      assignmentSubmissions: cachedContent.assignmentSubmissions,
-      quizAttempts: cachedContent.quizAttempts,
+      assignmentSubmissions: cachedContent.assignmentSubmissions || [],
+      quizAttempts: cachedContent.quizAttempts || [],
     }
   }
   const enrollment = getStudentCourseLearningSeed(courseId)
+<<<<<<< Updated upstream
   return enrollment
     ? { ...enrollment, assignmentSubmissions: enrollment.assignmentSubmissions || [], quizAttempts: [] }
     : null
+=======
+  if (enrollment && enrollment.courseId && typeof enrollment.courseId === 'object') {
+    return {
+      ...enrollment,
+      assignmentSubmissions: enrollment.assignmentSubmissions || [],
+      quizAttempts: enrollment.quizAttempts || [],
+    }
+  }
+  return null
+>>>>>>> Stashed changes
 }
 
 async function fetchStudentPageCourseContent(courseId, onLogout) {
@@ -1050,44 +1154,62 @@ function getLatestEnrollmentsByCourse(enrollments) {
 }
 
 function getStudentResourceRecords(enrollments) {
-  const resourcesByCourseAndUrl = new Map()
+  const list = []
   for (const enrollment of getLatestEnrollmentsByCourse(enrollments).values()) {
     const course = enrollment.courseId
     if (!course || typeof course !== 'object') continue
     const courseId = String(course._id || '')
     if (!courseId) continue
 
-    for (const module of course.modules || []) {
+    function addCandidate(resource, topic, date) {
+      const url = typeof resource?.url === 'string' ? resource.url.trim() : ''
+      if (!url) return
+      const fileName = url.split(/[?#]/, 1)[0].split('/').pop()
+      const format = resource.format
+        || (fileName?.includes('.') ? fileName.split('.').pop() : '')
+        || 'FILE'
+
+      const candidate = {
+        ...resource,
+        key: `${courseId}:${resource._id || resource.publicId || url}`,
+        title: resource.title?.trim() || fileName || 'Learning resource',
+        url,
+        format: String(format).toUpperCase(),
+        bytes: resource.bytes,
+        topic: course.category || topic || course.title || 'Course',
+        courseId,
+        courseName: course.title || 'Course',
+        date,
+      }
+
+      const existingIndex = list.findIndex((item) => item.courseId === courseId && isSameResource(item, candidate))
+      if (existingIndex >= 0) {
+        list[existingIndex] = mergeResources(list[existingIndex], candidate)
+      } else {
+        list.push(candidate)
+      }
+    }
+
+    for (const resource of normalizeArray(course.resources)) {
+      addCandidate(resource, 'Course Materials', course.updatedAt || enrollment.createdAt)
+    }
+
+    for (const module of normalizeArray(course.modules)) {
+      for (const resource of normalizeArray(module.resources)) {
+        addCandidate(resource, module.title, module.updatedAt || course.updatedAt)
+      }
       const contentItems = [
-        ...(module.lessons || []),
-        ...(module.contentItems || []),
+        ...normalizeLessons(module.lessons),
+        ...normalizeArray(module.contentItems),
       ]
       for (const item of contentItems) {
-        for (const resource of item.resources || []) {
-          const url = typeof resource.url === 'string' ? resource.url.trim() : ''
-          if (!url) continue
-          const key = `${courseId}:${url}`
-          if (resourcesByCourseAndUrl.has(key)) continue
-          const fileName = url.split(/[?#]/, 1)[0].split('/').pop()
-          const format = resource.format
-            || (fileName?.includes('.') ? fileName.split('.').pop() : '')
-            || 'FILE'
-          resourcesByCourseAndUrl.set(key, {
-            key,
-            title: resource.title?.trim() || fileName || 'Learning resource',
-            url,
-            format: String(format).toUpperCase(),
-            bytes: resource.bytes,
-            topic: course.category || module.title || course.title || 'Course',
-            courseId,
-            courseName: course.title || 'Course',
-            date: item.updatedAt || course.updatedAt || enrollment.createdAt,
-          })
+        for (const resource of normalizeArray(item.resources)) {
+          addCandidate(resource, module.title || item.title, item.updatedAt || course.updatedAt || enrollment.createdAt)
         }
       }
     }
   }
-  return [...resourcesByCourseAndUrl.values()]
+  return list
 }
 
 function formatStudentResourceSize(bytes) {
@@ -2116,10 +2238,19 @@ async function fetchPublishedCourses(onLogout, signal) {
 }
 
 function getCourseCounts(course) {
+<<<<<<< Updated upstream
   const lessonCount = (course.modules || []).reduce((count, module) => {
     return count + getModuleVideoLessons(module).length
+=======
+  const modules = normalizeArray(course?.modules)
+  const lessonCount = modules.reduce((count, module) => {
+    const items = normalizeArray(module?.contentItems)
+    return count + (items.length
+      ? items.filter((item) => item.type === 'video-lesson').length
+      : normalizeLessons(module?.lessons).length)
+>>>>>>> Stashed changes
   }, 0)
-  return { modules: course.modules?.length || 0, lessons: lessonCount }
+  return { modules: modules.length, lessons: lessonCount }
 }
 
 function formatCourseDuration(minutes) {
@@ -2147,16 +2278,23 @@ function getVideoCompletionDuration(video) {
 }
 
 function getCourseLessons(course) {
+<<<<<<< Updated upstream
   const modules = (course?.modules || [])
     .map((module, index) => ({ module, index }))
     .sort((left, right) => (left.module.order ?? left.index) - (right.module.order ?? right.index))
   return modules.flatMap(({ module, index: moduleIndex }) => {
     const lessons = getModuleVideoLessons(module)
+=======
+  return normalizeArray(course?.modules).flatMap((module, moduleIndex) => {
+    const contentItems = normalizeArray(module?.contentItems)
+    const videoItems = contentItems.filter((item) => item.type === 'video-lesson')
+    const lessons = videoItems.length ? videoItems : normalizeLessons(module?.lessons)
+>>>>>>> Stashed changes
     return lessons.map((lesson, lessonIndex) => ({
       module,
       lesson,
-      moduleKey: String(module._id || `${module.title}-${moduleIndex}`),
-      lessonKey: String(lesson._id || `${moduleIndex}-${lessonIndex}`),
+      moduleKey: String(module?._id || `${module?.title || 'module'}-${moduleIndex}`),
+      lessonKey: String(lesson?._id || `${moduleIndex}-${lessonIndex}`),
     }))
   })
 }
@@ -2222,9 +2360,17 @@ function getCourseProgress(enrollment) {
 }
 
 function getModuleLearningItems(module, moduleIndex) {
+<<<<<<< Updated upstream
   const moduleKey = String(module._id || `${module.title}-${moduleIndex}`)
   const orderedContentItems = module.contentItems?.length
     ? module.contentItems
+=======
+  const moduleKey = String(module?._id || `${module?.title || 'module'}-${moduleIndex}`)
+  const rawContentItems = normalizeArray(module?.contentItems)
+  const rawLessons = normalizeLessons(module?.lessons)
+  const contentItems = rawContentItems.length
+    ? rawContentItems
+>>>>>>> Stashed changes
       .map((item, index) => ({ item, index }))
       .sort((left, right) => (left.item.order ?? left.index) - (right.item.order ?? right.index))
     : []
@@ -2244,16 +2390,21 @@ function getModuleLearningItems(module, moduleIndex) {
         ...item,
         _learningKey: String(item._id || `${moduleKey}-item-${index}`),
         _moduleKey: moduleKey,
+<<<<<<< Updated upstream
       })),
     ]
     : (module.lessons || []).map((lesson, index) => ({
+=======
+      }))
+    : rawLessons.map((lesson, index) => ({
+>>>>>>> Stashed changes
       ...lesson,
       type: 'video-lesson',
       _learningKey: String(lesson._id || `${moduleKey}-lesson-${index}`),
       _moduleKey: moduleKey,
     }))
   const items = [...contentItems]
-  if (module.quiz?.questions?.length && !contentItems.some((item) => item.type === 'quiz')) {
+  if (module?.quiz?.questions?.length && !contentItems.some((item) => item.type === 'quiz')) {
     items.push({
       type: 'quiz',
       title: module.quiz.title || 'Module quiz',
@@ -2964,12 +3115,12 @@ function StudentAvailableCourseCard({ course, enrollment }) {
         {enrollment
           ? <Link
             className="student-available-course__action"
-            to={`/student/course/${encodeURIComponent(course._id)}/learn`}
+            to={`/student/course/${encodeURIComponent(String(course._id))}/learn`}
             onClick={() => seedStudentCourseLearning({ ...enrollment, courseId: course })}
           >
             Continue Learning <Icon name="arrow" size={15} />
           </Link>
-          : <Link className="student-available-course__action" to={`/student/course/${encodeURIComponent(course._id)}`}>
+          : <Link className="student-available-course__action" to={`/student/course/${encodeURIComponent(String(course._id))}`}>
             View Details <Icon name="arrow" size={15} />
           </Link>}
       </div>
@@ -3094,6 +3245,258 @@ function StudentAvailableCourses({ user, onLogout, onCategoriesLoaded, selectedC
   )
 }
 
+function FileFormatIcon({ format }) {
+  switch (format) {
+    case 'pdf':
+      return (
+        <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+          <path d="M14 2v6h6" />
+          <path d="M9 13h1.5a1.5 1.5 0 0 0 0-3H9v6" />
+          <path d="M14 10h2a1.5 1.5 0 0 1 1.5 1.5v3A1.5 1.5 0 0 1 16 16h-2z" />
+        </svg>
+      )
+    case 'doc':
+      return (
+        <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+          <path d="M14 2v6h6M8 12h8m-8 4h6" />
+        </svg>
+      )
+    case 'ppt':
+      return (
+        <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <rect x="2" y="3" width="20" height="14" rx="2" />
+          <path d="M8 21h8m-4-4v4m-3-11h3a2 2 0 0 1 0 4H9v2" />
+        </svg>
+      )
+    case 'sheet':
+      return (
+        <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+          <path d="M14 2v6h6M8 13h8m-8 4h8M12 9v11" />
+        </svg>
+      )
+    case 'zip':
+      return (
+        <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <path d="M10 2v4m4-4v4M10 10v4m4-4v4M10 18v4m4-4v4" />
+          <rect x="3" y="2" width="18" height="20" rx="2" />
+          <path d="M12 18a2 2 0 1 0 0 4 2 2 0 0 0 0-4z" />
+        </svg>
+      )
+    case 'code':
+      return (
+        <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <path d="m8 10-3 3 3 3m8-6 3 3-3 3m-5-8-2 12" />
+          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+        </svg>
+      )
+    case 'image':
+      return (
+        <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <rect x="3" y="3" width="18" height="18" rx="2" />
+          <circle cx="8.5" cy="8.5" r="1.5" />
+          <path d="m21 15-5-5L5 21" />
+        </svg>
+      )
+    case 'video':
+      return (
+        <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <rect x="2" y="4" width="20" height="16" rx="2" />
+          <path d="m10 9 5 3-5 3z" />
+        </svg>
+      )
+    default:
+      return (
+        <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+          <path d="M14 2v6h6M8 13h8m-8 4h8" />
+        </svg>
+      )
+  }
+}
+
+function getFormatKey(format, url = '') {
+  const f = (format || '').toLowerCase().trim().replace(/^\./, '')
+  if (['pdf'].includes(f)) return 'pdf'
+  if (['doc', 'docx', 'txt', 'rtf', 'odt', 'pages'].includes(f)) return 'doc'
+  if (['ppt', 'pptx', 'key'].includes(f)) return 'ppt'
+  if (['xls', 'xlsx', 'csv', 'numbers'].includes(f)) return 'sheet'
+  if (['zip', 'rar', '7z', 'tar', 'gz', 'bz2'].includes(f)) return 'zip'
+  if (['png', 'jpg', 'jpeg', 'gif', 'svg', 'webp', 'bmp'].includes(f)) return 'image'
+  if (['mp4', 'mov', 'avi', 'mkv', 'webm'].includes(f)) return 'video'
+  if (['mp3', 'wav', 'ogg', 'm4a', 'flac'].includes(f)) return 'audio'
+  if (['js', 'jsx', 'ts', 'tsx', 'py', 'java', 'c', 'cpp', 'cs', 'html', 'css', 'json', 'sql'].includes(f)) return 'code'
+
+  const cleanUrl = (url || '').split('?')[0].split('#')[0]
+  const ext = (cleanUrl.split('.').pop() || '').toLowerCase()
+  if (ext === 'pdf') return 'pdf'
+  if (['doc', 'docx', 'txt'].includes(ext)) return 'doc'
+  if (['ppt', 'pptx'].includes(ext)) return 'ppt'
+  if (['xls', 'xlsx', 'csv'].includes(ext)) return 'sheet'
+  if (['zip', 'rar', '7z'].includes(ext)) return 'zip'
+  if (['png', 'jpg', 'jpeg', 'webp'].includes(ext)) return 'image'
+  if (['mp4', 'mov', 'webm'].includes(ext)) return 'video'
+  return 'file'
+}
+
+function getFormatLabel(formatKey) {
+  switch (formatKey) {
+    case 'pdf': return 'PDF Document'
+    case 'doc': return 'Word Document'
+    case 'ppt': return 'Presentation'
+    case 'sheet': return 'Spreadsheet'
+    case 'zip': return 'Archive / ZIP'
+    case 'image': return 'Image File'
+    case 'video': return 'Video File'
+    case 'audio': return 'Audio File'
+    case 'code': return 'Source Code'
+    default: return 'Document'
+  }
+}
+
+function getResourceFileName(resource) {
+  if (resource.title && typeof resource.title === 'string' && resource.title.trim()) {
+    return resource.title.trim()
+  }
+  const url = resource.url || ''
+  const cleanUrl = url.split('?')[0].split('#')[0]
+  const filename = cleanUrl.split('/').pop()
+  return filename ? decodeURIComponent(filename) : 'Learning Resource'
+}
+
+function getResourceOriginalFileName(resource) {
+  const url = resource.url || resource.publicId || ''
+  const cleanUrl = url.split('?')[0].split('#')[0]
+  const filename = cleanUrl.split('/').pop()
+  return filename ? decodeURIComponent(filename) : ''
+}
+
+function normalizeResourceName(name) {
+  if (!name || typeof name !== 'string') return ''
+  return name
+    .toLowerCase()
+    .replace(/\.[a-z0-9]{2,5}$/i, '')
+    .replace(/[^a-z0-9]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+function canonicalStoragePath(url) {
+  if (!url || typeof url !== 'string') return ''
+  const clean = url.split('?')[0].split('#')[0]
+  return clean
+    .replace(/\/s--[A-Za-z0-9_-]+--\//, '/')
+    .replace(/\/v\d+\//, '/')
+}
+
+function isSameResource(a, b) {
+  if (!a || !b) return false
+  if (a._id && b._id && String(a._id) === String(b._id)) return true
+  if (a.publicId && b.publicId && a.publicId === b.publicId) return true
+  if (a.url && b.url && a.url.trim() === b.url.trim()) return true
+  if (
+    (a.fileHash && b.fileHash && a.fileHash === b.fileHash)
+    || (a.etag && b.etag && a.etag === b.etag)
+  ) {
+    return true
+  }
+  const pathA = canonicalStoragePath(a.url)
+  const pathB = canonicalStoragePath(b.url)
+  if (pathA && pathB && pathA === pathB) return true
+
+  const bytesA = Number(a.bytes)
+  const bytesB = Number(b.bytes)
+  if (Number.isFinite(bytesA) && Number.isFinite(bytesB) && bytesA > 0 && bytesA === bytesB) {
+    const normA = normalizeResourceName(a.title || a.url)
+    const normB = normalizeResourceName(b.title || b.url)
+    if (normA && normB && normA === normB) return true
+  }
+  return false
+}
+
+function mergeResources(primary, duplicate) {
+  const titleA = primary.title?.trim() || ''
+  const titleB = duplicate.title?.trim() || ''
+  const isAFilename = titleA.includes('_') || /\.[a-z0-9]{2,5}$/i.test(titleA)
+  const isBFilename = titleB.includes('_') || /\.[a-z0-9]{2,5}$/i.test(titleB)
+
+  let preferredTitle = titleA || titleB
+  if (isAFilename && !isBFilename && titleB) {
+    preferredTitle = titleB
+  } else if (!isAFilename && isBFilename && titleA) {
+    preferredTitle = titleA
+  }
+
+  const primarySources = primary.sourceType ? primary.sourceType.split(' & ') : []
+  const duplicateSources = duplicate.sourceType ? duplicate.sourceType.split(' & ') : []
+  const combinedSources = Array.from(new Set([...primarySources, ...duplicateSources])).filter(Boolean)
+  const combinedSourceType = combinedSources.join(' & ')
+
+  return {
+    ...duplicate,
+    ...primary,
+    title: preferredTitle,
+    format: primary.format || duplicate.format || '',
+    bytes: primary.bytes || duplicate.bytes || 0,
+    sourceType: combinedSourceType || primary.sourceType || duplicate.sourceType,
+    alternatePublicIds: Array.from(new Set([...(primary.alternatePublicIds || []), primary.publicId, duplicate.publicId].filter(Boolean))),
+    alternateUrls: Array.from(new Set([...(primary.alternateUrls || []), primary.url, duplicate.url].filter(Boolean))),
+    alternateIds: Array.from(new Set([...(primary.alternateIds || []), primary._id, duplicate._id].filter(Boolean))),
+  }
+}
+
+function getStudentResourceFileUrl(courseId, resource, download = false) {
+  if (!courseId) return resource?.url || ''
+  let token = ''
+  try {
+    const auth = JSON.parse(sessionStorage.getItem('lms.auth') || 'null')
+    if (typeof auth?.token === 'string') token = auth.token
+  } catch {}
+
+  const targetId = resource?._id || resource?.publicId || 'file'
+  const params = new URLSearchParams()
+  if (token) params.set('token', token)
+  if (download) params.set('download', 'true')
+  if (resource?.publicId) params.set('publicId', resource.publicId)
+  if (resource?.url) params.set('url', resource.url)
+
+  return `${API_BASE_URL}/courses/${encodeURIComponent(courseId)}/resources/${encodeURIComponent(targetId)}/file?${params.toString()}`
+}
+
+function formatResourceDate(dateValue) {
+  if (!dateValue) return null
+  try {
+    const d = new Date(dateValue)
+    if (Number.isNaN(d.getTime())) return null
+    return new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', year: 'numeric' }).format(d)
+  } catch {
+    return null
+  }
+}
+
+function formatFileSize(bytes) {
+  if (!bytes || typeof bytes !== 'number' || bytes <= 0 || !Number.isFinite(bytes)) return null
+  const units = ['B', 'KB', 'MB', 'GB']
+  let size = bytes
+  let unitIndex = 0
+  while (size >= 1024 && unitIndex < units.length - 1) {
+    size /= 1024
+    unitIndex += 1
+  }
+  return `${size >= 10 ? Math.round(size) : size.toFixed(1)} ${units[unitIndex]}`
+}
+
+function getDownloadUrl(url, filename) {
+  if (!url || typeof url !== 'string') return ''
+  if (url.includes('cloudinary.com') && url.includes('/upload/')) {
+    const safeFilename = encodeURIComponent((filename || 'download').replace(/[/\\?%*:|"<>]/g, '_'))
+    return url.replace(/\/upload\/(?:v\d+\/)?/, `/upload/fl_attachment:${safeFilename}/`)
+  }
+  return url
+}
+
 function StudentCourseLearning({
   enrollment,
   onEnrollmentUpdated,
@@ -3107,6 +3510,7 @@ function StudentCourseLearning({
 }) {
   const location = useLocation()
   const navigate = useNavigate()
+<<<<<<< Updated upstream
   const course = enrollment.courseId
   const orderedCourseModules = (course.modules || [])
     .map((module, index) => ({ module, index }))
@@ -3114,26 +3518,34 @@ function StudentCourseLearning({
   const orderedCourse = { ...course, modules: orderedCourseModules.map(({ module }) => module) }
   const lessons = getCourseLessons(orderedCourse)
   const moduleItems = orderedCourseModules.map(({ module, index }) => ({
+=======
+  const course = (enrollment && typeof enrollment.courseId === 'object' && enrollment.courseId)
+    ? enrollment.courseId
+    : {}
+  const lessons = getCourseLessons(course)
+  const moduleItems = normalizeArray(course.modules).map((module, index) => ({
+>>>>>>> Stashed changes
     module,
-    moduleKey: String(module._id || `${module.title}-${index}`),
+    moduleKey: String(module?._id || `${module?.title || 'module'}-${index}`),
     items: getModuleLearningItems(module, index),
   }))
   const courseLevelItems = [
-    ...(course.quizzes || []).map((quiz, index) => ({
+    ...normalizeArray(course.quizzes).map((quiz, index) => ({
       type: 'quiz',
-      title: quiz.title || `Course quiz ${index + 1}`,
+      title: quiz?.title || `Course quiz ${index + 1}`,
       quiz,
-      _learningKey: String(quiz._id || `course-quiz-${index}`),
+      _learningKey: String(quiz?._id || `course-quiz-${index}`),
       _moduleKey: '',
     })),
-    ...(course.assignments || []).map((assignment, index) => ({
+    ...normalizeArray(course.assignments).map((assignment, index) => ({
       ...assignment,
       type: 'assignment',
-      _learningKey: String(assignment._id || `course-assignment-${index}`),
+      _learningKey: String(assignment?._id || `course-assignment-${index}`),
       _moduleKey: '',
     })),
   ]
   const allContentItems = [...moduleItems.flatMap(({ items }) => items), ...courseLevelItems]
+<<<<<<< Updated upstream
   const initialCompletedLessonIds = new Set((enrollment.completedLessonIds || []).map(String))
   const initialQuizAttempts = enrollment.quizAttempts || []
   const initialAssignmentSubmissions = enrollment.assignmentSubmissions || []
@@ -3187,14 +3599,38 @@ function StudentCourseLearning({
       ? initialActivity._learningKey
       : '',
   )
+=======
+  const [activeLessonId, setActiveLessonId] = useState(() => (
+    lessons.some(({ lesson }) => String(lesson?._id) === requestedLessonId)
+      ? requestedLessonId
+      : lessons[0]?.lessonKey || ''
+  ))
+  const [activeContentItemId, setActiveContentItemId] = useState(() => {
+    if (requestedActivityId && ['quiz', 'assignment'].includes(requestedActivityType)) {
+      const match = allContentItems.find((item) => (
+        item.type === requestedActivityType
+        && String(item.type === 'quiz' ? item.quiz?._id || item._learningKey : item._learningKey) === requestedActivityId
+      ))
+      if (match) return match._learningKey
+    }
+    if (!lessons.length && allContentItems.length) {
+      return allContentItems[0]._learningKey
+    }
+    return ''
+  })
+>>>>>>> Stashed changes
   const [detailsTab, setDetailsTab] = useState('overview')
   const [lessonInfoTab, setLessonInfoTab] = useState('overview')
   const [videoOpenSequence, setVideoOpenSequence] = useState(0)
   const [transcriptPlayback, setTranscriptPlayback] = useState({ lessonKey: '', cueIndex: -1 })
   const [expandedModules, setExpandedModules] = useState(() => new Set(
+<<<<<<< Updated upstream
     orderedCourseModules.length
       ? [String(orderedCourseModules[0].module._id || `${orderedCourseModules[0].module.title}-0`)]
       : [],
+=======
+    course.modules?.length ? [String(course.modules[0]?._id || `${course.modules[0]?.title || 'module'}-0`)] : [],
+>>>>>>> Stashed changes
   ))
   const [savingLessonId, setSavingLessonId] = useState('')
   const [optimisticallyCompletedLessonIds, setOptimisticallyCompletedLessonIds] = useState(() => new Set())
@@ -3213,6 +3649,8 @@ function StudentCourseLearning({
   const [courseCertificateError, setCourseCertificateError] = useState('')
   const [courseCertificateRefresh, setCourseCertificateRefresh] = useState(0)
   const [courseCertificatePdf, setCourseCertificatePdf] = useState({ certificateId: '', url: '' })
+  const [downloadingResourceId, setDownloadingResourceId] = useState('')
+  const [resourceAccessError, setResourceAccessError] = useState('')
 
   const [courseCertificatePdfLoading, setCourseCertificatePdfLoading] = useState(false)
   const [courseCertificatePdfError, setCourseCertificatePdfError] = useState('')
@@ -3260,6 +3698,7 @@ function StudentCourseLearning({
     ...(enrollment.startedLessonIds || []).map(String),
     ...(enrollment.completedLessonIds || []).map(String),
   ]))
+<<<<<<< Updated upstream
   const activeIndex = Math.max(0, lessons.findIndex(({ lesson, lessonKey }) => (
     String(lesson._id || lessonKey) === activeLessonId
   )))
@@ -3270,6 +3709,17 @@ function StudentCourseLearning({
     ? `${activeVideoKey}:${activeVideoUrl}:${videoOpenSequence}`
     : ''
   const videoMediaFailed = Boolean(videoSourceKey && failedVideoSourceKey === videoSourceKey)
+=======
+  const activeIndex = lessons.length
+    ? Math.max(0, lessons.findIndex(({ lesson, lessonKey }) => (
+        String(lesson?._id || lessonKey) === activeLessonId
+      )))
+    : -1
+  const activeEntry = activeIndex >= 0 ? lessons[activeIndex] : null
+  const activeVideoKey = activeEntry
+    ? `${String(course._id || '')}:${String(activeEntry.lesson?._id || activeEntry.lessonKey || '')}`
+    : ''
+>>>>>>> Stashed changes
   const transcriptCues = Array.isArray(activeEntry?.lesson?.transcriptCues)
     ? activeEntry.lesson.transcriptCues
     : []
@@ -3278,7 +3728,7 @@ function StudentCourseLearning({
     : findActiveTranscriptCueIndex(transcriptCues, 0)
   const activeContentItem = allContentItems.find((item) => item._learningKey === activeContentItemId)
   const showCourseCertificate = course.generateCertificate !== false
-  const hasCurrentCourseCertificate = String(courseCertificate?.courseId || '') === String(course._id)
+  const hasCurrentCourseCertificate = String(courseCertificate?.courseId || '') === String(course._id || '')
   const completedLessonIds = new Set([
     ...(enrollment.completedLessonIds || []).map(String),
     ...optimisticallyCompletedLessonIds,
@@ -3324,17 +3774,56 @@ function StudentCourseLearning({
   const filteredCourseLevelItems = courseLevelItems.filter((item) => (
     !contentSearch || item.title?.toLowerCase().includes(contentSearch.trim().toLowerCase())
   ))
-  const courseResources = [
-    ...lessons.flatMap(({ lesson }) => lesson.resources || []),
-    ...allContentItems.flatMap((item) => item.resources || []),
-  ].filter((resource) => resource.url)
-    .filter((resource, index, resources) => resources.findIndex((entry) => entry.url === resource.url) === index)
+  const courseResources = useMemo(() => {
+    const list = []
+
+    function addResource(resource, parentTitle = '', parentType = '') {
+      if (!resource || !resource.url || typeof resource.url !== 'string') return
+      const trimmedUrl = resource.url.trim()
+      if (!trimmedUrl) return
+
+      const candidate = {
+        ...resource,
+        url: trimmedUrl,
+        _key: String(resource._id || resource.publicId || trimmedUrl),
+        sourceTitle: parentTitle || '',
+        sourceType: parentType || '',
+      }
+
+      const existingIndex = list.findIndex((item) => isSameResource(item, candidate))
+      if (existingIndex >= 0) {
+        list[existingIndex] = mergeResources(list[existingIndex], candidate)
+      } else {
+        list.push(candidate)
+      }
+    }
+
+    normalizeArray(course?.resources).forEach((res) => addResource(res, course?.title || '', 'Course'))
+
+    normalizeArray(course?.modules).forEach((mod) => {
+      if (!mod) return
+      normalizeArray(mod.resources).forEach((res) => addResource(res, mod.title || '', 'Module'))
+
+      normalizeLessons(mod.lessons).forEach((les) => {
+        if (!les) return
+        normalizeArray(les.resources).forEach((res) => addResource(res, les.title || '', 'Lesson'))
+      })
+
+      normalizeArray(mod.contentItems).forEach((item) => {
+        if (!item) return
+        normalizeArray(item.resources).forEach((res) => addResource(res, item.title || '', item.type === 'note' ? 'Notes' : 'Lesson'))
+      })
+    })
+
+    return list
+  }, [course])
   const courseNotes = allContentItems.filter((item) => item.type === 'note')
   const activeContentIndex = allContentItems.findIndex((item) => (
     item._learningKey === activeContentItemId
     || (!activeContentItemId && item.type === 'video-lesson' && item._learningKey === activeEntry?.lessonKey)
   ))
   const showVideoPlayer = detailsTab === 'overview'
+    && Boolean(activeEntry?.lesson)
     && (!activeContentItem || activeContentItem.type === 'video-lesson')
   const isActiveQuiz = detailsTab === 'overview' && activeContentItem?.type === 'quiz'
   const isActiveAssignment = detailsTab === 'overview' && activeContentItem?.type === 'assignment'
@@ -3443,7 +3932,7 @@ function StudentCourseLearning({
   useEffect(() => {
     const controller = new AbortController()
     async function refreshAssignmentStatuses() {
-      if (assignmentStatusRefreshRef.current) return
+      if (!course?._id || assignmentStatusRefreshRef.current) return
       assignmentStatusRefreshRef.current = true
       try {
         const { assignmentSubmissions: submissions } = await fetchStudentCourseContent(
@@ -3452,7 +3941,7 @@ function StudentCourseLearning({
           controller.signal,
         )
         if (controller.signal.aborted) return
-        setProgressError((current) => current === 'API route not found.' ? '' : current)
+        setProgressError((current) => current === 'API route not found.' || current?.toLowerCase().includes('failed to fetch') ? '' : current)
         setAssignmentSubmissions((current) => {
           const currentById = new Map(current.map((submission) => [String(submission._id), submission]))
           const refreshedIds = new Set(submissions.map((submission) => String(submission._id)))
@@ -3464,9 +3953,13 @@ function StudentCourseLearning({
         })
       } catch (refreshError) {
         if (!controller.signal.aborted) {
-          setProgressError(refreshError instanceof Error
-            ? refreshError.message
-            : 'Assignment review status could not be loaded.')
+          const message = refreshError instanceof Error ? refreshError.message : ''
+          const isNetworkOrAbort = refreshError?.name === 'AbortError'
+            || message.toLowerCase().includes('failed to fetch')
+            || message.toLowerCase().includes('abort')
+          if (!isNetworkOrAbort) {
+            setProgressError(message || 'Assignment review status could not be loaded.')
+          }
         }
       } finally {
         assignmentStatusRefreshRef.current = false
@@ -3483,7 +3976,46 @@ function StudentCourseLearning({
       window.removeEventListener('focus', handleFocus)
       controller.abort()
     }
-  }, [course._id, enrollment._id, onLogout])
+  }, [course?._id, enrollment?._id, onLogout])
+
+  async function handleDownloadResource(e, resource, displayTitle) {
+    e.preventDefault()
+    setResourceAccessError('')
+    setDownloadingResourceId(resource._key)
+    try {
+      const courseId = course?._id || enrollment?.courseId?._id || enrollment?.courseId
+      const downloadUrl = getStudentResourceFileUrl(courseId, resource, true)
+      let token = ''
+      try {
+        const auth = JSON.parse(sessionStorage.getItem('lms.auth') || 'null')
+        if (typeof auth?.token === 'string') token = auth.token
+      } catch {}
+      const headers = token ? { Authorization: `Bearer ${token}` } : {}
+      const response = await fetch(downloadUrl, { headers })
+      if (!response.ok) {
+        const errorJson = await response.json().catch(() => ({}))
+        throw new Error(errorJson.message || `Download failed with status ${response.status}.`)
+      }
+      const blob = await response.blob()
+      const blobUrl = window.URL.createObjectURL(blob)
+      const ext = (resource.format || 'pdf').replace(/^\./, '')
+      let filename = displayTitle || 'download'
+      if (!filename.toLowerCase().endsWith(`.${ext.toLowerCase()}`)) {
+        filename = `${filename}.${ext}`
+      }
+      const anchor = document.createElement('a')
+      anchor.href = blobUrl
+      anchor.download = filename
+      document.body.appendChild(anchor)
+      anchor.click()
+      anchor.remove()
+      window.URL.revokeObjectURL(blobUrl)
+    } catch (err) {
+      setResourceAccessError(err instanceof Error ? err.message : 'Unable to download this resource.')
+    } finally {
+      setDownloadingResourceId('')
+    }
+  }
 
   useEffect(() => {
     const certificate = courseCertificate?.certificate
@@ -4487,14 +5019,172 @@ function StudentCourseLearning({
     if (nextItem && isCourseItemAccessible(nextItem)) selectContentItem(nextItem)
   }
 
+  function renderCourseResources() {
+    return (
+      <div className="student-course-resources">
+        <header className="student-course-resources__header">
+          <div className="student-course-resources__heading-group">
+            <span className="student-course-resources__eyebrow">
+              <Icon name="folderOpen" size={14} />
+              <span>Course Materials</span>
+            </span>
+            <h2>Learning Resources</h2>
+            <p>Access study materials and resources shared for this course.</p>
+          </div>
+          {courseResources.length > 0 && (
+            <div className="student-course-resources__stats">
+              <span className="student-course-resources__count-badge">
+                <strong>{courseResources.length}</strong> {courseResources.length === 1 ? 'file available' : 'files available'}
+              </span>
+            </div>
+          )}
+        </header>
+
+        {resourceAccessError && (
+          <div className="student-course-resources__error-banner" role="alert">
+            <Icon name="circleX" size={16} />
+            <span>{resourceAccessError}</span>
+            <button
+              type="button"
+              className="student-course-resources__error-dismiss"
+              onClick={() => setResourceAccessError('')}
+              aria-label="Dismiss error"
+            >
+              <Icon name="x" size={14} />
+            </button>
+          </div>
+        )}
+
+        {courseResources.length > 0 ? (
+          <div className="student-course-resources__grid">
+            {courseResources.map((resource, index) => {
+              const formatKey = getFormatKey(resource.format, resource.url)
+              const formatLabel = getFormatLabel(formatKey)
+              const originalFileName = getResourceOriginalFileName(resource)
+              const displayTitle = resource.title && resource.title.trim() ? resource.title.trim() : (originalFileName || 'Learning Resource')
+              const isDifferentFilename = originalFileName && originalFileName !== displayTitle && !displayTitle.includes(originalFileName)
+              const fileSize = formatFileSize(resource.bytes)
+              const uploadDate = formatResourceDate(resource.createdAt || resource.updatedAt || course?.updatedAt)
+              const description = resource.description || resource.caption || ''
+              const sourceTitle = resource.sourceTitle
+              const sourceType = resource.sourceType
+
+              const courseId = course?._id || enrollment?.courseId?._id || enrollment?.courseId
+              const viewUrl = getStudentResourceFileUrl(courseId, resource, false)
+              const downloadUrl = getStudentResourceFileUrl(courseId, resource, true)
+              const isDownloading = downloadingResourceId === resource._key
+
+              return (
+                <article
+                  className="student-resource-card"
+                  key={resource._key || resource._id || `${resource.url}-${index}`}
+                >
+                  <div className="student-resource-card__header">
+                    <div className={`student-resource-card__icon-box is-${formatKey}`}>
+                      <FileFormatIcon format={formatKey} />
+                      <span className="student-resource-card__format-tag">
+                        {formatKey.toUpperCase()}
+                      </span>
+                    </div>
+
+                    <div className="student-resource-card__info">
+                      <h3 className="student-resource-card__title" title={displayTitle}>
+                        {displayTitle}
+                      </h3>
+                      {sourceTitle && (
+                        <span className="student-resource-card__source" title={`${sourceType}: ${sourceTitle}`}>
+                          {sourceType ? `${sourceType}: ` : ''}{sourceTitle}
+                        </span>
+                      )}
+                      {isDifferentFilename && (
+                        <span className="student-resource-card__source" title={originalFileName}>
+                          {originalFileName}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+
+                  {description && (
+                    <p className="student-resource-card__description">
+                      {description}
+                    </p>
+                  )}
+
+                  <div className="student-resource-card__meta">
+                    <span className="student-resource-card__meta-item">
+                      <Icon name="file" size={13} />
+                      <span>{formatLabel}</span>
+                    </span>
+                    {fileSize && (
+                      <>
+                        <span className="student-resource-card__meta-dot">•</span>
+                        <span className="student-resource-card__meta-item">
+                          <span>{fileSize}</span>
+                        </span>
+                      </>
+                    )}
+                    {uploadDate && (
+                      <>
+                        <span className="student-resource-card__meta-dot">•</span>
+                        <span className="student-resource-card__meta-item">
+                          <Icon name="clock" size={13} />
+                          <span>{uploadDate}</span>
+                        </span>
+                      </>
+                    )}
+                  </div>
+
+                  <div className="student-resource-card__actions">
+                    <a
+                      href={viewUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="student-resource-btn student-resource-btn--view"
+                      title={`View ${displayTitle}`}
+                    >
+                      <Icon name="eye" size={15} />
+                      <span>View</span>
+                    </a>
+                    <a
+                      href={downloadUrl}
+                      download={displayTitle}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className={`student-resource-btn student-resource-btn--download${isDownloading ? ' is-loading' : ''}`}
+                      title={`Download ${displayTitle}`}
+                      onClick={(e) => handleDownloadResource(e, resource, displayTitle)}
+                    >
+                      <Icon name={isDownloading ? 'loader' : 'download'} size={15} className={isDownloading ? 'is-spinning' : ''} />
+                      <span>{isDownloading ? 'Downloading…' : 'Download'}</span>
+                    </a>
+                  </div>
+                </article>
+              )
+            })}
+          </div>
+        ) : (
+          <div className="student-course-resources__empty">
+            <div className="student-course-resources__empty-icon">
+              <Icon name="folderOpen" size={34} />
+            </div>
+            <h3>No learning resources available for this course yet</h3>
+            <p>Study materials and downloadable guides shared for this course will appear here once added by the instructor.</p>
+          </div>
+        )}
+      </div>
+    )
+  }
+
   return (
     <div className="student-course-learning">
-      {progressError && <p className="student-courses__message is-error" role="alert">{progressError}</p>}
+      {progressError && !progressError.toLowerCase().includes('failed to fetch') && (
+        <p className="student-courses__message is-error" role="alert">{progressError}</p>
+      )}
       {allContentItems.length ? (
         <div className="student-course-learning__layout">
           <aside className="student-course-learning__sidebar" aria-label="Course modules and lessons">
             <header className="student-course-learning__sidebar-header">
-              <h2 className={course.title?.trim().toLowerCase() === 'python' ? 'is-python' : undefined}>{course.title}</h2>
+              <h2 className={typeof course?.title === 'string' && course.title.trim().toLowerCase() === 'python' ? 'is-python' : undefined}>{course?.title || 'Course'}</h2>
             </header>
             {filteredModuleItems.map(({ module, moduleKey, items }) => {
               const expanded = expandedModules.has(moduleKey) || Boolean(contentSearch.trim())
@@ -4652,19 +5342,34 @@ function StudentCourseLearning({
                 </button>
               )}
               <button
+<<<<<<< Updated upstream
                 className={detailsTab === 'notes' ? 'is-selected' : ''}
                 type="button"
                 aria-pressed={detailsTab === 'notes'}
+=======
+                className={detailsTab === 'resources' ? 'is-selected' : ''}
+                type="button"
+                aria-pressed={detailsTab === 'resources'}
+>>>>>>> Stashed changes
                 onClick={() => {
                   if (attentionCheckChallenge || attentionCheckLoading || attentionSessionRef.current.blocked) return
                   videoPlayerRef.current?.pause()
                   endCurrentAttentionCheckSession()
+<<<<<<< Updated upstream
                   setActiveContentItemId(COURSE_NOTES_KEY)
                   setDetailsTab('notes')
                 }}
               >
                 <span className="student-course-learning__item-icon"><Icon name="pen" size={15} /></span>
                 <strong>Notes</strong>
+=======
+                  setActiveContentItemId(COURSE_RESOURCES_KEY)
+                  setDetailsTab('resources')
+                }}
+              >
+                <span className="student-course-learning__item-icon"><Icon name="folderOpen" size={15} /></span>
+                <strong>Learning Resources</strong>
+>>>>>>> Stashed changes
               </button>
             </section>
             {contentSearch && !filteredModuleItems.some(({ items }) => items.length) && !filteredCourseLevelItems.length && (
@@ -4687,7 +5392,7 @@ function StudentCourseLearning({
             {showVideoPlayer && (
               <div className="student-course-learning__active-heading">
                 <div>
-                  <h2>{activeEntry?.lesson.title || 'Select course content'}</h2>
+                  <h2>{activeEntry?.lesson?.title || activeContentItem?.title || 'Select course content'}</h2>
                   <span className="student-course-learning__type student-course-learning__type--video-lesson">
                     <Icon name="book" size={14} />
                     {getStudentContentLabel('video-lesson')}
@@ -4696,6 +5401,7 @@ function StudentCourseLearning({
               </div>
             )}
             {showVideoPlayer && (
+<<<<<<< Updated upstream
               <div
                 className="student-course-learning__player"
                 ref={videoPlayerContainerRef}
@@ -4706,13 +5412,25 @@ function StudentCourseLearning({
                   ? <video
                     ref={videoPlayerRef}
                     key={videoSourceKey}
+=======
+              <div className="student-course-learning__player">
+                {activeEntry?.lesson?.videoUrl
+                  ? <video
+                    ref={videoPlayerRef}
+                    key={`${String(activeEntry?.lesson?._id || activeEntry?.lessonKey || '')}:${activeEntry?.lesson?.videoUrl || ''}:${videoOpenSequence}`}
+>>>>>>> Stashed changes
                     controls
                     controlsList="nodownload noplaybackrate nofullscreen"
                     disablePictureInPicture
                     playsInline
+<<<<<<< Updated upstream
                     preload="auto"
                     src={activeVideoUrl}
                     onClick={toggleVideoPlaybackFromSurface}
+=======
+                    preload="metadata"
+                    src={activeEntry?.lesson?.videoUrl}
+>>>>>>> Stashed changes
                     onLoadedMetadata={(event) => {
                       handleVideoMetadata(event.currentTarget, activeEntry)
                       updateTranscriptPlaybackTime(event.currentTarget)
@@ -4724,8 +5442,13 @@ function StudentCourseLearning({
                     onPlay={(event) => {
                       updateTranscriptPlaybackTime(event.currentTarget)
                       resetLearningActivitySample(activeEntry, event.currentTarget)
+<<<<<<< Updated upstream
                       saveLessonPlaybackPosition(activeEntry, event.currentTarget.currentTime, true, true)
                       const settings = activeEntry.lesson.attentionCheck
+=======
+                      saveLessonPlaybackPosition(activeEntry, event.currentTarget.currentTime, true)
+                      const settings = activeEntry?.lesson?.attentionCheck
+>>>>>>> Stashed changes
                       if (settings?.enabled === true) {
                         initializeAttentionCheckSession(event.currentTarget)
                         if (attentionSessionRef.current.pending || attentionSessionRef.current.blocked) event.currentTarget.pause()
@@ -4759,8 +5482,13 @@ function StudentCourseLearning({
                       const video = event.currentTarget
                       updateWatchedPosition(activeEntry, video)
                       updateTranscriptPlaybackTime(video)
+<<<<<<< Updated upstream
                       saveLessonPlaybackPosition(activeEntry, video.currentTime, true, false)
                       if (!completedLessonIds.has(String(activeEntry.lesson._id))) {
+=======
+                      saveLessonPlaybackPosition(activeEntry, video.currentTime, true)
+                      if (activeEntry?.lesson?._id && !completedLessonIds.has(String(activeEntry.lesson._id))) {
+>>>>>>> Stashed changes
                         void setLessonCompleted(activeEntry, true, video)
                       }
                     }}
@@ -4841,13 +5569,13 @@ function StudentCourseLearning({
                           <label key={`${index}-${option}`}>
                             <input
                               type={multiSelect ? 'checkbox' : 'radio'}
-                              name={`attention-${activeEntry.lesson._id}-${attentionCheckChallenge.triggerIndex}`}
+                              name={`attention-${activeEntry?.lesson?._id || 'lesson'}-${attentionCheckChallenge.triggerIndex}`}
                               checked={checked}
                               disabled={attentionCheckLoading || attentionCheckSecondsRemaining <= 0}
                               onChange={(event) => setAttentionCheckAnswer((current) => (
                                 multiSelect
-                                  ? event.target.checked ? [...current, index] : current.filter((value) => value !== index)
-                                  : [index]
+                                    ? event.target.checked ? [...current, index] : current.filter((value) => value !== index)
+                                    : [index]
                               ))}
                             />
                             <span>{option}</span>
@@ -4890,12 +5618,13 @@ function StudentCourseLearning({
                 }}>Resume video</button>
               </p>
             )}
-            {showVideoPlayer && autoplayBlockedLessonId === String(activeEntry?.lesson?._id || activeEntry?.lessonKey) && (
+            {showVideoPlayer && autoplayBlockedLessonId === String(activeEntry?.lesson?._id || activeEntry?.lessonKey || '') && (
               <p className="student-course-learning__attention-warning" role="status">
                 Autoplay was blocked by your browser. Press Play on the video controls to start the lesson.
               </p>
             )}
             {showVideoPlayer && (
+<<<<<<< Updated upstream
               <div className="student-course-learning__video-actions">
                 {activeEntry && (
                   <div className="student-course-learning__video-completion">
@@ -4925,19 +5654,42 @@ function StudentCourseLearning({
                     onClick={() => moveContent(1)}
                   >Next →</button>
                 </div>
+=======
+              <div className="student-course-learning__video-nav">
+                <button type="button" disabled={activeContentIndex <= 0} onClick={() => moveContent(-1)}>← Previous</button>
+                <button type="button" disabled={activeContentIndex < 0 || activeContentIndex >= allContentItems.length - 1} onClick={() => moveContent(1)}>Next →</button>
+              </div>
+            )}
+            {showVideoPlayer && activeEntry?.lesson && (
+              <div className="student-course-learning__video-completion">
+                <button
+                  className={`student-button${completedLessonIds.has(String(activeEntry.lesson._id)) ? ' student-button--quiet' : ''}`}
+                  type="button"
+                  disabled={
+                    savingLessonId === String(activeEntry.lesson._id)
+                    || !activeEntry.lesson._id
+                    || !completedLessonIds.has(String(activeEntry.lesson._id))
+                  }
+                  title={completedLessonIds.has(String(activeEntry.lesson._id))
+                    ? 'This lesson is complete.'
+                    : 'Watch the entire video to complete this lesson.'}
+                >
+                  {savingLessonId === String(activeEntry.lesson._id)
+                    ? 'Saving…'
+                    : completedLessonIds.has(String(activeEntry.lesson._id)) ? 'Completed' : 'Watch video to complete'}
+                </button>
+>>>>>>> Stashed changes
               </div>
             )}
             <section className="student-course-learning__details">
-              {!showVideoPlayer && !isActiveAssignment && <div className="student-course-learning__active-heading">
+              {!showVideoPlayer && !isActiveAssignment && detailsTab !== 'resources' && <div className="student-course-learning__active-heading">
                 <div>
-                  <h2>{detailsTab === 'certificate' ? 'Course Certificate' : activeContentItem?.title || (detailsTab === 'notes' ? 'Notes' : detailsTab === 'resources' ? 'Resources' : activeEntry?.lesson.title) || 'Select course content'}</h2>
+                  <h2>{detailsTab === 'certificate' ? 'Course Certificate' : activeContentItem?.title || (detailsTab === 'notes' ? 'Notes' : activeEntry?.lesson?.title) || 'Select course content'}</h2>
                   {detailsTab === 'certificate'
                     ? <span className="student-course-learning__type student-course-learning__type--certificate"><Icon name="award" size={14} />Certificate</span>
                     : <span className={`student-course-learning__type student-course-learning__type--${activeContentItem?.type || 'video-lesson'}`}>
-                      <Icon name={activeContentItem?.type === 'assignment' ? 'clipboardCheck' : activeContentItem?.type === 'note' || detailsTab === 'notes' ? 'folderOpen' : activeContentItem?.type === 'quiz' ? 'check' : detailsTab === 'resources' ? 'link' : 'book'} size={14} />
-                      {detailsTab === 'resources'
-                        ? 'Resources'
-                        : getStudentContentLabel(activeContentItem?.type || (detailsTab === 'notes' ? 'note' : 'video-lesson'))}
+                      <Icon name={activeContentItem?.type === 'assignment' ? 'clipboardCheck' : activeContentItem?.type === 'note' || detailsTab === 'notes' ? 'folderOpen' : activeContentItem?.type === 'quiz' ? 'check' : 'book'} size={14} />
+                      {getStudentContentLabel(activeContentItem?.type || (detailsTab === 'notes' ? 'note' : 'video-lesson'))}
                     </span>}
                 </div>
                 {!showVideoPlayer && detailsTab !== 'certificate' && !isActiveQuiz && <div className="student-course-learning__detail-nav">
@@ -4949,12 +5701,12 @@ function StudentCourseLearning({
                   >Next →</button>
                 </div>}
               </div>}
-              {detailsTab === 'overview' && !isActiveAssignment && (activeContentItem?.description || (!activeContentItem && activeEntry?.lesson.content)) && (
+              {detailsTab === 'overview' && !isActiveAssignment && (activeContentItem?.description || (!activeContentItem && activeEntry?.lesson?.content)) && (
                 <p className="student-course-learning__active-description">
-                  {activeContentItem?.description || activeEntry?.lesson.content}
+                  {activeContentItem?.description || activeEntry?.lesson?.content}
                 </p>
               )}
-              {detailsTab !== 'certificate' && !isActiveAssignment && <div className="student-course-learning__tabs" role="tablist" aria-label="Course information">
+              {detailsTab !== 'certificate' && detailsTab !== 'resources' && !isActiveAssignment && <div className="student-course-learning__tabs" role="tablist" aria-label="Course information">
                 {showVideoPlayer ? (
                   <>
                     <button
@@ -5018,19 +5770,8 @@ function StudentCourseLearning({
                   )) : <p className="student-course-learning__tab-empty">No notes have been added to this course.</p>}
                 </div>
               ) : detailsTab === 'resources' ? (
-                <div className="student-course-learning__tab-content">
-                  {courseResources.length ? (
-                    <ul className="student-course-note__resources">
-                      {courseResources.map((resource, index) => (
-                        <li key={resource._id || `${resource.url}-${index}`}>
-                          <a href={resource.url} target="_blank" rel="noreferrer" download={resource.resourceType === 'raw' || resource.format === 'pdf' ? resource.title : undefined}>
-                            {resource.title || `Resource ${index + 1}`}
-                          </a>
-                          {resource.format && <small>{resource.format.toUpperCase()}</small>}
-                        </li>
-                      ))}
-                    </ul>
-                  ) : <p className="student-course-learning__tab-empty">No resources have been added to this course.</p>}
+                <div className="student-course-learning__tab-content student-course-learning__tab-content--resources">
+                  {renderCourseResources()}
                 </div>
               ) : showVideoPlayer ? (
                 <div className="student-course-learning__tab-content">
@@ -5126,9 +5867,9 @@ function StudentCourseLearning({
                     />
                   ) : activeContentItem?.type === 'note' ? (
                     <StudentNotePanel item={activeContentItem} />
-                  ) : activeEntry ? (
+                  ) : activeEntry?.lesson ? (
                     <section className="student-course-learning__lesson">
-                      <span className="student-eyebrow">{activeEntry.module.title}</span>
+                      <span className="student-eyebrow">{activeEntry.module?.title || ''}</span>
                     </section>
                   ) : <EmptyState icon="book" title="Select course content" description="Choose a video, quiz, assignment, or note from the course content list." />}
                 </div>
@@ -5149,7 +5890,7 @@ function StudentCourseLearning({
       ) : showCourseCertificate ? (
         <div className="student-course-learning__layout">
           <aside className="student-course-learning__sidebar" aria-label="Course modules and lessons">
-            <header className="student-course-learning__sidebar-header"><h2>{course.title}</h2></header>
+            <header className="student-course-learning__sidebar-header"><h2>{course?.title || 'Course'}</h2></header>
             <section className="student-course-learning__sidebar-links" aria-label="Course materials">
               <button
                 className={detailsTab === 'certificate' ? 'is-selected' : ''}
@@ -5160,9 +5901,20 @@ function StudentCourseLearning({
                 <span className="student-course-learning__item-icon"><Icon name="award" size={15} /></span>
                 <strong>Certificate</strong>
               </button>
+<<<<<<< Updated upstream
               <button className={detailsTab === 'notes' ? 'is-selected' : ''} type="button" aria-pressed={detailsTab === 'notes'} onClick={() => setDetailsTab('notes')}>
                 <span className="student-course-learning__item-icon"><Icon name="pen" size={15} /></span>
                 <strong>Notes</strong>
+=======
+              <button
+                className={detailsTab === 'resources' ? 'is-selected' : ''}
+                type="button"
+                aria-pressed={detailsTab === 'resources'}
+                onClick={() => setDetailsTab('resources')}
+              >
+                <span className="student-course-learning__item-icon"><Icon name="folderOpen" size={15} /></span>
+                <strong>Learning Resources</strong>
+>>>>>>> Stashed changes
               </button>
             </section>
           </aside>
@@ -5172,6 +5924,10 @@ function StudentCourseLearning({
                 <div className="student-course-learning__active-heading"><h2>Course Certificate</h2></div>
                 <div className="student-course-learning__tab-content">{renderCourseCertificate()}</div>
               </>
+            ) : detailsTab === 'resources' ? (
+              <div className="student-course-learning__tab-content student-course-learning__tab-content--resources">
+                {renderCourseResources()}
+              </div>
             ) : <EmptyState icon="book" title="Course content is not available yet" description="This enrolled course does not currently have any lessons or activities." />}
           </div>
         </div>
@@ -5876,6 +6632,49 @@ function StudentCourseDetailsPage({ user, onLogout, onLearningDataChanged }) {
   )
 }
 
+class CourseLearningErrorBoundary extends React.Component {
+  constructor(props) {
+    super(props)
+    this.state = { hasError: false, error: null }
+  }
+
+  static getDerivedStateFromError(error) {
+    return { hasError: true, error }
+  }
+
+  componentDidCatch(error, errorInfo) {
+    console.error('CourseLearningErrorBoundary caught an error:', error, errorInfo)
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="student-course-learning-error" role="alert">
+          <span className="student-state-card__icon"><Icon name="circleX" size={26} /></span>
+          <h2>Something went wrong displaying this course</h2>
+          <p>{this.state.error?.message || 'An unexpected rendering error occurred. Please try reloading.'}</p>
+          <div className="student-course-learning-error__actions">
+            <button
+              type="button"
+              className="student-button"
+              onClick={() => {
+                this.setState({ hasError: false, error: null })
+                window.location.reload()
+              }}
+            >
+              Reload Page
+            </button>
+            <Link to="/student/courses" className="student-button student-button--quiet">
+              Return to My Courses
+            </Link>
+          </div>
+        </div>
+      )
+    }
+    return this.props.children
+  }
+}
+
 function StudentCourseLearningPage({
   onLogout,
   onLearningDataChanged,
@@ -5898,21 +6697,51 @@ function StudentCourseLearningPage({
   const requestedActivityType = searchParams.get('activityType')
 
   useEffect(() => {
-    onCourseTitleChange(enrollment?.courseId?.title || '')
+    const title = enrollment?.courseId?.title
+    if (typeof title === 'string' && title.trim()) {
+      onCourseTitleChange(title)
+    }
   }, [enrollment?.courseId?.title, onCourseTitleChange])
 
   useEffect(() => {
     let active = true
+<<<<<<< Updated upstream
     const requestSequence = ++courseContentRequestSequence.current
     const initialCourseContent = getCachedStudentPageCourseContent(courseId)
     const initialCourseEnrollment = getInitialStudentCourseLearningEnrollment(courseId)
     setEnrollment(initialCourseEnrollment)
     setLoading(!initialCourseEnrollment)
     setCourseContentStatus(initialCourseContent && hasFreshStudentPageCourseContent(courseId) ? 'ready' : 'loading')
+=======
+    if (!courseId || courseId === 'undefined' || courseId === 'null') {
+      setError('Course ID is missing or invalid.')
+      setLoading(false)
+      return undefined
+    }
+
+    const initialCourseEnrollment = getInitialStudentCourseLearningEnrollment(courseId)
+    if (initialCourseEnrollment) {
+      setEnrollment(initialCourseEnrollment)
+      setLoading(false)
+    } else {
+      setLoading(true)
+    }
+>>>>>>> Stashed changes
     setError('')
+
     fetchStudentPageCourseContent(courseId, onLogout)
+<<<<<<< Updated upstream
       .then(({ enrollment: courseEnrollment, assignmentSubmissions, quizAttempts }) => {
         if (!active || requestSequence !== courseContentRequestSequence.current) return
+=======
+      .then((content) => {
+        if (!active) return
+        const { enrollment: courseEnrollment, assignmentSubmissions = [], quizAttempts = [] } = content || {}
+        if (!courseEnrollment || !courseEnrollment.courseId || typeof courseEnrollment.courseId !== 'object') {
+          setError('Course details are unavailable for this course.')
+          return
+        }
+>>>>>>> Stashed changes
         const cacheKey = getStudentCourseContentCacheKey(courseId)
         if (cacheKey) studentCourseLearningSeeds.delete(cacheKey)
         setEnrollment({
@@ -5920,7 +6749,11 @@ function StudentCourseLearningPage({
           assignmentSubmissions,
           quizAttempts,
         })
+<<<<<<< Updated upstream
         setCourseContentStatus('ready')
+=======
+        setError('')
+>>>>>>> Stashed changes
       })
       .catch((loadError) => {
         if (active && requestSequence === courseContentRequestSequence.current) {
@@ -5929,6 +6762,7 @@ function StudentCourseLearningPage({
         }
       })
       .finally(() => {
+<<<<<<< Updated upstream
         if (active && requestSequence === courseContentRequestSequence.current) setLoading(false)
       })
     return () => {
@@ -5937,10 +6771,18 @@ function StudentCourseLearningPage({
         courseContentRequestSequence.current += 1
       }
     }
+=======
+        if (active) setLoading(false)
+      })
+
+    return () => { active = false }
+>>>>>>> Stashed changes
   }, [courseId, onLogout])
 
   useEffect(() => {
     let active = true
+    if (!courseId || courseId === 'undefined' || courseId === 'null') return undefined
+
     async function refreshProgress() {
       const requestSequence = ++courseContentRequestSequence.current
       const cacheKey = getStudentCourseContentCacheKey(courseId)
@@ -5948,6 +6790,7 @@ function StudentCourseLearningPage({
       setCourseContentStatus('loading')
       try {
         const content = await fetchStudentCourseContent(courseId, onLogout)
+<<<<<<< Updated upstream
         if (!active || requestSequence !== courseContentRequestSequence.current) return
         const { enrollment: courseEnrollment, assignmentSubmissions, quizAttempts } = content
         if (cacheKey) studentCourseContentCache.set(cacheKey, { content, savedAt: Date.now() })
@@ -5958,6 +6801,19 @@ function StudentCourseLearningPage({
         if (active && requestSequence === courseContentRequestSequence.current) {
           setError(loadError instanceof Error ? loadError.message : 'Your course could not be loaded.')
           setCourseContentStatus('error')
+=======
+        if (!active) return
+        const { enrollment: courseEnrollment, assignmentSubmissions = [], quizAttempts = [] } = content || {}
+        if (courseEnrollment && courseEnrollment.courseId && typeof courseEnrollment.courseId === 'object') {
+          if (cacheKey) studentCourseContentCache.set(cacheKey, { content, savedAt: Date.now() })
+          setEnrollment({ ...courseEnrollment, assignmentSubmissions, quizAttempts })
+          setError('')
+        }
+      } catch (loadError) {
+        if (active && !enrollment?.courseId) {
+          const message = loadError instanceof Error ? loadError.message : ''
+          setError(message || 'Your course could not be loaded.')
+>>>>>>> Stashed changes
         }
       }
     }
@@ -5971,6 +6827,7 @@ function StudentCourseLearningPage({
 
   return (
     <StudentRoutePage title={enrollment?.courseId?.title || 'Course learning'} className="student-course-learning-page">
+<<<<<<< Updated upstream
       {error && <p className="student-courses__message is-error" role="alert">{error}</p>}
       {loading ? <p role="status">Loading your course…</p> : enrollment && (
         <StudentCourseLearning
@@ -5988,6 +6845,74 @@ function StudentCourseLearningPage({
           contentSearch={contentSearch}
           courseContentStatus={courseContentStatus}
         />
+=======
+      {loading ? (
+        <div className="student-course-learning-loading" role="status" aria-live="polite">
+          <span className="student-loader" />
+          <h2>Loading your course…</h2>
+          <p>Preparing lessons, quizzes, assignments, and study materials.</p>
+        </div>
+      ) : error ? (
+        <div className="student-course-learning-error" role="alert">
+          <span className="student-state-card__icon"><Icon name="circleX" size={26} /></span>
+          <h2>{error}</h2>
+          <p>Please check your enrollment status or try reloading the page.</p>
+          <div className="student-course-learning-error__actions">
+            <button
+              type="button"
+              className="student-button"
+              onClick={() => {
+                setError('')
+                setLoading(true)
+                fetchStudentPageCourseContent(courseId, onLogout)
+                  .then((content) => {
+                    if (content?.enrollment?.courseId) {
+                      setEnrollment(content.enrollment)
+                    }
+                  })
+                  .catch((err) => setError(err.message || 'Failed to load course.'))
+                  .finally(() => setLoading(false))
+              }}
+            >
+              Retry
+            </button>
+            <Link to="/student/courses" className="student-button student-button--quiet">
+              Go to My Courses
+            </Link>
+          </div>
+        </div>
+      ) : (!enrollment || !enrollment.courseId || typeof enrollment.courseId !== 'object') ? (
+        <div className="student-course-learning-error" role="alert">
+          <span className="student-state-card__icon"><Icon name="book" size={26} /></span>
+          <h2>Course content unavailable</h2>
+          <p>The requested course content could not be found or you may not be enrolled yet.</p>
+          <div className="student-course-learning-error__actions">
+            <Link to="/student/courses" className="student-button">
+              Browse My Courses
+            </Link>
+            <Link to="/student/dashboard" className="student-button student-button--quiet">
+              Back to Dashboard
+            </Link>
+          </div>
+        </div>
+      ) : (
+        <CourseLearningErrorBoundary>
+          <StudentCourseLearning
+            enrollment={enrollment}
+            onEnrollmentUpdated={(updates) => setEnrollment((current) => current ? {
+              ...current,
+              ...updates,
+              courseId: current.courseId,
+            } : current)}
+            onLearningDataChanged={onLearningDataChanged}
+            onLogout={onLogout}
+            requestedLessonId={requestedLessonId}
+            requestedActivityId={requestedActivityId}
+            requestedActivityType={requestedActivityType}
+            contentSearch={contentSearch}
+          />
+        </CourseLearningErrorBoundary>
+>>>>>>> Stashed changes
       )}
     </StudentRoutePage>
   )
@@ -6504,118 +7429,6 @@ function StudentUpdates() {
   )
 }
 
-function StudentProfile({ user, onLogout }) {
-  const [enrollments, setEnrollments] = useState([])
-  const [isLoading, setIsLoading] = useState(true)
-  const [error, setError] = useState('')
-
-  useEffect(() => {
-    const controller = new AbortController()
-
-    async function loadEnrollments() {
-      try {
-        const savedAuth = sessionStorage.getItem('lms.auth')
-        const auth = savedAuth ? JSON.parse(savedAuth) : null
-        if (typeof auth?.token !== 'string') {
-          onLogout()
-          return
-        }
-        const response = await fetchWithAuth(`${API_BASE_URL}/enrollments/me`, {
-          headers: { Authorization: `Bearer ${auth.token}` },
-          signal: controller.signal,
-        }, API_BASE_URL, auth.token)
-        const result = await response.json()
-        if (isInvalidSessionResponse(response, result)) {
-          onLogout()
-          return
-        }
-        if (!response.ok) throw new Error(result.message || 'Learning overview could not be loaded.')
-        if (!Array.isArray(result.enrollments)) {
-          throw new Error('The server returned invalid enrollment data.')
-        }
-        setEnrollments(result.enrollments)
-      } catch (loadError) {
-        if (loadError.name !== 'AbortError') {
-          setError(loadError instanceof Error ? loadError.message : 'Learning overview could not be loaded.')
-        }
-      } finally {
-        if (!controller.signal.aborted) setIsLoading(false)
-      }
-    }
-
-    loadEnrollments()
-    return () => controller.abort()
-  }, [onLogout])
-
-  const accountType = user?.studentType === 'college'
-    ? 'College Student'
-    : user?.studentType === 'independent'
-      ? 'Independent Student'
-      : 'Not available'
-  const completedCount = enrollments.filter((entry) => entry.status === 'completed').length
-  const inProgressCount = enrollments.filter((entry) => entry.status === 'active').length
-  const emailVerification = typeof user?.emailVerified === 'boolean'
-    ? user.emailVerified ? 'Verified' : 'Not verified'
-    : 'Not recorded by the platform'
-
-  return (
-    <div className="student-profile-layout">
-      <div className="student-profile-overview">
-      <StudentRoutePage title="Account Information" showHeading>
-        <div className="student-profile-actions">
-          <Link className="student-profile-settings-link" to="/student/settings">Manage account settings <Icon name="arrow" size={15} /></Link>
-          <Link className="student-profile-settings-link" to="/student/help">Help Center <Icon name="arrow" size={15} /></Link>
-        </div>
-        <dl className="student-profile-details">
-          <div><dt>Full name</dt><dd>{user?.fullName || 'Not available'}</dd></div>
-          <div><dt>Username</dt><dd>{user?.username || 'Not available'}</dd></div>
-          <div><dt>Email</dt><dd>{user?.email || 'Not available'}</dd></div>
-          <div><dt>Email verification</dt><dd>{emailVerification}</dd></div>
-          <div><dt>Account type</dt><dd>{accountType}</dd></div>
-        </dl>
-      </StudentRoutePage>
-
-      <StudentRoutePage title="Learning Overview" showHeading>
-        {error && <p className="student-courses__message is-error" role="alert">{error}</p>}
-        {isLoading ? (
-          <p role="status">Loading your learning overview…</p>
-        ) : !error ? (
-          <>
-            <section className="student-stats" aria-label="Learning overview statistics">
-              {[
-                ['Enrolled Courses', enrollments.length, 'book', 'peach', 'Open your enrolled courses', '/student/courses?filter=enrolled'],
-                ['Completed Courses', completedCount, 'award', 'mint', 'View completed courses', '/student/courses?filter=completed'],
-                ['In Progress', inProgressCount, 'chart', 'gold', 'View courses in progress', '/student/courses?filter=active'],
-                ['Learning Streak', 0, 'spark', 'blue', 'View learning activity details', '/student/learning-activity'],
-              ].map(([label, count, icon, tone, note, to]) => (
-                <Link className={`student-stat is-${tone} student-profile-stat-link`} key={label} to={to}>
-                  <span className={`student-stat__icon is-${tone}`}><Icon name={icon} size={19} /></span>
-                  <span className="student-stat__label">{label}</span>
-                  <strong className="student-stat__value">{count}{label === 'Learning Streak' ? ' days' : ''}</strong>
-                  <small>{note}</small>
-                </Link>
-              ))}
-            </section>
-          </>
-        ) : null}
-      </StudentRoutePage>
-      </div>
-
-      <div className="student-profile-sections">
-        <StudentRoutePage title="My Purchases" to="/student/purchases" showHeading>
-          <EmptyState icon="book" title="Purchase history unavailable" description="The LMS does not currently provide purchase records, payment status, or invoices." />
-        </StudentRoutePage>
-        <StudentRoutePage title="Updates" to="/student/updates" showHeading>
-          <EmptyState icon="bell" title="Open your updates" description="View platform announcements and course updates when they are available." />
-        </StudentRoutePage>
-        <StudentRoutePage title="My Achievements" to="/student/achievements" showHeading>
-          <EmptyState icon="award" title="View your achievements" description="Completed-course milestones and earned achievements appear here." />
-        </StudentRoutePage>
-      </div>
-    </div>
-  )
-}
-
 function StudentDashboard({
   user,
   loading,
@@ -6629,6 +7442,7 @@ function StudentDashboard({
   onAccountUpdated,
 }) {
   const [sidebarOpen, setSidebarOpen] = useState(false)
+  const sidebarTimerRef = useRef(null)
   const [profileMenuOpen, setProfileMenuOpen] = useState(false)
   const profileMenuRef = useRef(null)
   const [publishedCourseCategories, setPublishedCourseCategories] = useState([])
@@ -6749,16 +7563,63 @@ function StudentDashboard({
   }, [isCourseLearningPage])
 
   useEffect(() => {
-    if (!sidebarOpen) return undefined
+    if (!sidebarOpen) {
+      if (sidebarTimerRef.current) {
+        clearTimeout(sidebarTimerRef.current)
+        sidebarTimerRef.current = null
+      }
+      return undefined
+    }
+
     function closeOnEscape(event) {
       if (event.key === 'Escape') setSidebarOpen(false)
     }
+
+    // Auto-collapse sidebar after 6 seconds of inactivity
+    sidebarTimerRef.current = setTimeout(() => {
+      setSidebarOpen(false)
+    }, 6000)
+
     window.addEventListener('keydown', closeOnEscape)
-    return () => window.removeEventListener('keydown', closeOnEscape)
+    return () => {
+      window.removeEventListener('keydown', closeOnEscape)
+      if (sidebarTimerRef.current) {
+        clearTimeout(sidebarTimerRef.current)
+        sidebarTimerRef.current = null
+      }
+    }
   }, [sidebarOpen])
+
+  function handleSidebarInteraction() {
+    if (!sidebarOpen) return
+    if (sidebarTimerRef.current) {
+      clearTimeout(sidebarTimerRef.current)
+    }
+    sidebarTimerRef.current = setTimeout(() => {
+      setSidebarOpen(false)
+    }, 6000)
+  }
 
   function navigateTo(path) {
     navigate(path)
+  }
+
+  function handleMyProfileClick(event) {
+    if (event) {
+      event.preventDefault()
+      event.stopPropagation()
+    }
+    setProfileMenuOpen(false)
+    navigate('/student/profile')
+  }
+
+  function handleLogoutClick(event) {
+    if (event) {
+      event.preventDefault()
+      event.stopPropagation()
+    }
+    setProfileMenuOpen(false)
+    onLogout()
   }
 
   function refreshLearningSummary() {
@@ -6775,11 +7636,10 @@ function StudentDashboard({
         aria-label="Student navigation"
         aria-hidden={!sidebarOpen}
         inert={!sidebarOpen}
+        onClick={handleSidebarInteraction}
+        onPointerDown={handleSidebarInteraction}
+        onKeyDown={handleSidebarInteraction}
       >
-        <a className="student-sidebar__brand" href="/" aria-label="Morrow Learning home">
-          <img src="/logo.png" alt="Morrow Learning" />
-          <span>LEARN. GROW. BECOME.</span>
-        </a>
         <p className="student-sidebar__label">LEARNING SPACE</p>
         <nav className="student-sidebar__nav">
           {visibleNavigation.map((item) => (
@@ -6788,6 +7648,7 @@ function StudentDashboard({
               to={item.path}
               className={`student-sidebar__link${item.path === location.pathname ? ' is-active' : ''}`}
               aria-current={item.path === location.pathname ? 'page' : undefined}
+              onClick={handleSidebarInteraction}
             >
               <Icon name={item.icon} size={18} />
               <span>{item.label}</span>
@@ -6818,6 +7679,19 @@ function StudentDashboard({
               </>
             )}
           </div>
+          <Link
+            className="student-brand"
+            to="/student/dashboard"
+            aria-label="aiHustle home"
+            onClick={() => {
+              if (location.pathname === '/student/dashboard') {
+                window.scrollTo(0, 0)
+                document.querySelector('.student-main')?.scrollTo(0, 0)
+              }
+            }}
+          >
+            <img src="/logo.png" alt="aiHustle" className="student-brand__image" />
+          </Link>
           {isCourseLearningPage ? (
             <label className="student-search student-course-learning-topbar__search">
               <Icon name="search" size={17} />
@@ -6860,13 +7734,27 @@ function StudentDashboard({
               </button>
               {profileMenuOpen && (
                 <div className="student-profile-dropdown" id="student-profile-dropdown" role="menu">
+                  <strong>{user?.fullName || 'Student'}</strong>
+                  <span className="student-profile-dropdown__email">{user?.email || 'Email unavailable'}</span>
                   <button
-                    className="student-profile-dropdown__logout"
                     type="button"
                     role="menuitem"
-                    onClick={onLogout}
+                    className="student-profile-dropdown__profile-btn"
+                    onClick={handleMyProfileClick}
                   >
-                    <Icon name="logout" size={16} /> Logout
+                    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                      <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
+                      <circle cx="12" cy="7" r="4" />
+                    </svg>
+                    <span>My Profile</span>
+                  </button>
+                  <button
+                    type="button"
+                    role="menuitem"
+                    className="student-profile-dropdown__logout"
+                    onClick={handleLogoutClick}
+                  >
+                    Logout
                   </button>
                 </div>
               )}
@@ -7078,7 +7966,7 @@ function StudentDashboard({
                   ? <StudentReferrals onLogout={onLogout} />
                   : <Navigate to="/student/dashboard" replace />}
               />
-              <Route path="/student/profile" element={<StudentProfile user={user} onLogout={onLogout} />} />
+              <Route path="/student/profile" element={<StudentProfile user={user} onLogout={onLogout} onAccountUpdated={onAccountUpdated} />} />
               <Route path="/student/purchases" element={<StudentPurchases />} />
               <Route path="/student/achievements" element={<StudentAchievements onLogout={onLogout} />} />
               <Route path="/student/learning-activity" element={<StudentLearningActivity onLogout={onLogout} user={user} />} />
@@ -7090,6 +7978,7 @@ function StudentDashboard({
                     onAccountUpdated={onAccountUpdated}
                     themePreference={themePreference}
                     onSetTheme={onSetTheme}
+                    onLogout={onLogout}
                   />
                 </StudentRoutePage>
               } />

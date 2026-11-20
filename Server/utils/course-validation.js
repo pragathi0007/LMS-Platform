@@ -223,6 +223,96 @@ function normalizeTranscriptCues(transcriptCues, label) {
   return { value: cues.sort((left, right) => left.startTimeMs - right.startTimeMs) }
 }
 
+export function normalizeLessons(lessons) {
+  if (Array.isArray(lessons)) return lessons
+  if (!lessons) return []
+
+  if (typeof lessons === 'string') {
+    const trimmed = lessons.trim()
+    if ((trimmed.startsWith('[') && trimmed.endsWith(']')) || (trimmed.startsWith('{') && trimmed.endsWith('}'))) {
+      try {
+        const parsed = JSON.parse(trimmed)
+        return normalizeLessons(parsed)
+      } catch {
+        return []
+      }
+    }
+    return []
+  }
+
+  if (typeof lessons === 'object') {
+    if (Array.isArray(lessons.lessons)) return normalizeLessons(lessons.lessons)
+    if (Array.isArray(lessons.items)) return normalizeLessons(lessons.items)
+
+    const entries = Object.entries(lessons)
+    if (entries.length === 0) return []
+
+    const objectEntries = entries.filter(([, val]) => val && typeof val === 'object' && !Array.isArray(val))
+    if (objectEntries.length > 0) {
+      const allNumericKeys = objectEntries.every(([key]) => /^\d+$/.test(key))
+      if (allNumericKeys) {
+        objectEntries.sort(([keyA], [keyB]) => Number(keyA) - Number(keyB))
+      } else {
+        objectEntries.sort(([, a], [, b]) => {
+          if (Number.isFinite(a.order) && Number.isFinite(b.order)) return a.order - b.order
+          return 0
+        })
+      }
+      return objectEntries.map(([, val]) => val)
+    }
+
+    if (
+      typeof lessons.title === 'string'
+      || lessons._id
+      || lessons.videoUrl
+      || lessons.content
+      || lessons.resources
+    ) {
+      return [lessons]
+    }
+
+    return []
+  }
+
+  return []
+}
+
+export function normalizeArray(value) {
+  if (Array.isArray(value)) return value
+  if (!value) return []
+  if (typeof value === 'string') {
+    const trimmed = value.trim()
+    if ((trimmed.startsWith('[') && trimmed.endsWith(']')) || (trimmed.startsWith('{') && trimmed.endsWith('}'))) {
+      try {
+        const parsed = JSON.parse(trimmed)
+        return normalizeArray(parsed)
+      } catch {
+        return []
+      }
+    }
+    return []
+  }
+  if (typeof value === 'object') {
+    const entries = Object.entries(value)
+    if (entries.length === 0) return []
+    const objectEntries = entries.filter(([, val]) => val && typeof val === 'object' && !Array.isArray(val))
+    if (objectEntries.length > 0) {
+      const allNumericKeys = objectEntries.every(([key]) => /^\d+$/.test(key))
+      if (allNumericKeys) {
+        objectEntries.sort(([keyA], [keyB]) => Number(keyA) - Number(keyB))
+      } else {
+        objectEntries.sort(([, a], [, b]) => {
+          if (Number.isFinite(a.order) && Number.isFinite(b.order)) return a.order - b.order
+          return 0
+        })
+      }
+      return objectEntries.map(([, val]) => val)
+    }
+    return [value]
+  }
+  return []
+}
+
 export function normalizeCourseDetails(input) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) return { error: 'Enter valid course details.' }
   const {
@@ -262,16 +352,17 @@ export function normalizeCourseDetails(input) {
 
   const normalizedModules = []
   for (const [moduleIndex, module] of modules.entries()) {
+    const rawLessons = module?.lessons !== undefined ? normalizeLessons(module.lessons) : []
     if (!module || typeof module !== 'object' || Array.isArray(module) ||
       (module._id !== undefined && !validDocumentId(module._id)) ||
       typeof module.title !== 'string' || !module.title.trim() || module.title.trim().length > 200 ||
       (module.description !== undefined && (typeof module.description !== 'string' || module.description.length > 2000)) ||
-      (module.lessons !== undefined && !Array.isArray(module.lessons)) || (module.lessons?.length || 0) > 100 ||
+      rawLessons.length > 100 ||
       (module.contentItems !== undefined && (!Array.isArray(module.contentItems) || module.contentItems.length > 100))) {
       return { error: `Check the title, description, and lessons for module ${moduleIndex + 1}.` }
     }
     const lessons = []
-    for (const [lessonIndex, lesson] of (module.lessons || []).entries()) {
+    for (const [lessonIndex, lesson] of rawLessons.entries()) {
       if (!lesson || typeof lesson !== 'object' || Array.isArray(lesson) ||
         (lesson._id !== undefined && !validDocumentId(lesson._id)) ||
         (lesson.requiredForCertificate !== undefined && typeof lesson.requiredForCertificate !== 'boolean') ||

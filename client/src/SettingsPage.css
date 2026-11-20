@@ -308,15 +308,6 @@
   color: #33724d;
 }
 
-.settings-theme-options {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
-  margin: 0;
-  padding: 0;
-  border: 0;
-}
-
 .settings-two-factor {
   display: grid;
   gap: 13px;
@@ -417,48 +408,6 @@
 
 .settings-two-factor__actions .student-button {
   width: fit-content;
-}
-
-.settings-theme-option {
-  display: flex;
-  min-height: 66px;
-  align-items: flex-start;
-  gap: 9px;
-  padding: 11px;
-  border: 1px solid #d4d0c4;
-  border-radius: 8px;
-  background: #fffefa;
-  cursor: pointer;
-}
-
-.settings-theme-option.is-selected {
-  border-color: #7d9d80;
-  background: #f3f7ef;
-}
-
-.settings-theme-option input {
-  width: 14px;
-  height: 14px;
-  flex: 0 0 auto;
-  margin: 2px 0 0;
-  accent-color: #527d66;
-}
-
-.settings-theme-option > span {
-  display: grid;
-  gap: 4px;
-}
-
-.settings-theme-option strong {
-  color: #303b35;
-  font-size: 11px;
-  font-weight: 700;
-}
-
-.settings-theme-option small {
-  color: #626d67;
-  font-size: 10px;
-  line-height: 1.4;
 }
 
 .settings-password-form {
@@ -570,6 +519,120 @@
   line-height: 1.55;
 }
 
+.settings-delete-button {
+  margin-top: 12px;
+  padding: 8px 16px;
+  border: 1px solid #c93b2b;
+  border-radius: 6px;
+  background: #c93b2b;
+  color: #ffffff;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s ease, opacity 0.15s ease;
+}
+
+.settings-delete-button:hover:not(:disabled) {
+  background: #a82e20;
+}
+
+.settings-delete-button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.settings-delete-confirm-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: rgba(23, 30, 27, 0.52);
+  backdrop-filter: blur(2px);
+}
+
+.settings-delete-confirm-modal {
+  width: min(460px, 100%);
+  padding: 24px 22px 20px;
+  border: 1px solid #d9b8ad;
+  border-radius: 14px;
+  background: #fffefa;
+  box-shadow: 0 18px 48px rgba(29, 34, 30, 0.22);
+}
+
+.settings-delete-confirm-modal h3 {
+  margin: 0 0 10px;
+  color: #793f32;
+  font-size: 18px;
+  font-weight: 700;
+}
+
+.settings-delete-confirm-modal p {
+  margin: 0 0 14px;
+  color: #654f49;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.settings-delete-confirm-modal .settings-form-group {
+  margin-bottom: 12px;
+}
+
+.settings-delete-confirm-modal label {
+  display: block;
+  margin-bottom: 5px;
+  color: #303b35;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.settings-delete-confirm-modal input[type="password"],
+.settings-delete-confirm-modal input[type="text"] {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid #c79d91;
+  border-radius: 6px;
+  background: #ffffff;
+  color: #1f2723;
+  font-size: 13px;
+  box-sizing: border-box;
+}
+
+.settings-delete-confirm-modal input:focus {
+  outline: none;
+  border-color: #c93b2b;
+  box-shadow: 0 0 0 2px rgba(201, 59, 43, 0.2);
+}
+
+.settings-delete-confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 20px;
+}
+
+.settings-button-danger {
+  padding: 8px 16px;
+  border: 1px solid #c93b2b;
+  border-radius: 6px;
+  background: #c93b2b;
+  color: #ffffff;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s ease, opacity 0.15s ease;
+}
+
+.settings-button-danger:hover:not(:disabled) {
+  background: #a82e20;
+}
+
+.settings-button-danger:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
 .settings-message {
   margin: 0;
   padding: 9px 10px;
@@ -628,7 +691,6 @@
 :root[data-theme='dark'] .settings-page__standalone-heading h1,
 :root[data-theme='dark'] .settings-account-summary strong,
 :root[data-theme='dark'] .settings-connected-account strong,
-:root[data-theme='dark'] .settings-theme-option strong,
 :root[data-theme='dark'] .settings-form label:not(.settings-checkbox),
 :root[data-theme='dark'] .settings-field-group,
 :root[data-theme='dark'] .settings-field-group > label,
@@ -685,8 +747,7 @@
 :root[data-theme='dark'] .settings-two-factor__summary,
 :root[data-theme='dark'] .settings-two-factor__toggle,
 :root[data-theme='dark'] .settings-connected-account,
-:root[data-theme='dark'] .settings-google-mark,
-:root[data-theme='dark'] .settings-theme-option {
+:root[data-theme='dark'] .settings-google-mark {
   border-color: #465149;
   background: #28312c;
   color: #e1e7df;
@@ -695,11 +756,6 @@
 :root[data-theme='dark'] .settings-form input[readonly] {
   background: #202723;
   color: #b0bbb1;
-}
-
-:root[data-theme='dark'] .settings-theme-option.is-selected {
-  border-color: #71917b;
-  background: #2b3a31;
 }
 
 :root[data-theme='dark'] .settings-account-summary .settings-account-type {
@@ -743,6 +799,32 @@
   color: #d2b7ae;
 }
 
+:root[data-theme='dark'] .settings-delete-confirm-modal {
+  border-color: #76574f;
+  background: #27211f;
+  color: #f0eae7;
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.5);
+}
+
+:root[data-theme='dark'] .settings-delete-confirm-modal h3 {
+  color: #efb9a9;
+}
+
+:root[data-theme='dark'] .settings-delete-confirm-modal p {
+  color: #d2b7ae;
+}
+
+:root[data-theme='dark'] .settings-delete-confirm-modal label {
+  color: #e1d6d2;
+}
+
+:root[data-theme='dark'] .settings-delete-confirm-modal input[type="password"],
+:root[data-theme='dark'] .settings-delete-confirm-modal input[type="text"] {
+  border-color: #76574f;
+  background: #1c1817;
+  color: #f0eae7;
+}
+
 :root[data-theme='dark'] .settings-message.is-error {
   border-color: #74433d;
   background: #382724;
@@ -760,8 +842,7 @@
     padding: 15px;
   }
 
-  .settings-form__grid,
-  .settings-theme-options {
+  .settings-form__grid {
     grid-template-columns: minmax(0, 1fr);
   }
 
@@ -778,10 +859,6 @@
   .settings-account-field--email,
   .settings-account-field--type {
     grid-area: auto;
-  }
-
-  .settings-theme-option {
-    min-height: 54px;
   }
 
   .settings-account-summary {
@@ -894,7 +971,6 @@
 .main-admin-settings .settings-account-summary,
 .main-admin-settings .settings-two-factor__summary,
 .main-admin-settings .settings-two-factor__toggle,
-.main-admin-settings .settings-theme-option,
 .main-admin-settings .settings-connected-account {
   border-radius: var(--admin-card-radius);
   box-shadow: var(--admin-card-shadow);

@@ -1,5 +1,6 @@
 import mongoose from 'mongoose'
 import { config } from './env.js'
+import { ensureMongoDnsResolution } from './dns.js'
 import { Admin, CollegeAdmin, CollegeStudent, Student } from '../models/account-models.js'
 import AccountIdentity from '../models/AccountIdentity.js'
 import Course from '../models/Course.js'
@@ -21,12 +22,14 @@ import ReferralCode from '../models/ReferralCode.js'
 import ReferralCodeDailyLimit from '../models/ReferralCodeDailyLimit.js'
 import ReferralCodeUserLimit from '../models/ReferralCodeUserLimit.js'
 import RefreshSession from '../models/RefreshSession.js'
+import StudentProfile from '../models/StudentProfile.js'
 
 const requiredModels = [
   Admin,
   CollegeAdmin,
   Student,
   CollegeStudent,
+  StudentProfile,
   AccountIdentity,
   Course,
   College,
@@ -67,6 +70,8 @@ export async function connectToDatabase() {
   if (!config.mongoUri) {
     throw new Error('MONGO_URI is not set.')
   }
+
+  await ensureMongoDnsResolution(config.mongoUri)
 
   await runDatabaseOperation(
     'connect',

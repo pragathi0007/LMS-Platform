@@ -24,7 +24,7 @@ export const config = Object.freeze({
   googleClientSecret: process.env.GOOGLE_CLIENT_SECRET,
   adminEmail: process.env.ADMIN_EMAIL,
   adminPassword: process.env.ADMIN_PASSWORD,
-  clientOrigin: process.env.CLIENT_ORIGIN,
+  clientOrigin: process.env.CLIENT_ORIGIN || 'http://localhost:5173',
   emailProvider: process.env.EMAIL_PROVIDER?.trim().toLowerCase(),
   gmailUser: process.env.GMAIL_USER?.trim(),
   gmailAppPassword: process.env.GMAIL_APP_PASSWORD?.replace(/\s/g, ''),
@@ -35,6 +35,7 @@ export const config = Object.freeze({
   cloudinaryApiSecret: process.env.CLOUDINARY_API_SECRET,
   courseVideoMaxBytes: positiveSafeInteger(process.env.COURSE_VIDEO_MAX_BYTES, defaultCourseVideoMaxBytes),
   courseResourceMaxBytes: positiveSafeInteger(process.env.COURSE_RESOURCE_MAX_BYTES, defaultCourseResourceMaxBytes),
+  dnsServers: process.env.DNS_SERVERS,
   nodeEnv: process.env.NODE_ENV,
   port: process.env.PORT || 5000,
 })

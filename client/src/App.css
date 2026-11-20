@@ -1867,6 +1867,123 @@
   text-decoration: none;
 }
 
+.auth-card {
+  width: min(100%, 460px);
+  text-align: center;
+}
+
+.auth-card__description {
+  margin: 10px 0 16px !important;
+  color: #647067 !important;
+  font-size: 14px !important;
+  line-height: 1.5 !important;
+}
+
+.auth-card__state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  margin-top: 18px;
+  gap: 12px;
+  width: 100%;
+}
+
+.auth-card__state h2 {
+  margin: 0;
+  color: #292f2c;
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+.auth-card__icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  margin-bottom: 4px;
+}
+
+.auth-card__icon.is-success {
+  background: #e8f5e9;
+  color: #2e7d32;
+}
+
+.auth-card__icon.is-error {
+  background: #fdecea;
+  color: #d32f2f;
+}
+
+.auth-card__state-message {
+  font-size: 14px;
+  color: #3b423d !important;
+  line-height: 1.5;
+  margin: 0 !important;
+}
+
+.auth-card__state-note {
+  font-size: 13px !important;
+  color: #7b837d !important;
+  line-height: 1.5;
+  margin: 0 !important;
+}
+
+.auth-card__actions {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 100%;
+  margin-top: 14px;
+}
+
+.auth-card__actions .primary-button {
+  margin-top: 0;
+  justify-content: center;
+  text-decoration: none;
+}
+
+.auth-card__actions .text-button {
+  text-align: center;
+  justify-content: center;
+}
+
+.auth-card__footer {
+  margin-top: 14px;
+  display: flex;
+  justify-content: center;
+}
+
+.auth-card__footer .text-button {
+  font-size: 13px;
+  text-decoration: none;
+}
+
+.activation-form .field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+.activation-form .password-input {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  border: 1px solid #dfe4da;
+  border-radius: 7px;
+  background: #fffefa;
+}
+
+.activation-form .password-input input {
+  border: 0;
+  background: transparent;
+  flex: 1;
+  min-height: 42px;
+  padding: 9px 11px;
+}
+
 .admin-dashboard__account {
   display: flex;
   flex-direction: column;
@@ -1887,11 +2004,60 @@
   margin-top: 24px;
 }
 
-:root[data-theme='dark'] .dashboard-landing {
+:root[data-theme='dark'] .dashboard-landing,
+:root[data-theme='dark'] .activation-page {
   background:
     radial-gradient(ellipse at 2% 92%, rgba(52, 94, 78, 0.35), transparent 40%),
     radial-gradient(ellipse at 93% 14%, rgba(135, 105, 46, 0.2), transparent 34%),
     #202826;
+}
+
+:root[data-theme='dark'] .auth-card__description {
+  color: #9eb0a5 !important;
+}
+
+:root[data-theme='dark'] .auth-card__state h2 {
+  color: #edf0e9;
+}
+
+:root[data-theme='dark'] .auth-card__state-message {
+  color: #d0d7d2 !important;
+}
+
+:root[data-theme='dark'] .auth-card__state-note {
+  color: #8c978f !important;
+}
+
+:root[data-theme='dark'] .auth-card__icon.is-success {
+  background: rgba(46, 125, 50, 0.2);
+  color: #81c784;
+}
+
+:root[data-theme='dark'] .auth-card__icon.is-error {
+  background: rgba(211, 47, 47, 0.2);
+  color: #e57373;
+}
+
+:root[data-theme='dark'] .activation-form label {
+  color: #a4b3a8;
+}
+
+:root[data-theme='dark'] .activation-form input {
+  border-color: #3a433f;
+  background: #202725;
+  color: #edf0e9;
+}
+
+:root[data-theme='dark'] .activation-form .password-input {
+  border-color: #3a433f;
+  background: #202725;
+  color: #edf0e9;
+}
+
+:root[data-theme='dark'] .activation-form .password-input input {
+  border: 0;
+  background: transparent;
+  color: #edf0e9;
 }
 
 :root[data-theme='dark'] .dashboard-card {

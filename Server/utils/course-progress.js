@@ -2,6 +2,7 @@ import AssignmentSubmission from '../models/AssignmentSubmission.js'
 import Course from '../models/Course.js'
 import Enrollment from '../models/Enrollment.js'
 import QuizAttempt from '../models/QuizAttempt.js'
+import { normalizeLessons, normalizeArray } from './course-validation.js'
 
 function isRequired(activity, nestedActivity) {
   return activity?.requiredForCertificate !== false
@@ -21,10 +22,17 @@ function getCourseProgressActivities(course, { includeOptional = false } = {}) {
     activities[type === 'quiz' ? 'quizzes' : `${type}s`].push({ id })
   }
 
+<<<<<<< Updated upstream
   for (const module of course?.modules || []) {
     const contentItems = Array.isArray(module.contentItems) ? module.contentItems : []
     const contentVideos = contentItems.filter((item) => item.type === 'video-lesson')
     for (const video of (contentVideos.length ? contentVideos : module.lessons || [])) {
+=======
+  for (const module of normalizeArray(course?.modules)) {
+    const contentItems = normalizeArray(module.contentItems)
+    const videos = contentItems.filter((item) => item.type === 'video-lesson')
+    for (const video of (videos.length ? videos : normalizeLessons(module.lessons))) {
+>>>>>>> Stashed changes
       add('video', video)
     }
 

@@ -1,9 +1,11 @@
 import bcrypt from 'bcryptjs'
 import { randomBytes } from 'node:crypto'
+import { Readable } from 'node:stream'
 import mongoose from 'mongoose'
 import multer from 'multer'
 import path from 'node:path'
 import { Router } from 'express'
+import cloudinary from '../config/cloudinary.js'
 import AccountIdentity from '../models/AccountIdentity.js'
 import College from '../models/College.js'
 import Course from '../models/Course.js'
@@ -47,6 +49,7 @@ import {
   syncEnrollmentStatus,
 } from '../utils/course-progress.js'
 import { createStudentNotification } from '../utils/student-notifications.js'
+import { normalizeLessons, normalizeArray } from '../utils/course-validation.js'
 
 const router = Router()
 const requireStudent = [authenticate, requireRoles('student')]
@@ -212,11 +215,14 @@ function sanitizeStudentAttentionCheck(attentionCheck) {
 }
 
 function logInvalidAttentionCheckConfigurations(course) {
-  for (const [moduleIndex, module] of (course.modules || []).entries()) {
+  const modules = normalizeArray(course?.modules)
+  for (const [moduleIndex, module] of modules.entries()) {
+    const rawLessons = normalizeLessons(module?.lessons)
+    const rawContentItems = normalizeArray(module?.contentItems)
     const videoLessons = [
-      ...(module.lessons || []).map((lesson) => ({ lesson, source: 'legacy' })),
-      ...(module.contentItems || [])
-        .filter((item) => item.type === 'video-lesson')
+      ...rawLessons.map((lesson) => ({ lesson, source: 'legacy' })),
+      ...rawContentItems
+        .filter((item) => item?.type === 'video-lesson')
         .map((lesson) => ({ lesson, source: 'contentItem' })),
     ]
     for (const { lesson, source } of videoLessons) {
@@ -281,38 +287,38 @@ function logInvalidAttentionCheckConfigurations(course) {
   }
 }
 
-function hideQuizAnswers(course) {
+export function hideQuizAnswers(course) {
   if (!course) return course
   logInvalidAttentionCheckConfigurations(course)
   return {
     ...course,
-    quizzes: course.quizzes?.map(({ questions, ...quiz }) => ({
+    quizzes: normalizeArray(course.quizzes).map(({ questions, ...quiz }) => ({
       ...quiz,
-      questions: questions?.map(({ correctOptionIndex, ...question }) => question),
+      questions: normalizeArray(questions).map(({ correctOptionIndex, ...question }) => question),
     })),
-    modules: course.modules?.map(({ quiz, lessons, contentItems, ...module }) => ({
-      ...module,
-      ...(lessons ? {
-        lessons: lessons.map(({ attentionCheck, ...lesson }) => ({
+    modules: normalizeArray(course.modules).map(({ quiz, lessons, contentItems, ...module }) => {
+      const normalizedLessons = normalizeLessons(lessons)
+      const normalizedContentItems = normalizeArray(contentItems)
+      return {
+        ...module,
+        lessons: normalizedLessons.map(({ attentionCheck, ...lesson }) => ({
           ...lesson,
           ...(attentionCheck ? { attentionCheck: sanitizeStudentAttentionCheck(attentionCheck) } : {}),
         })),
-      } : {}),
-      ...(quiz ? {
-        quiz: {
-          ...quiz,
-          questions: quiz.questions?.map(({ correctOptionIndices, ...question }) => question),
-        },
-      } : {}),
-      ...(contentItems ? {
-        contentItems: contentItems.map(({ quiz: itemQuiz, attentionCheck, ...item }) => {
+        ...(quiz ? {
+          quiz: {
+            ...quiz,
+            questions: normalizeArray(quiz.questions).map(({ correctOptionIndices, ...question }) => question),
+          },
+        } : {}),
+        contentItems: normalizedContentItems.map(({ quiz: itemQuiz, attentionCheck, ...item }) => {
           let legacyTranscriptCues
           if (item.type === 'video-lesson') {
             const matchingLegacyLesson = item._id
-              ? lessons?.find((lesson) => String(lesson._id) === String(item._id))
+              ? normalizedLessons.find((lesson) => String(lesson._id) === String(item._id))
               : null
             const titleAndVideoMatches = !matchingLegacyLesson && item.videoUrl
-              ? (lessons || []).filter((lesson) => lesson.title === item.title && lesson.videoUrl === item.videoUrl)
+              ? normalizedLessons.filter((lesson) => lesson.title === item.title && lesson.videoUrl === item.videoUrl)
               : []
             const transcriptLesson = matchingLegacyLesson
               || (titleAndVideoMatches.length === 1 ? titleAndVideoMatches[0] : null)
@@ -327,13 +333,13 @@ function hideQuizAnswers(course) {
             ...(itemQuiz ? {
               quiz: {
                 ...itemQuiz,
-                questions: itemQuiz.questions?.map(({ correctOptionIndices, ...question }) => question),
+                questions: normalizeArray(itemQuiz.questions).map(({ correctOptionIndices, ...question }) => question),
               },
             } : {}),
           }
         }),
-      } : {}),
-    })),
+      }
+    }),
   }
 }
 
@@ -425,11 +431,17 @@ function getAccessibleCourseActivityKeys(course, enrollment, quizAttempts, assig
 }
 
 function findCourseLesson(course, lessonId) {
+<<<<<<< Updated upstream
   for (const module of course?.modules || []) {
     const lessons = [
       ...(module.lessons || []),
       ...(module.contentItems || []).filter((item) => item.type === 'video-lesson'),
     ]
+=======
+  for (const module of normalizeArray(course?.modules)) {
+    const videoItems = normalizeArray(module.contentItems).filter((item) => item.type === 'video-lesson')
+    const lessons = videoItems.length ? videoItems : normalizeLessons(module.lessons)
+>>>>>>> Stashed changes
     const lesson = lessons.find((item) => String(item._id) === String(lessonId))
     if (lesson) return lesson
   }
@@ -441,9 +453,9 @@ function courseHasLesson(course, lessonId) {
 }
 
 function getCourseLessonIds(course) {
-  return (course?.modules || []).flatMap((module) => {
-    const videoItems = module.contentItems?.filter((item) => item.type === 'video-lesson') || []
-    const lessons = videoItems.length ? videoItems : module.lessons || []
+  return normalizeArray(course?.modules).flatMap((module) => {
+    const videoItems = normalizeArray(module.contentItems).filter((item) => item.type === 'video-lesson')
+    const lessons = videoItems.length ? videoItems : normalizeLessons(module.lessons)
     return lessons.map((lesson) => String(lesson._id)).filter(Boolean)
   })
 }
@@ -456,6 +468,131 @@ function getCourseAssignmentCount(course) {
     }
   }
   return ids
+}
+
+function extractCloudinaryDetails(url) {
+  if (!url || typeof url !== 'string' || !url.includes('cloudinary.com')) return null
+  try {
+    const parsed = new URL(url)
+    const segments = parsed.pathname.split('/').filter(Boolean)
+    if (segments.length < 4) return null
+    const resourceType = segments[1]
+    const deliveryType = segments[2]
+    let pathSegments = segments.slice(3)
+    if (pathSegments[0]?.startsWith('s--') && pathSegments[0]?.endsWith('--')) {
+      pathSegments = pathSegments.slice(1)
+    }
+    while (pathSegments[0] && (pathSegments[0].includes(',') || pathSegments[0].includes(':') || pathSegments[0].startsWith('w_') || pathSegments[0].startsWith('fl_'))) {
+      pathSegments = pathSegments.slice(1)
+    }
+    if (pathSegments[0] && /^v\d+$/.test(pathSegments[0])) {
+      pathSegments = pathSegments.slice(1)
+    }
+    const publicId = decodeURIComponent(pathSegments.join('/'))
+    return { resourceType, deliveryType, publicId }
+  } catch {
+    return null
+  }
+}
+
+function findResourceInCourse(course, targetId, publicId = null, url = null) {
+  function match(res) {
+    if (!res) return false
+    const resId = String(res._id || '')
+    const resPublicId = String(res.publicId || '')
+    const resUrl = String(res.url || '')
+    const resTitle = String(res.title || '')
+    const target = String(targetId || '').trim()
+
+    if (target && (
+      resId === target
+      || resPublicId === target
+      || resUrl === target
+      || path.basename(resPublicId) === target
+      || path.basename(resUrl) === target
+      || resTitle === target
+    )) {
+      return true
+    }
+    if (publicId && (resPublicId === publicId || path.basename(resPublicId) === path.basename(publicId))) {
+      return true
+    }
+    if (url && (resUrl === url || resUrl.split('?')[0] === url.split('?')[0])) {
+      return true
+    }
+    return false
+  }
+
+  for (const res of normalizeArray(course?.resources)) {
+    if (match(res)) return res
+  }
+  for (const module of normalizeArray(course?.modules)) {
+    for (const res of normalizeArray(module?.resources)) {
+      if (match(res)) return res
+    }
+    for (const lesson of normalizeLessons(module?.lessons)) {
+      for (const res of normalizeArray(lesson?.resources)) {
+        if (match(res)) return res
+      }
+    }
+    for (const item of normalizeArray(module?.contentItems)) {
+      for (const res of normalizeArray(item?.resources)) {
+        if (match(res)) return res
+      }
+    }
+  }
+  return null
+}
+
+const resourceHashCache = new Map()
+
+async function resolveResourceHash(resource) {
+  if (!resource) return null
+  const publicId = resource.publicId || extractCloudinaryDetails(resource.url)?.publicId
+  if (!publicId) return null
+  if (resourceHashCache.has(publicId)) return resourceHashCache.get(publicId)
+
+  try {
+    const extension = (resource.format || path.extname(publicId).slice(1) || 'pdf').toLowerCase()
+    const resourceType = resource.resourceType || (extension === 'pdf' ? 'raw' : 'image')
+    const signedUrl = cloudinary.utils.private_download_url(publicId, extension, {
+      resource_type: resourceType,
+      type: 'upload',
+      expires_at: Math.floor(Date.now() / 1000) + 3600,
+    })
+    const headResponse = await fetch(signedUrl, { method: 'HEAD', signal: AbortSignal.timeout(2500) })
+    if (headResponse.ok) {
+      const etag = headResponse.headers.get('etag')?.replace(/["']/g, '') || null
+      if (etag) {
+        resourceHashCache.set(publicId, etag)
+        return etag
+      }
+    }
+  } catch {}
+  return null
+}
+
+export async function populateResourceHashes(course) {
+  if (!course) return course
+  const allResources = []
+  for (const res of normalizeArray(course.resources)) allResources.push(res)
+  for (const module of normalizeArray(course.modules)) {
+    for (const res of normalizeArray(module.resources)) allResources.push(res)
+    for (const lesson of normalizeLessons(module.lessons)) {
+      for (const res of normalizeArray(lesson.resources)) allResources.push(res)
+    }
+    for (const item of normalizeArray(module.contentItems)) {
+      for (const res of normalizeArray(item.resources)) allResources.push(res)
+    }
+  }
+  await Promise.allSettled(allResources.map(async (res) => {
+    const hash = await resolveResourceHash(res)
+    if (hash) {
+      res.fileHash = hash
+      res.etag = hash
+    }
+  }))
+  return course
 }
 
 function getLearningStreak(dates, now = new Date()) {
@@ -755,10 +892,10 @@ async function reserveQuizAttempt(key, now = new Date()) {
 }
 
 function findVideoLesson(course, lessonId) {
-  for (const module of course?.modules || []) {
+  for (const module of normalizeArray(course?.modules)) {
     const lessons = [
-      ...(module.lessons || []),
-      ...(module.contentItems || []).filter((item) => item.type === 'video-lesson'),
+      ...normalizeLessons(module.lessons),
+      ...normalizeArray(module.contentItems).filter((item) => item.type === 'video-lesson'),
     ]
     const lesson = lessons.find((item) => canonicalObjectId(item._id) === lessonId)
     if (lesson) return lesson
@@ -907,10 +1044,10 @@ function applyAssignmentDeadline(course, enrollmentCreatedAt) {
   const dueDate = getAssignmentDeadline(enrollmentCreatedAt)
   return {
     ...course,
-    assignments: (course.assignments || []).map((assignment) => ({ ...assignment, dueDate })),
-    modules: (course.modules || []).map((module) => ({
+    assignments: normalizeArray(course.assignments).map((assignment) => ({ ...assignment, dueDate })),
+    modules: normalizeArray(course.modules).map((module) => ({
       ...module,
-      contentItems: (module.contentItems || []).map((item) => (
+      contentItems: normalizeArray(module.contentItems).map((item) => (
         item.type === 'assignment' ? { ...item, dueDate } : item
       )),
     })),
@@ -1276,6 +1413,7 @@ router.get('/courses/:courseId/learning-content', ...requireStudent, async (req,
         .sort({ createdAt: -1 })
         .lean(),
     ])
+    await populateResourceHashes(courseWithAssignmentDeadlines)
     const certificateProgress = calculateCourseProgress({
       course,
       enrollment,
@@ -1309,6 +1447,113 @@ router.get('/courses/:courseId/learning-content', ...requireStudent, async (req,
       })),
       quizAttempts: quizAttempts.map(serializeQuizAttempt),
     })
+  } catch (error) {
+    return next(error)
+  }
+})
+
+router.get('/courses/:courseId/resources/:resourceId/file', ...requireStudent, async (req, res, next) => {
+  try {
+    const { courseId, resourceId } = req.params
+    if (!isValidObjectId(courseId)) {
+      return res.status(400).json({ message: 'Select a valid course.' })
+    }
+    if (!resourceId || typeof resourceId !== 'string' || !resourceId.trim()) {
+      return res.status(400).json({ message: 'Select a valid resource.' })
+    }
+
+    const enrollmentQuery = {
+      userId: req.auth.id,
+      courseId,
+      ...getStudentEnrollmentScope(req),
+      status: { $ne: 'cancelled' },
+    }
+    const enrollment = await Enrollment.findOne(enrollmentQuery).select('_id').lean()
+    if (!enrollment) {
+      return res.status(403).json({ message: 'Enroll in this course before accessing its resources.' })
+    }
+
+    const course = await Course.findById(courseId).lean()
+    if (!course) {
+      return res.status(404).json({ message: 'The enrolled course could not be found.' })
+    }
+
+    const decodedResourceId = decodeURIComponent(resourceId.trim())
+    const decodedPublicId = typeof req.query?.publicId === 'string' ? decodeURIComponent(req.query.publicId.trim()) : null
+    const decodedUrl = typeof req.query?.url === 'string' ? decodeURIComponent(req.query.url.trim()) : null
+
+    const resource = findResourceInCourse(course, decodedResourceId, decodedPublicId, decodedUrl)
+    if (!resource) {
+      return res.status(404).json({ message: 'The requested resource could not be found in this course.' })
+    }
+
+    const publicId = resource.publicId || extractCloudinaryDetails(resource.url)?.publicId || decodedPublicId
+    let streamUrl = resource.url
+    const format = (resource.format || (publicId ? path.extname(publicId).slice(1) : '') || 'pdf').toLowerCase()
+    const resourceType = resource.resourceType || (format === 'pdf' ? 'raw' : 'image')
+
+    if (publicId) {
+      streamUrl = cloudinary.utils.private_download_url(publicId, format, {
+        resource_type: resourceType,
+        type: 'upload',
+        expires_at: Math.floor(Date.now() / 1000) + 3600,
+      })
+    }
+
+    if (!streamUrl) {
+      return res.status(404).json({ message: 'Resource file location is unavailable.' })
+    }
+
+    const upstreamResponse = await fetch(streamUrl, {
+      signal: AbortSignal.timeout(30000),
+    })
+
+    if (!upstreamResponse.ok) {
+      return res.status(upstreamResponse.status >= 400 && upstreamResponse.status < 500 ? 404 : 502).json({
+        message: 'The requested resource file could not be retrieved.',
+      })
+    }
+
+    const mimeTypes = {
+      pdf: 'application/pdf',
+      doc: 'application/msword',
+      docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      ppt: 'application/vnd.ms-powerpoint',
+      pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+      xls: 'application/vnd.ms-excel',
+      xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      zip: 'application/zip',
+      png: 'image/png',
+      jpg: 'image/jpeg',
+      jpeg: 'image/jpeg',
+      txt: 'text/plain',
+    }
+    const contentType = mimeTypes[format] || upstreamResponse.headers.get('content-type') || 'application/octet-stream'
+    res.setHeader('Content-Type', contentType)
+
+    const contentLength = upstreamResponse.headers.get('content-length')
+    if (contentLength) {
+      res.setHeader('Content-Length', contentLength)
+    }
+
+    const isDownload = req.query.download === 'true' || req.query.download === '1'
+    let baseTitle = resource.title?.trim() || path.basename(publicId || 'document')
+    if (!path.extname(baseTitle) && format) {
+      baseTitle = `${baseTitle}.${format}`
+    }
+    const safeAscii = baseTitle.replace(/[^a-zA-Z0-9._-]/g, '_')
+    const encodedName = encodeURIComponent(baseTitle)
+    const dispositionType = isDownload ? 'attachment' : 'inline'
+    res.setHeader('Content-Disposition', `${dispositionType}; filename="${safeAscii}"; filename*=UTF-8''${encodedName}`)
+    res.setHeader('Cache-Control', 'private, no-cache, no-store, must-revalidate')
+
+    const readable = Readable.fromWeb(upstreamResponse.body)
+    req.on('close', () => {
+      if (!res.writableEnded) {
+        upstreamResponse.body?.cancel().catch(() => {})
+      }
+    })
+    return readable.pipe(res)
   } catch (error) {
     return next(error)
   }

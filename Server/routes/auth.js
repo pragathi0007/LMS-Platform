@@ -8,6 +8,7 @@ import { config } from '../config/env.js'
 import AccountIdentity from '../models/AccountIdentity.js'
 import Notification from '../models/Notification.js'
 import RegistrationEmailVerification from '../models/RegistrationEmailVerification.js'
+import PasswordResetToken from '../models/PasswordResetToken.js'
 import {
   accountModelsByCollection,
   accountModelsByRole,
@@ -34,6 +35,8 @@ import {
 } from '../utils/independent-approval.js'
 import {
   logEmailDeliveryFailure,
+  requireClientOrigin,
+  sendPasswordResetEmail,
   sendRegistrationEmailVerificationCodeEmail,
   sendStudentRegistrationConfirmationEmail,
 } from '../utils/email.js'
@@ -61,6 +64,24 @@ const registrationEmailRequestWindowMs = 60 * 60 * 1000
 const registrationEmailMaxAttempts = 5
 const refreshCookieName = 'lms.refresh'
 const refreshTokenLifetimeMs = 7 * 24 * 60 * 60 * 1000
+const passwordResetRateLimits = new Map()
+const passwordResetWindowMs = 15 * 60 * 1000
+const passwordResetMaxRequests = 5
+
+function checkPasswordResetRateLimit(key) {
+  const now = Date.now()
+  const entry = passwordResetRateLimits.get(key)
+  if (!entry || now - entry.windowStart > passwordResetWindowMs) {
+    passwordResetRateLimits.set(key, { count: 1, windowStart: now })
+    return { allowed: true }
+  }
+  if (entry.count >= passwordResetMaxRequests) {
+    const retryAfterSeconds = Math.ceil((entry.windowStart + passwordResetWindowMs - now) / 1000)
+    return { allowed: false, retryAfterSeconds }
+  }
+  entry.count += 1
+  return { allowed: true }
+}
 
 const allowedRoles = new Set(['main_admin', 'college_admin', 'student'])
 const protectedRegistrationField = /(password|token|secret|credential|auth|otp|hash)/i
@@ -1270,6 +1291,207 @@ router.post('/activate', async (req, res, next) => {
       return res.status(400).json({ message: 'The activation link is invalid, expired, or already used.' })
     }
     return res.json({ message: 'Your account is active. You can now log in.' })
+  } catch (error) {
+    return next(error)
+  }
+})
+
+router.post('/forgot-password', async (req, res, next) => {
+  try {
+    const { email } = req.body ?? {}
+    if (typeof email !== 'string' || !email.trim()) {
+      return res.status(400).json({ message: 'Enter your registered email address.' })
+    }
+    const normalizedEmail = email.trim().toLowerCase()
+    if (!emailPattern.test(normalizedEmail) || normalizedEmail.length > 254) {
+      return res.status(400).json({ message: 'Enter a valid email address.' })
+    }
+
+    const clientIp = req.ip || req.socket?.remoteAddress || 'unknown'
+    const ipLimit = checkPasswordResetRateLimit(`ip:${clientIp}`)
+    const emailLimit = checkPasswordResetRateLimit(`email:${normalizedEmail}`)
+    if (!ipLimit.allowed || !emailLimit.allowed) {
+      const retryAfter = Math.max(ipLimit.retryAfterSeconds || 0, emailLimit.retryAfterSeconds || 0) || 60
+      res.set('Retry-After', String(retryAfter))
+      return res.status(429).json({
+        message: 'Too many password reset requests. Please wait a few minutes before trying again.',
+        retryAfterSeconds: retryAfter,
+      })
+    }
+
+    const genericSuccessResponse = {
+      message: "If an account with that email address exists, we've sent password reset instructions to your inbox.",
+    }
+
+    let identity = await AccountIdentity.findOne({ email: normalizedEmail }).lean()
+    let accountCollection = identity?.accountCollection
+    let accountId = identity?.accountId
+    let user = null
+
+    if (identity && accountCollection && accountId) {
+      const AccountModel = accountModelsByCollection[accountCollection]
+      if (AccountModel) {
+        user = await AccountModel.findById(accountId).lean()
+      }
+    } else {
+      for (const [colName, Model] of Object.entries(accountModelsByCollection)) {
+        const found = await Model.findOne({ email: normalizedEmail }).lean()
+        if (found) {
+          accountCollection = colName
+          accountId = found._id
+          user = found
+          break
+        }
+      }
+    }
+
+    if (!user || user.isActive === false) {
+      return res.json(genericSuccessResponse)
+    }
+
+    await PasswordResetToken.updateMany(
+      { accountId: user._id, usedAt: null },
+      { $set: { usedAt: new Date() } },
+    )
+
+    const rawToken = randomBytes(32).toString('hex')
+    const tokenHash = createHash('sha256').update(rawToken).digest('hex')
+    const expiresInMinutes = 15
+    const expiresAt = new Date(Date.now() + expiresInMinutes * 60 * 1000)
+    const cleanupAt = new Date(Date.now() + 24 * 60 * 60 * 1000)
+
+    await PasswordResetToken.create({
+      email: normalizedEmail,
+      accountId: user._id,
+      accountCollection,
+      tokenHash,
+      expiresAt,
+      cleanupAt,
+    })
+
+    const clientOrigin = requireClientOrigin()
+    const resetUrl = `${clientOrigin}/reset-password?token=${encodeURIComponent(rawToken)}`
+
+    try {
+      await sendPasswordResetEmail({
+        to: normalizedEmail,
+        fullName: user.fullName || user.username || '',
+        resetUrl,
+        expiresInMinutes,
+      })
+    } catch (mailError) {
+      logEmailDeliveryFailure({
+        event: 'password_reset_email_failed',
+        accountId: user._id,
+        error: mailError,
+      })
+    }
+
+    return res.json(genericSuccessResponse)
+  } catch (error) {
+    return next(error)
+  }
+})
+
+router.get('/reset-password/validate', async (req, res, next) => {
+  try {
+    const token = typeof req.query?.token === 'string' ? req.query.token.trim() : ''
+    if (!token) {
+      return res.status(400).json({ valid: false, message: 'Password reset token is missing.' })
+    }
+
+    const tokenHash = createHash('sha256').update(token).digest('hex')
+    const tokenRecord = await PasswordResetToken.findOne({ tokenHash }).lean()
+
+    if (!tokenRecord) {
+      return res.status(400).json({ valid: false, message: 'This password reset link is invalid. Please request a new one.' })
+    }
+
+    if (tokenRecord.usedAt) {
+      return res.status(400).json({ valid: false, message: 'This password reset link has already been used. Please request a new one.' })
+    }
+
+    if (new Date(tokenRecord.expiresAt) < new Date()) {
+      return res.status(400).json({ valid: false, message: 'This password reset link has expired. Please request a new one.' })
+    }
+
+    const AccountModel = accountModelsByCollection[tokenRecord.accountCollection]
+    if (!AccountModel) {
+      return res.status(400).json({ valid: false, message: 'The account associated with this link is not available.' })
+    }
+
+    const userExists = await AccountModel.exists({ _id: tokenRecord.accountId })
+    if (!userExists) {
+      return res.status(400).json({ valid: false, message: 'The account associated with this reset link no longer exists.' })
+    }
+
+    return res.json({ valid: true, message: 'Token is valid.' })
+  } catch (error) {
+    return next(error)
+  }
+})
+
+router.post('/reset-password', async (req, res, next) => {
+  try {
+    const { token, password, confirmPassword } = req.body ?? {}
+    if (typeof token !== 'string' || !token.trim()) {
+      return res.status(400).json({ message: 'Password reset token is required.' })
+    }
+    if (typeof password !== 'string' || !password) {
+      return res.status(400).json({ message: 'Enter your new password.' })
+    }
+    if (password.length < 8) {
+      return res.status(400).json({ message: 'Password must be at least 8 characters long.' })
+    }
+    if (password.length > 72) {
+      return res.status(400).json({ message: 'Password cannot exceed 72 characters.' })
+    }
+    if (password !== confirmPassword) {
+      return res.status(400).json({ message: 'Your passwords do not match.' })
+    }
+
+    const tokenHash = createHash('sha256').update(token.trim()).digest('hex')
+    const tokenRecord = await PasswordResetToken.findOne({ tokenHash })
+
+    if (!tokenRecord) {
+      return res.status(400).json({ message: 'This password reset link is invalid. Please request a new reset link.' })
+    }
+
+    if (tokenRecord.usedAt) {
+      return res.status(400).json({ message: 'This password reset link has already been used. Please request a new reset link.' })
+    }
+
+    if (tokenRecord.expiresAt < new Date()) {
+      return res.status(400).json({ message: 'This password reset link has expired. Please request a new reset link.' })
+    }
+
+    const AccountModel = accountModelsByCollection[tokenRecord.accountCollection]
+    if (!AccountModel) {
+      return res.status(400).json({ message: 'Account type not supported.' })
+    }
+
+    const user = await AccountModel.findById(tokenRecord.accountId)
+    if (!user) {
+      return res.status(404).json({ message: 'Account not found.' })
+    }
+
+    const passwordHash = await bcrypt.hash(password, 12)
+    user.passwordHash = passwordHash
+    await user.save()
+
+    tokenRecord.usedAt = new Date()
+    await tokenRecord.save()
+
+    await PasswordResetToken.updateMany(
+      { accountId: user._id, usedAt: null },
+      { $set: { usedAt: new Date() } },
+    )
+
+    await RefreshSession.deleteMany({ userId: user._id }).catch(() => {})
+
+    return res.json({
+      message: 'Your password has been successfully reset. You can now log in with your new password.',
+    })
   } catch (error) {
     return next(error)
   }

@@ -14,6 +14,7 @@ import settingsRouter from './routes/settings.js'
 import referralsRouter from './routes/referrals.js'
 import notificationsRouter from './routes/notifications.js'
 import certificatesRouter from './routes/certificates.js'
+import studentProfileRouter from './routes/student-profile.js'
 
 const app = express()
 export { app }
@@ -47,6 +48,7 @@ app.use('/api/settings', settingsRouter)
 app.use('/api/referrals', referralsRouter)
 app.use('/api/notifications', notificationsRouter)
 app.use('/api/certificates', certificatesRouter)
+app.use('/api/student/profile', studentProfileRouter)
 app.use('/api', (req, res) => {
   res.status(404).json({ message: 'API route not found.' })
 })

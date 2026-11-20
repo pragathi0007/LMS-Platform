@@ -13,6 +13,11 @@ const accountFields = {
   },
   isActive: { type: Boolean, default: true },
   permissions: { type: [String], default: [] },
+  phone: { type: String, trim: true, maxlength: 40, default: '' },
+  avatarUrl: { type: String, trim: true, maxlength: 1000, default: '' },
+  headline: { type: String, trim: true, maxlength: 160, default: '' },
+  bio: { type: String, trim: true, maxlength: 2000, default: '' },
+  location: { type: String, trim: true, maxlength: 120, default: '' },
 }
 
 function createAccountModel(modelName, collectionName, role, additionalFields = {}) {

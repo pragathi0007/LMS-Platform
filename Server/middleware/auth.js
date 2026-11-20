@@ -14,7 +14,13 @@ const allowedRoles = new Set(['main_admin', 'college_admin', 'student'])
 
 export async function authenticate(req, res, next) {
   const authorization = req.get('authorization')
-  const [scheme, token, ...extra] = authorization?.trim().split(/\s+/) ?? []
+  let [scheme, token, ...extra] = authorization?.trim().split(/\s+/) ?? []
+
+  if ((!token || scheme !== 'Bearer') && typeof req.query?.token === 'string' && req.query.token.trim()) {
+    scheme = 'Bearer'
+    token = req.query.token.trim()
+    extra = []
+  }
 
   if (scheme !== 'Bearer' || !token || extra.length) {
     return res.status(401).json({ message: 'A valid access token is required.' })

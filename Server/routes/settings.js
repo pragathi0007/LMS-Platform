@@ -9,6 +9,20 @@ import AccountIdentity from '../models/AccountIdentity.js'
 import SupportTicket from '../models/SupportTicket.js'
 import { accountModelsByCollection, roleForAccountCollection } from '../models/account-models.js'
 import College from '../models/College.js'
+import Enrollment from '../models/Enrollment.js'
+import AssignmentSubmission from '../models/AssignmentSubmission.js'
+import QuizAttempt from '../models/QuizAttempt.js'
+import QuizAttemptState from '../models/QuizAttemptState.js'
+import Certificate from '../models/Certificate.js'
+import Notification from '../models/Notification.js'
+import VideoAttentionResponse from '../models/VideoAttentionResponse.js'
+import RefreshSession from '../models/RefreshSession.js'
+import StudentProfile from '../models/StudentProfile.js'
+import ReferralCode from '../models/ReferralCode.js'
+import ReferralCodeUserLimit from '../models/ReferralCodeUserLimit.js'
+import ReferralCodeDailyLimit from '../models/ReferralCodeDailyLimit.js'
+import Feedback from '../models/Feedback.js'
+import Complaint from '../models/Complaint.js'
 import { authenticate } from '../middleware/auth.js'
 import { config } from '../config/env.js'
 import { findTakenEmails, findTakenUsernames } from '../utils/account-identity-availability.js'
@@ -68,6 +82,8 @@ function serializeSettings(user, identity) {
     accountType: getAccountType(user),
     studentId: user.studentType === 'college' ? user.studentId || '' : null,
     collegeName: null,
+    department: user.department || null,
+    batch: user.batch || null,
     googleConnected: Boolean(identity?.googleSub),
     googleEmail: identity?.googleSub ? identity.googleEmail || user.email : null,
     hasPassword: Boolean(user.passwordHash),
@@ -75,6 +91,9 @@ function serializeSettings(user, identity) {
     twoFactorEnabledAt: user.role === 'student' ? user.twoFactorEnabledAt || null : null,
     phone: user.phone || '',
     avatarUrl: user.avatarUrl || '',
+    headline: user.headline || '',
+    bio: user.bio || '',
+    location: user.location || '',
   }
 }
 
@@ -296,9 +315,9 @@ router.patch('/profile', async (req, res, next) => {
     if (!body || typeof body !== 'object' || Array.isArray(body)) {
       return res.status(400).json({ message: 'Enter valid account details.' })
     }
-    const allowedFields = new Set(['fullName', 'username', 'phone', 'avatarUrl'])
+    const allowedFields = new Set(['fullName', 'username', 'phone', 'avatarUrl', 'headline', 'bio', 'location'])
     if (Object.keys(body).some((field) => !allowedFields.has(field))) {
-      return res.status(400).json({ message: 'Only your display name, username, phone, and avatar can be changed here.' })
+      return res.status(400).json({ message: 'Only permitted profile details can be changed here.' })
     }
 
     const updates = {}
@@ -307,6 +326,24 @@ router.patch('/profile', async (req, res, next) => {
         return res.status(400).json({ message: 'Display name must be between 2 and 120 characters.' })
       }
       updates.fullName = body.fullName.trim()
+    }
+    if (Object.hasOwn(body, 'headline')) {
+      if (typeof body.headline !== 'string' || body.headline.trim().length > 160) {
+        return res.status(400).json({ message: 'Headline cannot exceed 160 characters.' })
+      }
+      updates.headline = body.headline.trim()
+    }
+    if (Object.hasOwn(body, 'bio')) {
+      if (typeof body.bio !== 'string' || body.bio.trim().length > 2000) {
+        return res.status(400).json({ message: 'Bio cannot exceed 2000 characters.' })
+      }
+      updates.bio = body.bio.trim()
+    }
+    if (Object.hasOwn(body, 'location')) {
+      if (typeof body.location !== 'string' || body.location.trim().length > 120) {
+        return res.status(400).json({ message: 'Location cannot exceed 120 characters.' })
+      }
+      updates.location = body.location.trim()
     }
     if (Object.hasOwn(body, 'phone')) {
       if (typeof body.phone !== 'string' || body.phone.trim().length > 40) {
@@ -393,6 +430,9 @@ router.patch('/profile', async (req, res, next) => {
             if (updates.fullName) user.fullName = updates.fullName
             if (Object.hasOwn(updates, 'phone')) user.phone = updates.phone
             if (Object.hasOwn(updates, 'avatarUrl')) user.avatarUrl = updates.avatarUrl
+            if (Object.hasOwn(updates, 'headline')) user.headline = updates.headline
+            if (Object.hasOwn(updates, 'bio')) user.bio = updates.bio
+            if (Object.hasOwn(updates, 'location')) user.location = updates.location
             await user.save({ session })
             await identity.save({ session })
             updatedUser = user
@@ -808,5 +848,118 @@ router.get('/data-export', async (req, res, next) => {
     return next(error)
   }
 })
+
+export async function deleteStudentAccountData(AccountModel, accountId, session = null) {
+  const options = session ? { session } : {}
+  await AccountIdentity.deleteOne(
+    { accountCollection: AccountModel.collection.name, accountId },
+    options,
+  )
+  await RefreshSession.deleteMany({ userId: accountId }, options)
+  await Enrollment.deleteMany({ userId: accountId }, options)
+  await AssignmentSubmission.deleteMany({ userId: accountId }, options)
+  await QuizAttempt.deleteMany({ userId: accountId }, options)
+  await QuizAttemptState.deleteMany({ userId: accountId }, options)
+  await Certificate.deleteMany({ userId: accountId }, options)
+  await Notification.deleteMany({ recipientId: accountId }, options)
+  await VideoAttentionResponse.deleteMany({ userId: accountId }, options)
+  await StudentProfile.deleteOne({ userId: accountId }, options)
+  await Feedback.deleteMany({ userId: accountId }, options)
+  await SupportTicket.deleteMany({ userId: accountId }, options)
+  await Complaint.deleteMany({ userId: accountId }, options)
+  await ReferralCode.updateMany(
+    { usedBy: accountId },
+    {
+      $set: {
+        usedBy: null,
+        usedAt: null,
+        status: 'active',
+        registrationStatus: null,
+      },
+    },
+    options,
+  )
+  await ReferralCode.deleteMany({ generatedBy: accountId }, options)
+  await ReferralCodeUserLimit.deleteMany({ userId: accountId }, options)
+  await ReferralCodeDailyLimit.deleteMany({ userId: accountId }, options)
+  await AccountModel.deleteOne({ _id: accountId }, options)
+}
+
+async function handleAccountDeletion(req, res, next) {
+  try {
+    if (req.auth.role === 'main_admin') {
+      return res.status(403).json({ message: 'Platform administrator accounts cannot be deleted.' })
+    }
+    if (req.auth.role === 'college_admin') {
+      return res.status(403).json({ message: 'College administrator accounts cannot be deleted. Contact the platform administrator.' })
+    }
+    if (req.auth.role !== 'student') {
+      return res.status(403).json({ message: 'Only student accounts can be deleted through settings.' })
+    }
+
+    const AccountModel = getAccountModel(req, res)
+    if (!AccountModel) return
+
+    const { password, confirmText } = req.body ?? {}
+
+    if (typeof confirmText !== 'string' || confirmText.trim().toUpperCase() !== 'DELETE') {
+      return res.status(400).json({ message: 'Please type DELETE to confirm account deletion.' })
+    }
+
+    // Always identify the account using the authenticated user's ID
+    const user = await AccountModel.findById(req.auth.id).select('+passwordHash')
+    if (!user) {
+      return res.status(404).json({ message: 'Account could not be found.' })
+    }
+
+    if (user.passwordHash) {
+      if (typeof password !== 'string' || !password) {
+        return res.status(400).json({ message: 'Enter your password to confirm account deletion.' })
+      }
+      const isMatch = await bcrypt.compare(password, user.passwordHash)
+      if (!isMatch) {
+        return res.status(400).json({ message: 'The password you entered is incorrect.' })
+      }
+    }
+
+    const accountId = user._id
+
+    // Attempt deletion within a transaction if replica sets are configured, or fallback to direct deletion
+    let deletedSuccessfully = false
+    try {
+      const session = await mongoose.startSession()
+      try {
+        await session.withTransaction(async () => {
+          await deleteStudentAccountData(AccountModel, accountId, session)
+        })
+        deletedSuccessfully = true
+      } finally {
+        await session.endSession()
+      }
+    } catch (transactionError) {
+      const msg = String(transactionError?.message || '')
+      if (
+        msg.includes('replica set') ||
+        msg.includes('Transaction numbers are only allowed') ||
+        msg.includes('does not support transactions')
+      ) {
+        await deleteStudentAccountData(AccountModel, accountId, null)
+        deletedSuccessfully = true
+      } else {
+        throw transactionError
+      }
+    }
+
+    return res.json({
+      message: 'Your account and all associated learning records have been permanently deleted.',
+      deleted: true,
+    })
+  } catch (error) {
+    return next(error)
+  }
+}
+
+router.delete('/account', handleAccountDeletion)
+router.delete('/', handleAccountDeletion)
 
 export default router
