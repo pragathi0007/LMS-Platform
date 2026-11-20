@@ -2028,10 +2028,7 @@ async function fetchPublishedCourses(onLogout, signal) {
 
 function getCourseCounts(course) {
   const lessonCount = (course.modules || []).reduce((count, module) => {
-    const items = module.contentItems || []
-    return count + (items.length
-      ? items.filter((item) => item.type === 'video-lesson').length
-      : (module.lessons || []).length)
+    return count + getModuleVideoLessons(module).length
   }, 0)
   return { modules: course.modules?.length || 0, lessons: lessonCount }
 }
@@ -2061,9 +2058,11 @@ function getVideoCompletionDuration(video) {
 }
 
 function getCourseLessons(course) {
-  return (course?.modules || []).flatMap((module, moduleIndex) => {
-    const videoItems = (module.contentItems || []).filter((item) => item.type === 'video-lesson')
-    const lessons = videoItems.length ? videoItems : module.lessons || []
+  const modules = (course?.modules || [])
+    .map((module, index) => ({ module, index }))
+    .sort((left, right) => (left.module.order ?? left.index) - (right.module.order ?? right.index))
+  return modules.flatMap(({ module, index: moduleIndex }) => {
+    const lessons = getModuleVideoLessons(module)
     return lessons.map((lesson, lessonIndex) => ({
       module,
       lesson,
@@ -2071,6 +2070,15 @@ function getCourseLessons(course) {
       lessonKey: String(lesson._id || `${moduleIndex}-${lessonIndex}`),
     }))
   })
+}
+
+function getModuleVideoLessons(module) {
+  const contentItems = (module.contentItems || [])
+    .map((item, index) => ({ item, index }))
+    .filter(({ item }) => item.type === 'video-lesson')
+    .sort((left, right) => (left.item.order ?? left.index) - (right.item.order ?? right.index))
+    .map(({ item }) => item)
+  return contentItems.length ? contentItems : module.lessons || []
 }
 
 function createEmptyAttentionSession(lessonId = '') {
@@ -2126,15 +2134,29 @@ function getCourseProgress(enrollment) {
 
 function getModuleLearningItems(module, moduleIndex) {
   const moduleKey = String(module._id || `${module.title}-${moduleIndex}`)
-  const contentItems = module.contentItems?.length
+  const orderedContentItems = module.contentItems?.length
     ? module.contentItems
       .map((item, index) => ({ item, index }))
       .sort((left, right) => (left.item.order ?? left.index) - (right.item.order ?? right.index))
-      .map(({ item, index }) => ({
+    : []
+  const legacyVideoItems = orderedContentItems.length
+    && !orderedContentItems.some(({ item }) => item.type === 'video-lesson')
+    ? (module.lessons || []).map((lesson, index) => ({
+      ...lesson,
+      type: 'video-lesson',
+      _learningKey: String(lesson._id || `${moduleKey}-lesson-${index}`),
+      _moduleKey: moduleKey,
+    }))
+    : []
+  const contentItems = orderedContentItems.length
+    ? [
+      ...legacyVideoItems,
+      ...orderedContentItems.map(({ item, index }) => ({
         ...item,
         _learningKey: String(item._id || `${moduleKey}-item-${index}`),
         _moduleKey: moduleKey,
-      }))
+      })),
+    ]
     : (module.lessons || []).map((lesson, index) => ({
       ...lesson,
       type: 'video-lesson',
@@ -2966,8 +2988,12 @@ function StudentCourseLearning({
   const location = useLocation()
   const navigate = useNavigate()
   const course = enrollment.courseId
-  const lessons = getCourseLessons(course)
-  const moduleItems = (course.modules || []).map((module, index) => ({
+  const orderedCourseModules = (course.modules || [])
+    .map((module, index) => ({ module, index }))
+    .sort((left, right) => (left.module.order ?? left.index) - (right.module.order ?? right.index))
+  const orderedCourse = { ...course, modules: orderedCourseModules.map(({ module }) => module) }
+  const lessons = getCourseLessons(orderedCourse)
+  const moduleItems = orderedCourseModules.map(({ module, index }) => ({
     module,
     moduleKey: String(module._id || `${module.title}-${index}`),
     items: getModuleLearningItems(module, index),
@@ -2988,24 +3014,67 @@ function StudentCourseLearning({
     })),
   ]
   const allContentItems = [...moduleItems.flatMap(({ items }) => items), ...courseLevelItems]
-  const [activeLessonId, setActiveLessonId] = useState(() => (
-    lessons.some(({ lesson }) => String(lesson._id) === requestedLessonId)
-      ? requestedLessonId
-      : lessons[0]?.lessonKey || ''
+  const initialCompletedLessonIds = new Set((enrollment.completedLessonIds || []).map(String))
+  const initialQuizAttempts = enrollment.quizAttempts || []
+  const initialAssignmentSubmissions = enrollment.assignmentSubmissions || []
+  const activityItems = allContentItems.filter((item) => (
+    ['video-lesson', 'quiz', 'assignment'].includes(item.type)
   ))
-  const [activeContentItemId, setActiveContentItemId] = useState(() => {
-    if (!requestedActivityId || !['quiz', 'assignment'].includes(requestedActivityType)) return ''
-    return allContentItems.find((item) => (
+  const isInitiallyCompleted = (item) => {
+    if (item.type === 'video-lesson') {
+      return initialCompletedLessonIds.has(String(item._id || item._learningKey))
+    }
+    if (item.type === 'quiz') {
+      const quizId = String(item.quiz?._id || item._learningKey)
+      return initialQuizAttempts.some((attempt) => (
+        String(attempt.quizId) === quizId && attempt.status === 'submitted' && attempt.passed === true
+      ))
+    }
+    const assignmentId = String(item._id || item._learningKey)
+    const latestSubmission = initialAssignmentSubmissions
+      .filter((submission) => String(submission.assignmentId) === assignmentId)
+      .sort((left, right) => (
+        new Date(right.submittedAt || 0).getTime() - new Date(left.submittedAt || 0).getTime()
+      ))[0]
+    return latestSubmission?.reviewStatus === 'approved'
+  }
+  const initialFrontierIndex = activityItems.findIndex((item) => !isInitiallyCompleted(item))
+  const requestedActivityItem = requestedActivityId && ['quiz', 'assignment'].includes(requestedActivityType)
+    ? allContentItems.find((item) => (
       item.type === requestedActivityType
       && String(item.type === 'quiz' ? item.quiz?._id || item._learningKey : item._learningKey) === requestedActivityId
-    ))?._learningKey || ''
-  })
+    ))
+    : null
+  const requestedLessonItem = requestedLessonId
+    ? activityItems.find((item) => item.type === 'video-lesson' && String(item._id || item._learningKey) === requestedLessonId)
+    : null
+  const requestedInitialItem = requestedActivityItem || requestedLessonItem
+  const requestedInitialIndex = activityItems.indexOf(requestedInitialItem)
+  const requestedInitialAccessible = requestedInitialItem && (
+    isInitiallyCompleted(requestedInitialItem)
+    || initialFrontierIndex < 0
+    || requestedInitialIndex <= initialFrontierIndex
+  )
+  const initialActivity = requestedInitialAccessible
+    ? requestedInitialItem
+    : activityItems[initialFrontierIndex] || activityItems[0]
+  const initialLessonId = initialActivity?.type === 'video-lesson'
+    ? String(initialActivity._id || initialActivity._learningKey)
+    : lessons[0]?.lessonKey || ''
+  const [activeLessonId, setActiveLessonId] = useState(initialLessonId)
+  const [activeContentItemId, setActiveContentItemId] = useState(
+    initialActivity?.type && initialActivity.type !== 'video-lesson'
+      ? initialActivity._learningKey
+      : '',
+  )
   const [detailsTab, setDetailsTab] = useState('overview')
   const [lessonInfoTab, setLessonInfoTab] = useState('overview')
   const [videoOpenSequence, setVideoOpenSequence] = useState(0)
   const [transcriptPlayback, setTranscriptPlayback] = useState({ lessonKey: '', cueIndex: -1 })
   const [expandedModules, setExpandedModules] = useState(() => new Set(
-    course.modules?.length ? [String(course.modules[0]._id || `${course.modules[0].title}-0`)] : [],
+    orderedCourseModules.length
+      ? [String(orderedCourseModules[0].module._id || `${orderedCourseModules[0].module.title}-0`)]
+      : [],
   ))
   const [savingLessonId, setSavingLessonId] = useState('')
   const [optimisticallyCompletedLessonIds, setOptimisticallyCompletedLessonIds] = useState(() => new Set())
@@ -3024,12 +3093,23 @@ function StudentCourseLearning({
   const [courseCertificatePdfRetry, setCourseCertificatePdfRetry] = useState(0)
   const courseCertificatePdfUrlRef = useRef('')
   const videoPlayerRef = useRef(null)
+  const videoPlayerContainerRef = useRef(null)
+  const videoControlsHideTimeoutRef = useRef(null)
+  const [isVideoPlayerFullscreen, setIsVideoPlayerFullscreen] = useState(false)
+  const [videoPlayerFullscreenError, setVideoPlayerFullscreenError] = useState('')
+  const [isVideoMuted, setIsVideoMuted] = useState(false)
+  const [areVideoControlsVisible, setAreVideoControlsVisible] = useState(false)
+  const [areVideoControlsKeyboardFocused, setAreVideoControlsKeyboardFocused] = useState(false)
   const transcriptCueListRef = useRef(null)
   const transcriptCueRefs = useRef([])
   const transcriptScriptRef = useRef(null)
   const transcriptScriptCueRefs = useRef([])
   const assignmentStatusRefreshRef = useRef(false)
   const lessonPlaybackPositionsRef = useRef({ ...(enrollment.lessonPlaybackPositions || {}) })
+  const lessonWatchedPositionsRef = useRef({
+    ...(enrollment.lessonPlaybackPositions || {}),
+    ...(enrollment.lessonWatchedPositions || {}),
+  })
   const playbackPositionSaveRef = useRef(new Map())
   const learningActivitySampleRef = useRef({ lessonId: '', positionSeconds: 0, sampledAt: 0 })
   const learningActivityPendingRef = useRef(new Map())
@@ -3077,6 +3157,29 @@ function StudentCourseLearning({
     && attempt.status === 'submitted'
     && attempt.passed === true
   ))
+  const isActivityComplete = (item) => {
+    if (item.type === 'video-lesson') {
+      return (enrollment.completedLessonIds || []).some((id) => (
+        String(id) === String(item._id || item._learningKey)
+      ))
+    }
+    if (item.type === 'quiz') return hasPassedQuiz(item.quiz?._id || item._learningKey)
+    if (item.type === 'assignment') {
+      return assignmentSubmissions.some((submission) => (
+        String(submission.assignmentId) === String(item._id || item._learningKey)
+      ))
+    }
+    return false
+  }
+  const nextIncompleteActivity = activityItems.find((item) => !isActivityComplete(item)) || null
+  const nextIncompleteActivityIndex = nextIncompleteActivity ? activityItems.indexOf(nextIncompleteActivity) : -1
+  const isCourseItemAccessible = (item) => {
+    if (!item || !['video-lesson', 'quiz', 'assignment'].includes(item.type)) return true
+    const itemIndex = activityItems.indexOf(item)
+    return isActivityComplete(item)
+      || nextIncompleteActivityIndex < 0
+      || (itemIndex >= 0 && itemIndex <= nextIncompleteActivityIndex)
+  }
   const filteredModuleItems = moduleItems.map((group) => ({
     ...group,
     items: group.items.filter((item) => (
@@ -3112,6 +3215,21 @@ function StudentCourseLearning({
   useEffect(() => {
     setQuizAttempts(enrollment.quizAttempts || [])
   }, [enrollment.quizAttempts])
+
+  useEffect(() => {
+    lessonPlaybackPositionsRef.current = {
+      ...lessonPlaybackPositionsRef.current,
+      ...(enrollment.lessonPlaybackPositions || {}),
+    }
+    lessonWatchedPositionsRef.current = {
+      ...lessonWatchedPositionsRef.current,
+      ...(enrollment.lessonWatchedPositions || {}),
+    }
+  }, [enrollment.lessonPlaybackPositions, enrollment.lessonWatchedPositions])
+
+  useEffect(() => {
+    setProgressError('')
+  }, [enrollment.courseId])
 
   useEffect(() => {
     if (activeTranscriptCueIndex < 0) return
@@ -3520,6 +3638,63 @@ function StudentCourseLearning({
   }
 
   useEffect(() => {
+    const updateFullscreenState = () => {
+      setIsVideoPlayerFullscreen(document.fullscreenElement === videoPlayerContainerRef.current)
+    }
+    document.addEventListener('fullscreenchange', updateFullscreenState)
+    return () => document.removeEventListener('fullscreenchange', updateFullscreenState)
+  }, [])
+
+  useEffect(() => () => {
+    if (videoControlsHideTimeoutRef.current !== null) {
+      window.clearTimeout(videoControlsHideTimeoutRef.current)
+    }
+  }, [])
+
+  function revealVideoControls() {
+    setAreVideoControlsVisible(true)
+    if (videoControlsHideTimeoutRef.current !== null) {
+      window.clearTimeout(videoControlsHideTimeoutRef.current)
+    }
+    videoControlsHideTimeoutRef.current = window.setTimeout(() => {
+      videoControlsHideTimeoutRef.current = null
+      setAreVideoControlsVisible(false)
+    }, 2000)
+  }
+
+  function hideVideoControls() {
+    if (videoControlsHideTimeoutRef.current !== null) {
+      window.clearTimeout(videoControlsHideTimeoutRef.current)
+      videoControlsHideTimeoutRef.current = null
+    }
+    setAreVideoControlsVisible(false)
+  }
+
+  async function toggleVideoPlayerFullscreen() {
+    const player = videoPlayerContainerRef.current
+    if (!player) return
+    setVideoPlayerFullscreenError('')
+    try {
+      if (document.fullscreenElement === player) {
+        await document.exitFullscreen()
+      } else if (typeof player.requestFullscreen === 'function') {
+        await player.requestFullscreen()
+      } else {
+        setVideoPlayerFullscreenError('Fullscreen mode is not supported by this browser.')
+      }
+    } catch {
+      setVideoPlayerFullscreenError('Fullscreen mode could not be changed. Please try again.')
+    }
+  }
+
+  function toggleVideoMute() {
+    const video = videoPlayerRef.current
+    if (!video) return
+    video.muted = !video.muted
+    setIsVideoMuted(video.muted)
+  }
+
+  useEffect(() => {
     if (!attentionCheckChallenge) {
       setAttentionCheckSecondsRemaining(10)
       return undefined
@@ -3569,12 +3744,17 @@ function StudentCourseLearning({
     setAttentionCheckConfigurationError('')
     setAttentionCheckPlaybackError('')
     setAttentionCheckRetry(null)
+    setVideoPlayerFullscreenError('')
     setAutoplayBlockedLessonId('')
   }, [activeLessonId])
 
   useEffect(() => {
     const matchedLesson = lessons.find(({ lesson }) => String(lesson._id) === requestedLessonId)
-    if (matchedLesson) {
+    const matchedActivity = activityItems.find((item) => (
+      item.type === 'video-lesson'
+      && String(item._id || item._learningKey) === requestedLessonId
+    ))
+    if (matchedLesson && matchedActivity && isCourseItemAccessible(matchedActivity)) {
       setActiveLessonId(String(matchedLesson.lesson._id))
       setExpandedModules((current) => new Set(current).add(matchedLesson.moduleKey))
     } else if (lessons.length && !lessons.some(({ lesson, lessonKey }) => String(lesson._id || lessonKey) === activeLessonId)) {
@@ -3588,7 +3768,7 @@ function StudentCourseLearning({
       entry.type === requestedActivityType
       && String(entry.type === 'quiz' ? entry.quiz?._id || entry._learningKey : entry._learningKey) === requestedActivityId
     ))
-    if (!item) return
+    if (!item || !isCourseItemAccessible(item)) return
     videoPlayerRef.current?.pause()
     setActiveContentItemId(item._learningKey)
     setDetailsTab('overview')
@@ -3598,12 +3778,24 @@ function StudentCourseLearning({
   }, [requestedActivityId, requestedActivityType, course._id])
 
   useEffect(() => {
-    if (activeEntry && !activeContentItemId) void setLessonStarted(activeEntry)
+    if (!activeEntry || activeContentItemId) return
+    const item = activityItems.find((activity) => (
+      activity.type === 'video-lesson'
+      && String(activity._id || activity._learningKey) === String(activeEntry.lesson._id || activeEntry.lessonKey)
+    ))
+    if (item && isCourseItemAccessible(item)) void setLessonStarted(activeEntry)
   }, [activeLessonId, activeContentItemId, enrollment._id])
 
   function selectLesson(entry) {
     if (attentionCheckChallenge || attentionCheckLoading || attentionSessionRef.current.blocked) return
     const id = String(entry.lesson._id || entry.lessonKey)
+    const activityItem = activityItems.find((item) => (
+      item.type === 'video-lesson' && String(item._id || item._learningKey) === id
+    ))
+    if (!activityItem || !isCourseItemAccessible(activityItem)) return
+    if (entry.lesson._progressionLocked) {
+      window.dispatchEvent(new Event(STUDENT_LEARNING_PROGRESS_UPDATED_EVENT))
+    }
     if (videoPlayerRef.current && activeEntry) {
       recordLearningActivity(activeEntry, videoPlayerRef.current, true)
       saveLessonPlaybackPosition(activeEntry, videoPlayerRef.current.currentTime, true)
@@ -3624,10 +3816,14 @@ function StudentCourseLearning({
 
   function selectContentItem(item) {
     if (attentionCheckChallenge || attentionCheckLoading || attentionSessionRef.current.blocked) return
+    if (!isCourseItemAccessible(item)) return
     if (item.type === 'video-lesson') {
       const lesson = lessons.find((entry) => String(entry.lesson._id || entry.lessonKey) === item._learningKey)
       if (lesson) selectLesson(lesson)
       return
+    }
+    if (item._progressionLocked) {
+      window.dispatchEvent(new Event(STUDENT_LEARNING_PROGRESS_UPDATED_EVENT))
     }
     endCurrentAttentionCheckSession()
     videoPlayerRef.current?.pause()
@@ -3686,11 +3882,14 @@ function StudentCourseLearning({
     return 'Assignment'
   }
 
-  function saveLessonPlaybackPosition(entry, positionSeconds, force = false) {
+  function saveLessonPlaybackPosition(entry, positionSeconds, force = false, isPlayingOverride) {
     const lessonId = String(entry?.lesson?._id || '')
     if (!isValidLessonId(lessonId) || !Number.isFinite(positionSeconds) || positionSeconds < 0) return
 
     const position = Math.min(43200, Math.floor(positionSeconds))
+    const isPlaying = typeof isPlayingOverride === 'boolean'
+      ? isPlayingOverride
+      : videoPlayerRef.current?.paused === false
     let saveState = playbackPositionSaveRef.current.get(lessonId)
     if (!saveState) {
       const savedPosition = Number(lessonPlaybackPositionsRef.current[lessonId])
@@ -3702,7 +3901,7 @@ function StudentCourseLearning({
       playbackPositionSaveRef.current.set(lessonId, saveState)
     }
     if (saveState.inFlight) {
-      if (force) saveState.queuedPosition = position
+      if (force) saveState.queuedPosition = { position, isPlaying }
       return
     }
     if (!force && (
@@ -3725,12 +3924,15 @@ function StudentCourseLearning({
             Authorization: `Bearer ${auth.token}`,
             'Content-Type': 'application/json',
           },
-          body: JSON.stringify({ lessonId, positionSeconds: position }),
+          body: JSON.stringify({ lessonId, positionSeconds: position, isPlaying }),
         }, API_BASE_URL, auth.token)
         const result = await response.json()
         if (isInvalidSessionResponse(response, result)) {
           onLogout()
           return
+        }
+        if (Number.isFinite(result.maxPositionSeconds)) {
+          lessonWatchedPositionsRef.current[lessonId] = result.maxPositionSeconds
         }
         if (!response.ok) throw new Error(result.message || 'Video playback position could not be saved.')
         saveState.lastSavedPosition = position
@@ -3738,18 +3940,39 @@ function StudentCourseLearning({
           ...lessonPlaybackPositionsRef.current,
           [lessonId]: position,
         }
-        onEnrollmentUpdated({ lessonPlaybackPositions: { ...lessonPlaybackPositionsRef.current } })
+        if (Number.isFinite(result.lessonWatchedPositions?.[lessonId])) {
+          lessonWatchedPositionsRef.current[lessonId] = result.lessonWatchedPositions[lessonId]
+        }
+        onEnrollmentUpdated({
+          lessonPlaybackPositions: { ...lessonPlaybackPositionsRef.current },
+          lessonWatchedPositions: { ...lessonWatchedPositionsRef.current },
+        })
       } catch (saveError) {
         setProgressError(saveError instanceof Error ? saveError.message : 'Video playback position could not be saved.')
       } finally {
         saveState.inFlight = false
         const queuedPosition = saveState.queuedPosition
         saveState.queuedPosition = null
-        if (queuedPosition !== null && queuedPosition !== saveState.lastSavedPosition) {
-          saveLessonPlaybackPosition(entry, queuedPosition, true)
+        if (queuedPosition && queuedPosition.position !== saveState.lastSavedPosition) {
+          saveLessonPlaybackPosition(entry, queuedPosition.position, true, queuedPosition.isPlaying)
         }
       }
     })()
+  }
+
+  function getWatchedPosition(lessonId) {
+    return Math.max(
+      Number(lessonWatchedPositionsRef.current[lessonId]) || 0,
+      Number(lessonPlaybackPositionsRef.current[lessonId]) || 0,
+    )
+  }
+
+  function updateWatchedPosition(entry, video) {
+    if (video.paused || video.seeking) return
+    const lessonId = String(entry?.lesson?._id || '')
+    const position = Number(video.currentTime)
+    if (!lessonId || !Number.isFinite(position) || position <= getWatchedPosition(lessonId)) return
+    lessonWatchedPositionsRef.current[lessonId] = position
   }
 
   function resetLearningActivitySample(entry, video) {
@@ -3845,7 +4068,17 @@ function StudentCourseLearning({
 
   function handleVideoMetadata(video, entry) {
     initializeAttentionCheckSession(video, entry)
-    video.currentTime = 0
+    const lessonId = String(entry?.lesson?._id || '')
+    const savedPosition = Number(lessonPlaybackPositionsRef.current[lessonId])
+    const duration = getVideoCompletionDuration(video)
+    const resumePosition = Number.isFinite(savedPosition) && savedPosition >= 0
+      ? Math.min(savedPosition, duration || savedPosition)
+      : 0
+    lessonWatchedPositionsRef.current[lessonId] = Math.max(
+      getWatchedPosition(lessonId),
+      resumePosition,
+    )
+    video.currentTime = resumePosition
     updateTranscriptPlaybackTime(video)
     setAutoplayBlockedLessonId('')
     const playback = video.play()
@@ -3931,8 +4164,9 @@ function StudentCourseLearning({
           lessonId,
           completed,
           ...(completed ? {
-            positionSeconds: videoDuration,
+            positionSeconds,
             videoDurationSeconds: videoDuration,
+            isPlaying: false,
           } : {}),
         }),
       }, API_BASE_URL, auth.token)
@@ -3946,12 +4180,19 @@ function StudentCourseLearning({
       if (completed && !savedCompletedLessonIds.includes(lessonId)) {
         throw new Error('The server did not confirm this lesson completion.')
       }
+      if (result.lessonPlaybackPositions) {
+        lessonPlaybackPositionsRef.current = result.lessonPlaybackPositions
+      }
+      if (result.lessonWatchedPositions) {
+        lessonWatchedPositionsRef.current = result.lessonWatchedPositions
+      }
       onEnrollmentUpdated({
         ...enrollment,
         status: result.status || enrollment.status,
         courseProgress: result.courseProgress || enrollment.courseProgress,
         completedLessonIds: savedCompletedLessonIds,
         lessonPlaybackPositions: { ...lessonPlaybackPositionsRef.current },
+        lessonWatchedPositions: { ...lessonWatchedPositionsRef.current },
       })
       if (completed) {
         setOptimisticallyCompletedLessonIds((current) => {
@@ -3965,6 +4206,13 @@ function StudentCourseLearning({
       onLearningDataChanged()
     } catch (saveError) {
       const message = saveError instanceof Error ? saveError.message : 'Lesson progress could not be saved.'
+      if (completed) {
+        setOptimisticallyCompletedLessonIds((current) => {
+          const next = new Set(current)
+          next.delete(lessonId)
+          return next
+        })
+      }
       setProgressError(completed
         ? `Video finished, but completion could not be synced: ${message}`
         : message)
@@ -4066,7 +4314,7 @@ function StudentCourseLearning({
 
   function moveContent(offset) {
     const nextItem = allContentItems[activeContentIndex + offset]
-    if (nextItem) selectContentItem(nextItem)
+    if (nextItem && isCourseItemAccessible(nextItem)) selectContentItem(nextItem)
   }
 
   return (
@@ -4106,10 +4354,13 @@ function StudentCourseLearning({
                       const isCompleted = (item.type === 'video-lesson' && completedLessonIds.has(String(item._id)))
                         || quizPassed
                         || assignmentApproved
+                      const isLocked = !isCourseItemAccessible(item)
                       const quizAttemptCount = item.quiz?._id
                         ? quizAttempts.filter((attempt) => String(attempt.quizId) === String(item.quiz._id)).length
                         : 0
-                      const status = item.type === 'video-lesson'
+                      const status = isLocked
+                        ? 'Locked until previous activity is complete'
+                        : item.type === 'video-lesson'
                         ? isCompleted ? 'Completed' : item.durationSeconds ? `${Math.ceil(item.durationSeconds / 60)} min` : 'Video'
                         : item.type === 'quiz'
                           ? quizPassed ? 'Passed' : `${quizAttemptCount} ${quizAttemptCount === 1 ? 'attempt' : 'attempts'}`
@@ -4125,7 +4376,9 @@ function StudentCourseLearning({
                       const statusClassName = assignmentAwaitingReview
                         ? 'is-awaiting-review'
                         : assignmentRejected ? 'is-rejected' : ''
-                      const itemIcon = isCompleted
+                      const itemIcon = isLocked
+                        ? 'lock'
+                        : isCompleted
                         ? 'check'
                         : assignmentAwaitingReview
                           ? 'clock'
@@ -4140,6 +4393,7 @@ function StudentCourseLearning({
                             id={item._id ? `student-content-${item._id}` : undefined}
                             className={isSelected ? 'is-selected' : ''}
                             type="button"
+                            disabled={isLocked}
                             aria-current={isSelected ? 'true' : undefined}
                             onClick={() => selectContentItem(item)}
                           >
@@ -4168,6 +4422,7 @@ function StudentCourseLearning({
                   const assignmentAwaitingReview = assignmentReviewStatus === 'pending'
                   const assignmentRejected = assignmentReviewStatus === 'rejected'
                   const isCompleted = quizPassed || assignmentApproved
+                  const isLocked = !isCourseItemAccessible(item)
                   const itemIconClassName = [
                     'student-course-learning__item-icon',
                     isCompleted && 'is-complete',
@@ -4182,19 +4437,22 @@ function StudentCourseLearning({
                       <button
                         className={item._learningKey === activeContentItemId ? 'is-selected' : ''}
                         type="button"
+                        disabled={isLocked}
                         aria-current={item._learningKey === activeContentItemId ? 'true' : undefined}
                         onClick={() => selectContentItem(item)}
                       >
                         <span className={itemIconClassName}>
                           <Icon
-                            name={isCompleted ? 'check' : assignmentAwaitingReview ? 'clock' : assignmentRejected ? 'circleX' : 'clipboardCheck'}
+                            name={isLocked ? 'lock' : isCompleted ? 'check' : assignmentAwaitingReview ? 'clock' : assignmentRejected ? 'circleX' : 'clipboardCheck'}
                             size={15}
                           />
                         </span>
                         <span className="student-course-learning__item-copy">
                           <strong>{item.title}</strong>
                           <small className={statusClassName}>
-                            {item.type === 'assignment'
+                            {isLocked
+                              ? 'Locked until previous activity is complete'
+                              : item.type === 'assignment'
                               ? getAssignmentSidebarLabel(assignmentReviewStatus)
                               : quizPassed ? 'Passed' : getStudentContentLabel(item.type)}
                           </small>
@@ -4268,24 +4526,33 @@ function StudentCourseLearning({
               </div>
             )}
             {showVideoPlayer && (
-              <div className="student-course-learning__player">
+              <div
+                className="student-course-learning__player"
+                ref={videoPlayerContainerRef}
+                onPointerMove={revealVideoControls}
+                onPointerLeave={hideVideoControls}
+              >
                 {activeEntry?.lesson.videoUrl
                   ? <video
                     ref={videoPlayerRef}
                     key={`${String(activeEntry.lesson._id || activeEntry.lessonKey)}:${activeEntry.lesson.videoUrl}:${videoOpenSequence}`}
                     controls
+                    controlsList="nodownload noplaybackrate nofullscreen"
+                    disablePictureInPicture
                     playsInline
                     preload="metadata"
                     src={activeEntry.lesson.videoUrl}
                     onLoadedMetadata={(event) => {
                       handleVideoMetadata(event.currentTarget, activeEntry)
                       updateTranscriptPlaybackTime(event.currentTarget)
+                      setIsVideoMuted(event.currentTarget.muted)
                     }}
+                    onVolumeChange={(event) => setIsVideoMuted(event.currentTarget.muted)}
                     onPlaying={(event) => resetLearningActivitySample(activeEntry, event.currentTarget)}
                     onPlay={(event) => {
                       updateTranscriptPlaybackTime(event.currentTarget)
                       resetLearningActivitySample(activeEntry, event.currentTarget)
-                      saveLessonPlaybackPosition(activeEntry, event.currentTarget.currentTime, true)
+                      saveLessonPlaybackPosition(activeEntry, event.currentTarget.currentTime, true, true)
                       const settings = activeEntry.lesson.attentionCheck
                       if (settings?.enabled === true) {
                         initializeAttentionCheckSession(event.currentTarget)
@@ -4295,6 +4562,7 @@ function StudentCourseLearning({
                     onTimeUpdate={(event) => {
                       updateTranscriptPlaybackTime(event.currentTarget)
                       recordLearningActivity(activeEntry, event.currentTarget)
+                      updateWatchedPosition(activeEntry, event.currentTarget)
                       saveLessonPlaybackPosition(activeEntry, event.currentTarget.currentTime)
                       checkAttentionSchedule(event.currentTarget)
                     }}
@@ -4311,14 +4579,15 @@ function StudentCourseLearning({
                     onPause={(event) => {
                       updateTranscriptPlaybackTime(event.currentTarget)
                       recordLearningActivity(activeEntry, event.currentTarget, true)
-                      saveLessonPlaybackPosition(activeEntry, event.currentTarget.currentTime, true)
+                      saveLessonPlaybackPosition(activeEntry, event.currentTarget.currentTime, true, false)
                     }}
                     onEnded={(event) => {
                       recordLearningActivity(activeEntry, event.currentTarget, true)
                       endCurrentAttentionCheckSession()
                       const video = event.currentTarget
+                      updateWatchedPosition(activeEntry, video)
                       updateTranscriptPlaybackTime(video)
-                      saveLessonPlaybackPosition(activeEntry, video.currentTime, true)
+                      saveLessonPlaybackPosition(activeEntry, video.currentTime, true, false)
                       if (!completedLessonIds.has(String(activeEntry.lesson._id))) {
                         void setLessonCompleted(activeEntry, true, video)
                       }
@@ -4327,11 +4596,53 @@ function StudentCourseLearning({
                     Your browser does not support video playback.
                   </video>
                   : <div className="student-course-learning__no-video">No video has been uploaded for this lesson.</div>}
+                {activeEntry?.lesson.videoUrl && (
+                  <div
+                    className={`student-course-learning__custom-controls${areVideoControlsVisible ? ' is-visible' : ''}${areVideoControlsKeyboardFocused ? ' is-keyboard-focused' : ''}`}
+                    role="group"
+                    aria-label="Video controls"
+                    onFocus={(event) => setAreVideoControlsKeyboardFocused(event.target.matches(':focus-visible'))}
+                    onBlur={(event) => {
+                      if (!event.currentTarget.contains(event.relatedTarget)) {
+                        setAreVideoControlsKeyboardFocused(false)
+                      }
+                    }}
+                  >
+                    <button
+                      className="student-course-learning__volume-button"
+                      type="button"
+                      aria-label={isVideoMuted ? 'Unmute video' : 'Mute video'}
+                      aria-pressed={isVideoMuted}
+                      onClick={toggleVideoMute}
+                    >
+                      <svg viewBox="0 0 24 24" aria-hidden="true">
+                        <path d="M3 9v6h4l5 4V5L7 9H3z" />
+                        {isVideoMuted
+                          ? <path d="m16 9 5 6m0-6-5 6" />
+                          : <><path d="M16 9a5 5 0 0 1 0 6" /><path d="M18.5 6a9 9 0 0 1 0 12" /></>}
+                      </svg>
+                    </button>
+                    <button
+                      className="student-course-learning__fullscreen-button"
+                      type="button"
+                      aria-label={isVideoPlayerFullscreen ? 'Exit fullscreen' : 'Enter fullscreen'}
+                      title={isVideoPlayerFullscreen ? 'Exit fullscreen' : 'Fullscreen'}
+                      aria-pressed={isVideoPlayerFullscreen}
+                      onClick={() => void toggleVideoPlayerFullscreen()}
+                    >
+                      <svg viewBox="0 0 24 24" aria-hidden="true">
+                        {isVideoPlayerFullscreen
+                          ? <path d="M9 3v6H3M21 9h-6V3M15 21v-6h6M3 15h6v6" />
+                          : <path d="M3 9V3h6M15 3h6v6M21 15v6h-6M9 21H3v-6" />}
+                      </svg>
+                    </button>
+                  </div>
+                )}
                 {attentionCheckLoading && !attentionCheckChallenge && (
                   <div className="student-course-learning__attention-overlay" role="status">Loading attention check…</div>
                 )}
                 {attentionCheckChallenge && (
-                  <form className="student-course-learning__attention-overlay" onSubmit={submitAttentionAnswer} role="dialog" aria-modal="true" aria-labelledby="student-attention-question">
+                  <form className="student-course-learning__attention-overlay student-course-learning__attention-overlay--question" onSubmit={submitAttentionAnswer} role="dialog" aria-modal="true" aria-labelledby="student-attention-question">
                     <h3 id="student-attention-question">{attentionCheckChallenge.question.prompt}</h3>
                     <p role="timer" aria-live="off">Time remaining: {attentionCheckSecondsRemaining}s</p>
                     <div className="student-course-learning__attention-options">
@@ -4370,6 +4681,11 @@ function StudentCourseLearning({
                     )}
                   </div>
                 )}
+                {videoPlayerFullscreenError && (
+                  <div className="student-course-learning__fullscreen-error" role="alert">
+                    {videoPlayerFullscreenError}
+                  </div>
+                )}
               </div>
             )}
             {showVideoPlayer && attentionCheckConfigurationError && (
@@ -4392,29 +4708,35 @@ function StudentCourseLearning({
               </p>
             )}
             {showVideoPlayer && (
-              <div className="student-course-learning__video-nav">
-                <button type="button" disabled={activeContentIndex <= 0} onClick={() => moveContent(-1)}>← Previous</button>
-                <button type="button" disabled={activeContentIndex < 0 || activeContentIndex >= allContentItems.length - 1} onClick={() => moveContent(1)}>Next →</button>
-              </div>
-            )}
-            {showVideoPlayer && activeEntry && (
-              <div className="student-course-learning__video-completion">
-                <button
-                  className={`student-button${completedLessonIds.has(String(activeEntry.lesson._id)) ? ' student-button--quiet' : ''}`}
-                  type="button"
-                  disabled={
-                    savingLessonId === String(activeEntry.lesson._id)
-                    || !activeEntry.lesson._id
-                    || !completedLessonIds.has(String(activeEntry.lesson._id))
-                  }
-                  title={completedLessonIds.has(String(activeEntry.lesson._id))
-                    ? 'This lesson is complete.'
-                    : 'Watch the entire video to complete this lesson.'}
-                >
-                  {savingLessonId === String(activeEntry.lesson._id)
-                    ? 'Saving…'
-                    : completedLessonIds.has(String(activeEntry.lesson._id)) ? 'Completed' : 'Watch video to complete'}
-                </button>
+              <div className="student-course-learning__video-actions">
+                {activeEntry && (
+                  <div className="student-course-learning__video-completion">
+                    <button
+                      className={`student-button${completedLessonIds.has(String(activeEntry.lesson._id)) ? ' student-button--quiet' : ''}`}
+                      type="button"
+                      disabled={
+                        savingLessonId === String(activeEntry.lesson._id)
+                        || !activeEntry.lesson._id
+                        || !completedLessonIds.has(String(activeEntry.lesson._id))
+                      }
+                      title={completedLessonIds.has(String(activeEntry.lesson._id))
+                        ? 'This lesson is complete.'
+                        : 'Watch the entire video to complete this lesson.'}
+                    >
+                      {savingLessonId === String(activeEntry.lesson._id)
+                        ? 'Saving…'
+                        : completedLessonIds.has(String(activeEntry.lesson._id)) ? 'Completed' : 'Watch video to complete'}
+                    </button>
+                  </div>
+                )}
+                <div className="student-course-learning__video-nav">
+                  <button type="button" disabled={activeContentIndex <= 0} onClick={() => moveContent(-1)}>← Previous</button>
+                  <button
+                    type="button"
+                    disabled={activeContentIndex < 0 || activeContentIndex >= allContentItems.length - 1 || !isCourseItemAccessible(allContentItems[activeContentIndex + 1])}
+                    onClick={() => moveContent(1)}
+                  >Next →</button>
+                </div>
               </div>
             )}
             <section className="student-course-learning__details">
@@ -4432,7 +4754,11 @@ function StudentCourseLearning({
                 </div>
                 {!showVideoPlayer && detailsTab !== 'certificate' && !isActiveQuiz && <div className="student-course-learning__detail-nav">
                   <button type="button" disabled={activeContentIndex <= 0} onClick={() => moveContent(-1)}>← Previous</button>
-                  <button type="button" disabled={activeContentIndex < 0 || activeContentIndex >= allContentItems.length - 1} onClick={() => moveContent(1)}>Next →</button>
+                  <button
+                    type="button"
+                    disabled={activeContentIndex < 0 || activeContentIndex >= allContentItems.length - 1 || !isCourseItemAccessible(allContentItems[activeContentIndex + 1])}
+                    onClick={() => moveContent(1)}
+                  >Next →</button>
                 </div>}
               </div>}
               {detailsTab === 'overview' && !isActiveAssignment && (activeContentItem?.description || (!activeContentItem && activeEntry?.lesson.content)) && (
@@ -4617,7 +4943,11 @@ function StudentCourseLearning({
               {(isActiveAssignment || (isActiveQuiz && !hasActiveQuizAttempt)) && (
                 <div className={`student-course-learning__detail-nav student-course-learning__detail-nav--bottom${isActiveAssignment ? ' student-course-learning__detail-nav--assignment' : ''}`}>
                   <button type="button" disabled={activeContentIndex <= 0} onClick={() => moveContent(-1)}>← Previous</button>
-                  <button type="button" disabled={activeContentIndex < 0 || activeContentIndex >= allContentItems.length - 1} onClick={() => moveContent(1)}>Next →</button>
+                  <button
+                    type="button"
+                    disabled={activeContentIndex < 0 || activeContentIndex >= allContentItems.length - 1 || !isCourseItemAccessible(allContentItems[activeContentIndex + 1])}
+                    onClick={() => moveContent(1)}
+                  >Next →</button>
                 </div>
               )}
             </section>
@@ -4711,6 +5041,11 @@ function getReferralExpiryLabel(value) {
   return `Expires in ${hoursRemaining} ${hoursRemaining === 1 ? 'hour' : 'hours'}`
 }
 
+function isReferralCodeActive(code, now = Date.now()) {
+  const expiresAt = new Date(code?.expiresAt).getTime()
+  return code?.status === 'active' && Number.isFinite(expiresAt) && expiresAt > now
+}
+
 function getCachedStudentReferralData() {
   const cacheKey = getStudentCertificateCacheKey()
   const cached = cacheKey ? studentReferralCache.get(cacheKey) : null
@@ -4754,6 +5089,7 @@ function StudentReferrals({ onLogout }) {
   const [notice, setNotice] = useState('')
   const [copiedCode, setCopiedCode] = useState('')
   const [showAllCodes, setShowAllCodes] = useState(false)
+  const [expiryCheckTime, setExpiryCheckTime] = useState(() => Date.now())
   const pendingRequestId = useRef('')
 
   useEffect(() => {
@@ -4776,6 +5112,20 @@ function StudentReferrals({ onLogout }) {
       })
     return () => { active = false }
   }, [onLogout, loadAttempt])
+
+  useEffect(() => {
+    const nextExpiry = (referralData?.codes || [])
+      .filter((code) => code.status === 'active')
+      .map((code) => new Date(code.expiresAt).getTime())
+      .filter((expiresAt) => Number.isFinite(expiresAt) && expiresAt > Date.now())
+      .sort((left, right) => left - right)[0]
+    if (!nextExpiry) return undefined
+    const timeout = window.setTimeout(
+      () => setExpiryCheckTime(Date.now()),
+      Math.max(0, nextExpiry - Date.now()),
+    )
+    return () => window.clearTimeout(timeout)
+  }, [referralData, expiryCheckTime])
 
   async function generateReferralCode() {
     setGenerating(true)
@@ -4817,6 +5167,10 @@ function StudentReferrals({ onLogout }) {
   }
 
   async function copyReferralCode(code) {
+    if (!isReferralCodeActive(referralCodes.find((entry) => entry.code === code))) {
+      setError('This referral code is no longer active.')
+      return
+    }
     try {
       await navigator.clipboard.writeText(code)
       setCopiedCode(code)
@@ -4828,6 +5182,10 @@ function StudentReferrals({ onLogout }) {
   }
 
   async function shareReferralCode(code) {
+    if (!isReferralCodeActive(referralCodes.find((entry) => entry.code === code))) {
+      setError('This referral code is no longer active.')
+      return
+    }
     const url = new URL('/', window.location.origin)
     url.searchParams.set('mode', 'register')
     url.searchParams.set('referralCode', code)
@@ -4858,6 +5216,7 @@ function StudentReferrals({ onLogout }) {
   }
 
   const rawStats = referralData?.stats || {}
+  const referralCodes = referralData?.codes || []
   const totalLimit = Number.isSafeInteger(rawStats.totalLimit) && rawStats.totalLimit >= 0
     ? rawStats.totalLimit
     : 20
@@ -4874,8 +5233,19 @@ function StudentReferrals({ onLogout }) {
     successfullyUsed: Number.isSafeInteger(rawStats.successfullyUsed) && rawStats.successfullyUsed >= 0
       ? rawStats.successfullyUsed
       : 0,
-    active: Number.isSafeInteger(rawStats.active) && rawStats.active >= 0 ? rawStats.active : 0,
-    expired: Number.isSafeInteger(rawStats.expired) && rawStats.expired >= 0 ? rawStats.expired : 0,
+    active: referralData
+      ? referralCodes.filter((code) => isReferralCodeActive(code, expiryCheckTime)).length
+      : Number.isSafeInteger(rawStats.active) && rawStats.active >= 0
+        ? rawStats.active
+        : 0,
+    expired: referralData
+      ? referralCodes.filter((code) =>
+        code.status === 'expired' ||
+        (code.status === 'active' && !isReferralCodeActive(code, expiryCheckTime)),
+      ).length
+      : Number.isSafeInteger(rawStats.expired) && rawStats.expired >= 0
+        ? rawStats.expired
+        : 0,
   }
   const summary = [
     { label: 'Total codes generated', value: `${stats.totalGenerated}/${stats.totalLimit}`, tone: 'gold' },
@@ -4884,8 +5254,7 @@ function StudentReferrals({ onLogout }) {
     { label: 'Active codes', value: stats.active, tone: 'peach' },
     { label: 'Expired codes', value: stats.expired, tone: 'lavender' },
   ]
-  const referralCodes = referralData?.codes || []
-  const activeReferralCode = referralCodes.find((code) => code.status === 'active') || null
+  const activeReferralCode = referralCodes.find((code) => isReferralCodeActive(code, expiryCheckTime)) || null
   const visibleReferralCodes = showAllCodes ? referralCodes : referralCodes.slice(0, 3)
 
   return (
@@ -5043,9 +5412,13 @@ function StudentReferrals({ onLogout }) {
                     <td><strong className="student-referrals__history-code">{code.code}</strong></td>
                     <td>{formatReferralDate(code.createdAt)}</td>
                     <td>{formatReferralDate(code.expiresAt)}</td>
-                    <td><span className={`student-referral-card__status is-${code.status}`}>{code.status}</span></td>
                     <td>
-                      {code.status === 'active' ? (
+                      <span className={`student-referral-card__status is-${code.status === 'active' && !isReferralCodeActive(code, expiryCheckTime) ? 'expired' : code.status}`}>
+                        {code.status === 'active' && !isReferralCodeActive(code, expiryCheckTime) ? 'expired' : code.status}
+                      </span>
+                    </td>
+                    <td>
+                      {isReferralCodeActive(code, expiryCheckTime) ? (
                         <button
                           className="student-referrals__copy-row"
                           type="button"
@@ -5293,6 +5666,7 @@ function StudentCourseLearningPage({
   const [enrollment, setEnrollment] = useState(initialEnrollment)
   const [loading, setLoading] = useState(!initialEnrollment)
   const [error, setError] = useState('')
+  const courseContentRequestSequence = useRef(0)
   const location = useLocation()
   const searchParams = new URLSearchParams(location.search)
   const requestedLessonId = searchParams.get('lesson')
@@ -5305,13 +5679,14 @@ function StudentCourseLearningPage({
 
   useEffect(() => {
     let active = true
+    const requestSequence = ++courseContentRequestSequence.current
     const initialCourseEnrollment = getInitialStudentCourseLearningEnrollment(courseId)
     setEnrollment(initialCourseEnrollment)
     setLoading(!initialCourseEnrollment)
     setError('')
     fetchStudentPageCourseContent(courseId, onLogout)
       .then(({ enrollment: courseEnrollment, assignmentSubmissions, quizAttempts }) => {
-        if (!active) return
+        if (!active || requestSequence !== courseContentRequestSequence.current) return
         const cacheKey = getStudentCourseContentCacheKey(courseId)
         if (cacheKey) studentCourseLearningSeeds.delete(cacheKey)
         setEnrollment({
@@ -5321,33 +5696,44 @@ function StudentCourseLearningPage({
         })
       })
       .catch((loadError) => {
-        if (active) {
+        if (active && requestSequence === courseContentRequestSequence.current) {
           setError(loadError instanceof Error ? loadError.message : 'Your course could not be loaded.')
         }
       })
-      .finally(() => { if (active) setLoading(false) })
-    return () => { active = false }
+      .finally(() => {
+        if (active && requestSequence === courseContentRequestSequence.current) setLoading(false)
+      })
+    return () => {
+      active = false
+      if (requestSequence === courseContentRequestSequence.current) {
+        courseContentRequestSequence.current += 1
+      }
+    }
   }, [courseId, onLogout])
 
   useEffect(() => {
     let active = true
     async function refreshProgress() {
+      const requestSequence = ++courseContentRequestSequence.current
       const cacheKey = getStudentCourseContentCacheKey(courseId)
       if (cacheKey) studentCourseContentCache.delete(cacheKey)
       try {
         const content = await fetchStudentCourseContent(courseId, onLogout)
-        if (!active) return
+        if (!active || requestSequence !== courseContentRequestSequence.current) return
         const { enrollment: courseEnrollment, assignmentSubmissions, quizAttempts } = content
         if (cacheKey) studentCourseContentCache.set(cacheKey, { content, savedAt: Date.now() })
         setEnrollment({ ...courseEnrollment, assignmentSubmissions, quizAttempts })
         setError('')
       } catch (loadError) {
-        if (active) setError(loadError instanceof Error ? loadError.message : 'Your course could not be loaded.')
+        if (active && requestSequence === courseContentRequestSequence.current) {
+          setError(loadError instanceof Error ? loadError.message : 'Your course could not be loaded.')
+        }
       }
     }
     window.addEventListener(STUDENT_LEARNING_PROGRESS_UPDATED_EVENT, refreshProgress)
     return () => {
       active = false
+      courseContentRequestSequence.current += 1
       window.removeEventListener(STUDENT_LEARNING_PROGRESS_UPDATED_EVENT, refreshProgress)
     }
   }, [courseId, onLogout])
@@ -6146,6 +6532,7 @@ function StudentDashboard({
   function refreshLearningSummary() {
     invalidateStudentLearningPageCaches()
     setLearningSummaryRefresh((refresh) => refresh + 1)
+    window.dispatchEvent(new Event(STUDENT_LEARNING_PROGRESS_UPDATED_EVENT))
   }
 
   return (

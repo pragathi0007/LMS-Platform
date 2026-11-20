@@ -35,6 +35,10 @@ For a separate backend deployment, create another Vercel project with its root
 directory set to `Server`. `Server/vercel.json` routes the backend root and API
 requests to the function; `GET /` returns a JSON health response.
 
+For a separate frontend Vercel project, set its root directory to `client`.
+`client/vercel.json` forwards `/api/*` to the backend and rewrites frontend
+routes to `/index.html` for React Router navigation.
+
 Vercel serverless functions have request-size and execution limits. In
 particular, course media uploads may exceed Vercel's request-size limit and
 should be uploaded directly to a media provider or served from a separately

@@ -310,7 +310,20 @@ router.post('/registration/email/send', async (req, res, next) => {
     const now = new Date()
     let verification = await RegistrationEmailVerification.findOne({ email }).select('+hashedOtp')
     if (verification?.consumedAt) {
-      return res.status(409).json({ message: 'An account with this email already exists.' })
+      const currentTakenEmails = await findTakenEmails([email])
+      if (currentTakenEmails.has(email)) {
+        return res.status(409).json({ message: 'An account with this email already exists.' })
+      }
+
+      const staleVerification = await RegistrationEmailVerification.deleteOne({
+        _id: verification._id,
+        email,
+        consumedAt: verification.consumedAt,
+      })
+      if (staleVerification.deletedCount !== 1) {
+        return res.status(409).json({ message: 'An account with this email already exists.' })
+      }
+      verification = null
     }
     if (
       verification &&

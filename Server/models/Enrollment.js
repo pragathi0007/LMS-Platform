@@ -8,6 +8,15 @@ const dailyLearningActivitySchema = new mongoose.Schema(
   { _id: false },
 )
 
+const lessonPlaybackStateSchema = new mongoose.Schema(
+  {
+    watchedPositionSeconds: { type: Number, min: 0, max: 43200, default: 0 },
+    updatedAt: { type: Date },
+    isPlaying: { type: Boolean, default: false },
+  },
+  { _id: false },
+)
+
 const enrollmentSchema = new mongoose.Schema(
   {
     userId: {
@@ -37,6 +46,11 @@ const enrollmentSchema = new mongoose.Schema(
     lessonPlaybackPositions: {
       type: Map,
       of: { type: Number, min: 0, max: 43200 },
+      default: () => new Map(),
+    },
+    lessonPlaybackStates: {
+      type: Map,
+      of: lessonPlaybackStateSchema,
       default: () => new Map(),
     },
     lessonCompletionDates: {

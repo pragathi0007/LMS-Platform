@@ -15,6 +15,7 @@ import Course from '../models/Course.js'
 import Certificate from '../models/Certificate.js'
 import Enrollment from '../models/Enrollment.js'
 import Notification from '../models/Notification.js'
+import RegistrationEmailVerification from '../models/RegistrationEmailVerification.js'
 import AssignmentSubmission from '../models/AssignmentSubmission.js'
 import QuizAttempt from '../models/QuizAttempt.js'
 import ReferralCode from '../models/ReferralCode.js'
@@ -3582,7 +3583,7 @@ router.delete('/students/bulk', ...requireAdmin, async (req, res, next) => {
           collegeId: selectedCollegeId,
           studentType: 'college',
           role: 'student',
-        }).select('_id').session(session).lean()
+        }).select('_id email').session(session).lean()
         if (eligibleStudents.length !== selectedIds.length) {
           const error = new Error('One or more selected students do not belong to this college. No records were deleted.')
           error.statusCode = 409
@@ -3592,6 +3593,15 @@ router.delete('/students/bulk', ...requireAdmin, async (req, res, next) => {
           accountCollection: CollegeStudent.collection.name,
           accountId: { $in: selectedIds },
         }, { session })
+        const studentEmails = eligibleStudents
+          .map((student) => typeof student.email === 'string' ? student.email.trim().toLowerCase() : '')
+          .filter(Boolean)
+        if (studentEmails.length) {
+          await RegistrationEmailVerification.deleteMany(
+            { email: { $in: studentEmails } },
+            { session },
+          )
+        }
         await Enrollment.deleteMany({ userId: { $in: selectedIds } }, { session })
         await AssignmentSubmission.deleteMany({ userId: { $in: selectedIds } }, { session })
         await QuizAttempt.deleteMany({ userId: { $in: selectedIds } }, { session })
@@ -3622,7 +3632,7 @@ router.delete('/students/bulk', ...requireAdmin, async (req, res, next) => {
       await session.endSession()
     }
     return res.json({
-      message: `Deleted ${selectedIds.length} college students, their login identities, and enrollment records.`,
+      message: `Deleted ${selectedIds.length} college students, their login identities, email verification records, and enrollment records.`,
       deleted: selectedIds.length,
     })
   } catch (error) {
@@ -3648,7 +3658,7 @@ router.delete('/students/:studentId', ...requireAdmin, async (req, res, next) =>
     try {
       await session.withTransaction(async () => {
         student = await AccountModel.findOne({ _id: accountId, role: 'student', studentType })
-          .select('_id approvalStatus status')
+          .select('_id email approvalStatus status')
           .session(session)
           .lean()
         if (!student) {
@@ -3666,6 +3676,12 @@ router.delete('/students/:studentId', ...requireAdmin, async (req, res, next) =>
           accountCollection: AccountModel.collection.name,
           accountId,
         }, { session })
+        if (typeof student.email === 'string') {
+          await RegistrationEmailVerification.deleteOne(
+            { email: student.email.trim().toLowerCase() },
+            { session },
+          )
+        }
         await Enrollment.deleteMany({ userId: accountId }, { session })
         await AssignmentSubmission.deleteMany({ userId: accountId }, { session })
         await QuizAttempt.deleteMany({ userId: accountId }, { session })
@@ -3692,7 +3708,7 @@ router.delete('/students/:studentId', ...requireAdmin, async (req, res, next) =>
     }
     if (!student) return res.status(404).json({ message: 'The student was not found.' })
     return res.json({
-      message: 'Student, login identity, and enrollment records deleted.',
+      message: 'Student, login identity, email verification, and enrollment records deleted.',
       student: { id: String(student._id) },
     })
   } catch (error) {

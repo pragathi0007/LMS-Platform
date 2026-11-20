@@ -292,7 +292,7 @@ test('referral generation enforces a lifetime per-user limit, redemption, histor
   )))
   assert.equal(
     new originalDate(codes[0].expiresAt).getTime() - new originalDate(codes[0].createdAt).getTime(),
-    12 * 60 * 60 * 1000,
+    15 * 24 * 60 * 60 * 1000,
   )
 
   const firstSuccessfulIndex = generated.findIndex(({ response }) => response.status === 201)
@@ -397,6 +397,20 @@ test('referral generation enforces a lifetime per-user limit, redemption, histor
   assert.equal(history.result.codes.find((entry) => entry.code === codes[1].code).status, 'expired')
   const expiredValidation = await request('/referrals/validate', { body: { code: codes[1].code } })
   assert.equal(expiredValidation.response.status, 400)
+  const expiredRegistration = await request('/auth/register', {
+    body: {
+      fullName: 'Expired Referral Friend',
+      email: 'expired-referral-friend@example.invalid',
+      username: 'expired-referral-friend',
+      password: 'a-strong-password',
+      confirmPassword: 'a-strong-password',
+      emailVerificationToken: verifiedRegistrationToken('expired-referral-friend@example.invalid'),
+      role: 'student',
+      accountType: 'independent',
+      referralCode: codes[1].code,
+    },
+  })
+  assert.equal(expiredRegistration.response.status, 400)
   assert.ok(history.result.codes.some((entry) => entry.code === codeToRedeem && entry.status === 'used'))
   assert.equal(referralCodes.find((code) => code.code === codes[1].code).status, 'expired')
   assert.equal(history.result.codes.some((entry) => 'usedBy' in entry), false)

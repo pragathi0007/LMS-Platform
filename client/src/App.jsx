@@ -1391,7 +1391,6 @@ function DashboardPage({ role, isDark, onToggleTheme, themePreference, onSetThem
   const [error, setError] = useState('')
   const [mainAdminSidebarOpen, setMainAdminSidebarOpen] = useState(false)
   const [mainAdminSidebarCollapsed, setMainAdminSidebarCollapsed] = useState(true)
-  const [isVerifying, setIsVerifying] = useState(true)
   const roleLabels = {
     student: 'Student',
     main_admin: 'Main Admin',
@@ -1457,8 +1456,6 @@ function DashboardPage({ role, isDark, onToggleTheme, themePreference, onSetThem
         if (requestError.name !== 'AbortError') {
           setError('We couldn’t verify your session. Check the connection and try again.')
         }
-      } finally {
-        if (!controller.signal.aborted) setIsVerifying(false)
       }
     }
 
@@ -1495,9 +1492,6 @@ function DashboardPage({ role, isDark, onToggleTheme, themePreference, onSetThem
   }
 
   if (role === 'student') {
-    if (isVerifying) {
-      return <main className="dashboard-landing"><section className="dashboard-card" role="status">Verifying your session…</section></main>
-    }
     return (
       <StudentDashboard
         user={user}

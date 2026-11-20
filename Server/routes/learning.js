@@ -39,6 +39,9 @@ import {
 import {
   calculateCourseProgress,
   calculateCourseActivityProgress,
+  getCourseActivityProgression,
+  getCourseActivitySequence,
+  isCourseActivityCompleted,
   recalculateEnrollmentCourseProgress,
   recalculateEnrollmentsCourseProgress,
   syncEnrollmentStatus,
@@ -155,6 +158,19 @@ function getLessonPlaybackPositions(enrollment) {
   const positions = enrollment?.lessonPlaybackPositions
   if (positions instanceof Map) return Object.fromEntries(positions)
   return positions && typeof positions === 'object' ? { ...positions } : {}
+}
+
+function getLessonWatchedPositions(enrollment) {
+  const positions = getLessonPlaybackPositions(enrollment)
+  const states = enrollment?.lessonPlaybackStates
+  const entries = states instanceof Map ? states.entries() : Object.entries(states || {})
+  for (const [lessonId, state] of entries) {
+    const watchedPosition = Number(state?.watchedPositionSeconds)
+    if (Number.isFinite(watchedPosition) && watchedPosition >= 0) {
+      positions[lessonId] = Math.max(Number(positions[lessonId]) || 0, watchedPosition)
+    }
+  }
+  return positions
 }
 
 function getMapValue(values, key) {
@@ -321,10 +337,99 @@ function hideQuizAnswers(course) {
   }
 }
 
+function omitFields(value, fields) {
+  const result = { ...value }
+  for (const field of fields) delete result[field]
+  return result
+}
+
+function hideLockedCourseActivityContent(course, accessibleActivityKeys) {
+  const isAccessible = (type, activity) => activity?._id
+    && accessibleActivityKeys.has(`${type}:${String(activity._id)}`)
+  const hideVideo = (video) => {
+    const result = omitFields(video, [
+      'description',
+      'content',
+      'videoUrl',
+      'videoPublicId',
+      'videoFileName',
+      'videoFormat',
+      'videoBytes',
+      'transcriptUrl',
+      'transcriptPublicId',
+      'transcriptFileName',
+      'transcriptFormat',
+      'transcriptBytes',
+      'transcriptCues',
+      'resources',
+    ])
+    result._progressionLocked = true
+    if (video.attentionCheck) {
+      result.attentionCheck = sanitizeStudentAttentionCheck({
+        ...video.attentionCheck,
+        questions: [],
+      })
+    }
+    return result
+  }
+  const hideQuiz = (quiz) => ({
+    ...omitFields(quiz, ['description', 'questions']),
+    questions: [],
+    _progressionLocked: true,
+  })
+  const hideAssignment = (assignment) => ({
+    ...omitFields(assignment, ['description', 'content', 'resources']),
+    _progressionLocked: true,
+  })
+
+  return {
+    ...course,
+    quizzes: course.quizzes?.map((quiz) => (
+      isAccessible('quiz', quiz) ? quiz : hideQuiz(quiz)
+    )),
+    assignments: course.assignments?.map((assignment) => (
+      isAccessible('assignment', assignment) ? assignment : hideAssignment(assignment)
+    )),
+    modules: course.modules?.map((module) => ({
+      ...module,
+      lessons: module.lessons?.map((lesson) => (
+        isAccessible('video-lesson', lesson) ? lesson : hideVideo(lesson)
+      )),
+      quiz: module.quiz && !isAccessible('quiz', module.quiz) ? hideQuiz(module.quiz) : module.quiz,
+      contentItems: module.contentItems?.map((item) => {
+        if (item.type === 'video-lesson' && !isAccessible('video-lesson', item)) return hideVideo(item)
+        if (item.type === 'assignment' && !isAccessible('assignment', item)) return hideAssignment(item)
+        if (item.type !== 'quiz') return item
+        const quizId = item.quiz?._id ? item.quiz : item
+        if (isAccessible('quiz', quizId)) return item
+        return {
+          ...omitFields(item, ['description', 'content']),
+          _progressionLocked: true,
+          ...(item.quiz ? { quiz: hideQuiz(item.quiz) } : { questions: [] }),
+        }
+      }),
+    })),
+  }
+}
+
+function getAccessibleCourseActivityKeys(course, enrollment, quizAttempts, assignmentSubmissions) {
+  const progression = getCourseActivityProgression({
+    course,
+    enrollment,
+    quizAttempts,
+    assignmentSubmissions,
+  })
+  return new Set(progression.activities
+    .filter((activity) => activity.completed || activity.key === progression.nextActivity?.key)
+    .map((activity) => activity.key))
+}
+
 function findCourseLesson(course, lessonId) {
   for (const module of course?.modules || []) {
-    const videoItems = module.contentItems?.filter((item) => item.type === 'video-lesson') || []
-    const lessons = videoItems.length ? videoItems : module.lessons || []
+    const lessons = [
+      ...(module.lessons || []),
+      ...(module.contentItems || []).filter((item) => item.type === 'video-lesson'),
+    ]
     const lesson = lessons.find((item) => String(item._id) === String(lessonId))
     if (lesson) return lesson
   }
@@ -735,6 +840,61 @@ function findAssignment(course, assignmentId) {
   return null
 }
 
+async function getCourseActivityAccess(course, enrollment, type, id) {
+  const activities = getCourseActivitySequence(course)
+  const targetIndex = activities.findIndex((activity) => activity.type === type && activity.id === String(id))
+  if (targetIndex < 0) return { found: false, allowed: false, nextActivity: null }
+
+  const prerequisites = activities.slice(0, targetIndex)
+  const quizIds = prerequisites.filter(({ type: activityType }) => activityType === 'quiz').map(({ id: quizId }) => quizId)
+  const assignmentIds = prerequisites
+    .filter(({ type: activityType }) => activityType === 'assignment')
+    .map(({ id: assignmentId }) => assignmentId)
+  const [quizAttempts, assignmentSubmissions] = await Promise.all([
+    quizIds.length
+      ? QuizAttempt.find({
+        userId: enrollment.userId,
+        enrollmentId: enrollment._id,
+        quizId: { $in: quizIds },
+        status: 'submitted',
+        passed: true,
+      }).select('quizId status passed').lean()
+      : [],
+    assignmentIds.length
+      ? AssignmentSubmission.find({
+        userId: enrollment.userId,
+        enrollmentId: enrollment._id,
+        assignmentId: { $in: assignmentIds },
+      }).select('_id assignmentId reviewStatus submittedAt').lean()
+      : [],
+  ])
+  const nextActivity = prerequisites.find((activity) => !isCourseActivityCompleted(activity, {
+    enrollment,
+    quizAttempts,
+    assignmentSubmissions,
+  }))
+  return {
+    found: true,
+    allowed: !nextActivity,
+    nextActivity: nextActivity || activities[targetIndex],
+  }
+}
+
+function respondIfCourseActivityLocked(res, access) {
+  if (!access.found) {
+    res.status(404).json({ message: 'This activity is not available in the enrolled course.' })
+    return true
+  }
+  if (!access.allowed) {
+    res.status(409).json({
+      message: 'Complete the previous course activity before accessing this one.',
+      nextActivity: access.nextActivity,
+    })
+    return true
+  }
+  return false
+}
+
 function getAssignmentDeadline(enrollmentCreatedAt) {
   if (!enrollmentCreatedAt) return null
   const enrollmentTime = new Date(enrollmentCreatedAt).getTime()
@@ -1013,7 +1173,11 @@ router.get('/courses', ...requireStudent, async (req, res, next) => {
       .select('title description detailedDescription category difficulty thumbnailUrl learningObjectives prerequisites estimatedDurationMinutes modules assignments quizzes status createdAt')
       .sort({ title: 1 })
       .lean()
-    return res.json({ courses: courses.map(hideQuizAnswers) })
+    return res.json({
+      courses: courses.map((course) => (
+        hideLockedCourseActivityContent(hideQuizAnswers(course), new Set())
+      )),
+    })
   } catch (error) {
     return next(error)
   }
@@ -1131,7 +1295,11 @@ router.get('/courses/:courseId/learning-content', ...requireStudent, async (req,
         status: enrollmentStatus,
         courseProgress,
         lessonPlaybackPositions: getLessonPlaybackPositions(enrollment),
-        courseId: hideQuizAnswers(courseWithAssignmentDeadlines),
+        lessonWatchedPositions: getLessonWatchedPositions(enrollment),
+        courseId: hideLockedCourseActivityContent(
+          hideQuizAnswers(courseWithAssignmentDeadlines),
+          getAccessibleCourseActivityKeys(course, enrollment, quizAttempts, assignmentSubmissions),
+        ),
       },
       assignmentSubmissions: assignmentSubmissions.map((submission) => ({
         ...submission,
@@ -1180,6 +1348,8 @@ router.post('/courses/:courseId/attention-checks/:lessonId/start', ...requireStu
     const lesson = findVideoLesson(course, lessonId)
     const attentionCheck = lesson?.attentionCheck
     if (!attentionCheck?.enabled) return res.status(404).json({ message: 'Attention checks are not enabled for this lesson.' })
+    const activityAccess = await getCourseActivityAccess(course, enrollment, 'video-lesson', lessonId)
+    if (respondIfCourseActivityLocked(res, activityAccess)) return
 
     const questions = getSelectedAttentionQuestions(attentionCheck)
     const questionCount = attentionCheck.questionsDuringVideo ?? questions.length
@@ -1293,6 +1463,10 @@ router.post('/courses/:courseId/attention-checks/:lessonId/submit', ...requireSt
       lessonId,
     }).select('+correctOptionIndices')
     if (!response) return res.status(409).json({ message: 'This attention check is no longer available for submission.' })
+    const course = await Course.findById(courseId).select('modules').lean()
+    if (!course) return res.status(404).json({ message: 'The enrolled course could not be found.' })
+    const activityAccess = await getCourseActivityAccess(course, enrollment, 'video-lesson', lessonId)
+    if (respondIfCourseActivityLocked(res, activityAccess)) return
     const answeredAt = new Date()
     const responseTimeMs = Math.max(0, answeredAt.getTime() - new Date(response.presentedAt).getTime())
     const isTimedOut = responseTimeMs >= attentionCheckResponseTimeoutMs
@@ -1387,6 +1561,8 @@ router.get('/courses/:courseId/quizzes/:quizId/attempts/status', ...requireStude
     const course = await Course.findById(courseId).select('_id modules quizzes').lean()
     if (!course) return res.status(404).json({ message: 'The enrolled course could not be found.' })
     if (!findQuiz(course, quizId)) return res.status(404).json({ message: 'This quiz is not available in the enrolled course.' })
+    const activityAccess = await getCourseActivityAccess(course, enrollment, 'quiz', quizId)
+    if (respondIfCourseActivityLocked(res, activityAccess)) return
 
     const now = new Date()
     const state = await getQuizAttemptState({
@@ -1422,6 +1598,8 @@ router.post('/courses/:courseId/quizzes/:quizId/attempts/start', ...requireStude
     if (!quiz || !Array.isArray(quiz.questions) || !quiz.questions.length) {
       return res.status(404).json({ message: 'This quiz is not available in the enrolled course.' })
     }
+    const activityAccess = await getCourseActivityAccess(course, enrollment, 'quiz', quizId)
+    if (respondIfCourseActivityLocked(res, activityAccess)) return
     const questionSnapshot = getQuizQuestionSnapshot(quiz)
     const stateKey = {
       userId: req.auth.id,
@@ -1524,6 +1702,8 @@ router.post('/courses/:courseId/quizzes/:quizId/attempts/:attemptId/submit', ...
       .select('+modules.quiz.questions.correctOptionIndices +modules.contentItems.quiz.questions.correctOptionIndices +quizzes.questions.correctOptionIndex')
       .lean()
     if (!course) return res.status(404).json({ message: 'The enrolled course could not be found.' })
+    const activityAccess = await getCourseActivityAccess(course, enrollment, 'quiz', quizId)
+    if (respondIfCourseActivityLocked(res, activityAccess)) return
     const quiz = findQuiz(course, quizId)
     const questions = attempt.questionSnapshot?.length
       ? attempt.questionSnapshot.map((question) => ({
@@ -1773,6 +1953,8 @@ router.post(
       if (!course || !assignment) {
         return res.status(404).json({ message: 'This assignment is not available in the enrolled course.' })
       }
+      const activityAccess = await getCourseActivityAccess(course, enrollment, 'assignment', assignmentId)
+      if (respondIfCourseActivityLocked(res, activityAccess)) return
       const deadline = getAssignmentDeadline(enrollment.createdAt)
       if (!deadline) {
         return res.status(409).json({ message: 'The assignment deadline could not be calculated from your enrollment date.' })
@@ -1893,13 +2075,23 @@ router.get('/enrollments/me', ...requireStudent, async (req, res, next) => {
         )
         return {
           ...enrollment,
+          lessonPlaybackPositions: getLessonPlaybackPositions(enrollment),
+          lessonWatchedPositions: getLessonWatchedPositions(enrollment),
           courseProgress: calculateCourseActivityProgress(
             enrollment.courseId,
             enrollment,
             enrollmentQuizzes,
             enrollmentAssignments,
           ),
-          courseId: hideQuizAnswers(enrollment.courseId),
+          courseId: hideLockedCourseActivityContent(
+            hideQuizAnswers(enrollment.courseId),
+            getAccessibleCourseActivityKeys(
+              enrollment.courseId,
+              enrollment,
+              enrollmentQuizzes,
+              enrollmentAssignments,
+            ),
+          ),
         }
       }),
     })
@@ -2045,6 +2237,8 @@ router.post('/enrollments/:enrollmentId/learning-activity', ...requireStudent, a
     if (!courseHasLesson(enrollment.courseId, lessonId)) {
       return res.status(404).json({ message: 'The video lesson was not found in this course.' })
     }
+    const activityAccess = await getCourseActivityAccess(enrollment.courseId, enrollment, 'video-lesson', lessonId)
+    if (respondIfCourseActivityLocked(res, activityAccess)) return
 
     const activityPath = `dailyLearningActivity.${activityDate}`
     const result = await Enrollment.updateOne(enrollmentQuery, {
@@ -2061,17 +2255,19 @@ router.post('/enrollments/:enrollmentId/learning-activity', ...requireStudent, a
 router.patch('/enrollments/:enrollmentId/progress', ...requireStudent, async (req, res, next) => {
   try {
     const { enrollmentId } = req.params
-    const { lessonId, completed, started, positionSeconds, videoDurationSeconds } = req.body ?? {}
+    const { lessonId, completed, started, positionSeconds, videoDurationSeconds, isPlaying } = req.body ?? {}
     const hasPositionSeconds = Object.prototype.hasOwnProperty.call(req.body || {}, 'positionSeconds')
     const hasVideoDurationSeconds = Object.prototype.hasOwnProperty.call(req.body || {}, 'videoDurationSeconds')
     if (
       !isValidObjectId(enrollmentId)
       || !isValidObjectId(lessonId)
       || (typeof completed !== 'boolean' && started !== true && !hasPositionSeconds)
+      || completed === false
       || (hasPositionSeconds && (!Number.isFinite(positionSeconds) || positionSeconds < 0 || positionSeconds > 43200))
       || (hasVideoDurationSeconds && (
         !Number.isFinite(videoDurationSeconds) || videoDurationSeconds <= 0 || videoDurationSeconds > 43200
       ))
+      || (isPlaying !== undefined && typeof isPlaying !== 'boolean')
     ) {
       return res.status(400).json({ message: 'A valid enrollment, lesson, and progress state are required.' })
     }
@@ -2093,62 +2289,81 @@ router.patch('/enrollments/:enrollmentId/progress', ...requireStudent, async (re
     if (!courseLesson) {
       return res.status(404).json({ message: 'The lesson was not found in this course.' })
     }
-    if (completed === true) {
+    const activityAccess = await getCourseActivityAccess(enrollment.courseId, enrollment, 'video-lesson', lessonId)
+    if (respondIfCourseActivityLocked(res, activityAccess)) return
+
+    const isAlreadyCompleted = (enrollment.completedLessonIds || []).some((id) => String(id) === lessonId)
+    const shouldUpdatePosition = hasPositionSeconds && !(completed === true && isAlreadyCompleted)
+    const previousPosition = Number(getMapValue(enrollment.lessonPlaybackPositions, lessonId)) || 0
+    const previousPlaybackState = getMapValue(enrollment.lessonPlaybackStates, lessonId) || {}
+    const previousWatchedPosition = Math.max(
+      previousPosition,
+      Number(previousPlaybackState.watchedPositionSeconds) || 0,
+    )
+    const acceptedWatchedPosition = shouldUpdatePosition
+      ? Math.max(previousWatchedPosition, positionSeconds)
+      : previousWatchedPosition
+    const now = new Date()
+
+    if (completed === true && !isAlreadyCompleted) {
       const completionToleranceSeconds = 1
+      const completionDurationSeconds = Number(videoDurationSeconds) > 0
+        ? Number(videoDurationSeconds)
+        : Number(courseLesson.durationSeconds)
       if (
         !hasPositionSeconds
         || !hasVideoDurationSeconds
-        || positionSeconds + completionToleranceSeconds < videoDurationSeconds
+        || positionSeconds + completionToleranceSeconds < completionDurationSeconds
       ) {
         return res.status(400).json({ message: 'Watch the entire video before completing this lesson.' })
       }
     }
 
-    const isAlreadyCompleted = (enrollment.completedLessonIds || []).some((id) => String(id) === lessonId)
     const update = { $addToSet: { startedLessonIds: lessonId } }
-    if (typeof completed === 'boolean') {
-      if (completed) {
-        update.$addToSet.completedLessonIds = lessonId
-        if (!isAlreadyCompleted) {
-          update.$set = { [`lessonCompletionDates.${lessonId}`]: new Date() }
-        }
-      } else {
-        update.$pull = { completedLessonIds: lessonId }
-        update.$unset = { [`lessonCompletionDates.${lessonId}`]: 1 }
-      }
+    if (completed === true) {
+      update.$addToSet.completedLessonIds = lessonId
+      if (!isAlreadyCompleted) update.$set = { [`lessonCompletionDates.${lessonId}`]: now }
     }
-    if (hasPositionSeconds) {
+    if (shouldUpdatePosition) {
       const positionPath = `lessonPlaybackPositions.${lessonId}`
-      if (completed === true) {
-        update.$max = { [positionPath]: positionSeconds }
-      } else {
-        update.$set = {
-          ...update.$set,
-          [positionPath]: positionSeconds,
-        }
-        const previousPositionValue = getMapValue(enrollment.lessonPlaybackPositions, lessonId)
-        const previousPositionQuery = previousPositionValue === undefined
+      const watchedPositionPath = `lessonPlaybackStates.${lessonId}.watchedPositionSeconds`
+      const updatedAtPath = `lessonPlaybackStates.${lessonId}.updatedAt`
+      const isPlayingPath = `lessonPlaybackStates.${lessonId}.isPlaying`
+      const previousPositionValue = getMapValue(enrollment.lessonPlaybackPositions, lessonId)
+      const previousUpdatedAt = previousPlaybackState.updatedAt
+      if (completed !== true) {
+        enrollmentQuery[positionPath] = previousPositionValue === undefined
           ? { $exists: false }
           : previousPositionValue
-        enrollmentQuery[positionPath] = previousPositionQuery
+        enrollmentQuery[updatedAtPath] = previousUpdatedAt === undefined
+          ? { $exists: false }
+          : previousUpdatedAt
       }
+      update.$set = {
+        ...update.$set,
+        [positionPath]: positionSeconds,
+        [updatedAtPath]: now,
+        [isPlayingPath]: isPlaying === true,
+      }
+      update.$max = { [watchedPositionPath]: acceptedWatchedPosition }
     }
     const result = await Enrollment.updateOne(enrollmentQuery, update)
     if (!result.matchedCount) {
-      if (!hasPositionSeconds) return res.status(404).json({ message: 'The enrollment was not found.' })
+      if (!shouldUpdatePosition) return res.status(404).json({ message: 'The enrollment was not found.' })
       const latestEnrollment = await Enrollment.findOne({
         _id: enrollmentId,
         userId: req.auth.id,
         ...scope,
         status: { $ne: 'cancelled' },
       })
-        .select('completedLessonIds startedLessonIds lessonPlaybackPositions')
+        .select('completedLessonIds startedLessonIds lessonPlaybackPositions lessonPlaybackStates')
         .lean()
       if (!latestEnrollment) return res.status(404).json({ message: 'The enrollment was not found.' })
       return res.json({
         completedLessonIds: (latestEnrollment.completedLessonIds || []).map(String),
         startedLessonIds: (latestEnrollment.startedLessonIds || []).map(String),
         lessonPlaybackPositions: getLessonPlaybackPositions(latestEnrollment),
+        lessonWatchedPositions: getLessonWatchedPositions(latestEnrollment),
       })
     }
 
@@ -2156,7 +2371,6 @@ router.patch('/enrollments/:enrollmentId/progress', ...requireStudent, async (re
     const startedLessonIds = new Set((enrollment.startedLessonIds || []).map(String))
     startedLessonIds.add(lessonId)
     if (completed === true) completedLessonIds.add(lessonId)
-    if (completed === false) completedLessonIds.delete(lessonId)
     if (completed === true) {
       await issueCertificateIfEligible({
         userId: req.auth.id,
@@ -2165,7 +2379,7 @@ router.patch('/enrollments/:enrollmentId/progress', ...requireStudent, async (re
         course: enrollment.courseId,
       })
     }
-    const enrollmentProgress = typeof completed === 'boolean'
+    const enrollmentProgress = completed === true
       ? await recalculateEnrollmentCourseProgress({
         enrollment: { ...enrollment, completedLessonIds: [...completedLessonIds] },
         course: enrollment.courseId,
@@ -2195,16 +2409,16 @@ router.patch('/enrollments/:enrollmentId/progress', ...requireStudent, async (re
       }
     }
     const lessonPlaybackPositions = getLessonPlaybackPositions(enrollment)
-    if (hasPositionSeconds) {
-      lessonPlaybackPositions[lessonId] = Math.max(
-        Number(lessonPlaybackPositions[lessonId]) || 0,
-        positionSeconds,
-      )
+    if (shouldUpdatePosition) {
+      lessonPlaybackPositions[lessonId] = positionSeconds
     }
+    const lessonWatchedPositions = getLessonWatchedPositions(enrollment)
+    if (shouldUpdatePosition) lessonWatchedPositions[lessonId] = acceptedWatchedPosition
     return res.json({
       completedLessonIds: [...completedLessonIds],
       startedLessonIds: [...startedLessonIds],
       lessonPlaybackPositions,
+      lessonWatchedPositions,
       ...(courseProgress ? { courseProgress, status: courseProgress.status } : {}),
     })
   } catch (error) {

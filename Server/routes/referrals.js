@@ -8,7 +8,7 @@ import ReferralCodeUserLimit from '../models/ReferralCodeUserLimit.js'
 
 const router = Router()
 const userGenerationLimit = 20
-const codeLifetimeMs = 12 * 60 * 60 * 1000
+const codeLifetimeMs = 15 * 24 * 60 * 60 * 1000
 const referralCodeAlphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'
 const requireExternalUser = [
   authenticate,

@@ -23,8 +23,8 @@ function getCourseProgressActivities(course, { includeOptional = false } = {}) {
 
   for (const module of course?.modules || []) {
     const contentItems = Array.isArray(module.contentItems) ? module.contentItems : []
-    const videos = contentItems.filter((item) => item.type === 'video-lesson')
-    for (const video of (videos.length ? videos : module.lessons || [])) {
+    const contentVideos = contentItems.filter((item) => item.type === 'video-lesson')
+    for (const video of (contentVideos.length ? contentVideos : module.lessons || [])) {
       add('video', video)
     }
 
@@ -46,6 +46,88 @@ function getCourseProgressActivities(course, { includeOptional = false } = {}) {
 function documentId(value) {
   const id = value && typeof value === 'object' ? value._id : value
   return id === undefined || id === null ? '' : String(id)
+}
+
+export function getCourseActivitySequence(course) {
+  const activities = []
+  const seen = new Set()
+  const add = (type, activity) => {
+    const id = type === 'quiz'
+      ? documentId(activity?.quiz) || documentId(activity)
+      : documentId(activity)
+    if (!id) return
+    const key = `${type}:${id}`
+    if (seen.has(key)) return
+    seen.add(key)
+    activities.push({ type, id, key })
+  }
+  const orderedModules = (course?.modules || [])
+    .map((module, index) => ({ module, index }))
+    .sort((left, right) => (left.module.order ?? left.index) - (right.module.order ?? right.index))
+
+  for (const { module } of orderedModules) {
+    const contentItems = (module.contentItems || [])
+      .map((item, index) => ({ item, index }))
+      .sort((left, right) => (left.item.order ?? left.index) - (right.item.order ?? right.index))
+      .map(({ item }) => item)
+    if (contentItems.length) {
+      if (!contentItems.some((item) => item.type === 'video-lesson')) {
+        for (const lesson of module.lessons || []) add('video-lesson', lesson)
+      }
+      for (const item of contentItems) {
+        if (['video-lesson', 'quiz', 'assignment'].includes(item.type)) add(item.type, item)
+      }
+      if (module.quiz && !contentItems.some((item) => item.type === 'quiz')) {
+        add('quiz', module.quiz)
+      }
+      continue
+    }
+
+    for (const lesson of module.lessons || []) add('video-lesson', lesson)
+    if (module.quiz) add('quiz', module.quiz)
+  }
+
+  for (const quiz of course?.quizzes || []) add('quiz', quiz)
+  for (const assignment of course?.assignments || []) add('assignment', assignment)
+  return activities
+}
+
+export function isCourseActivityCompleted(activity, {
+  enrollment,
+  quizAttempts = [],
+  assignmentSubmissions = [],
+}) {
+  if (activity.type === 'video-lesson') {
+    return (enrollment?.completedLessonIds || []).some((id) => documentId(id) === activity.id)
+  }
+  if (activity.type === 'quiz') {
+    return quizAttempts.some((attempt) => (
+      documentId(attempt.quizId) === activity.id
+      && attempt.status === 'submitted'
+      && attempt.passed === true
+    ))
+  }
+  if (activity.type === 'assignment') {
+    return assignmentSubmissions.some((submission) => (
+      documentId(submission.assignmentId) === activity.id
+    ))
+  }
+  return false
+}
+
+export function getCourseActivityProgression({
+  course,
+  enrollment,
+  quizAttempts = [],
+  assignmentSubmissions = [],
+}) {
+  const activities = getCourseActivitySequence(course).map((activity, index) => ({
+    ...activity,
+    index,
+    completed: isCourseActivityCompleted(activity, { enrollment, quizAttempts, assignmentSubmissions }),
+  }))
+  const nextActivity = activities.find((activity) => !activity.completed) || null
+  return { activities, nextActivity }
 }
 
 function getLatestSubmissionsByAssignment(submissions) {

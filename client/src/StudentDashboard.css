@@ -8142,6 +8142,94 @@ button.student-category {
   box-shadow: 0 2px 6px rgba(10, 21, 41, .15);
 }
 
+.student-course-learning__player:fullscreen {
+  width: 100vw;
+  height: 100vh;
+  max-width: none;
+  max-height: none;
+  aspect-ratio: auto;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.student-course-learning__player video::-webkit-media-controls-fullscreen-button,
+.student-course-learning__player video::-webkit-media-controls-overflow-button,
+.student-course-learning__player video::-webkit-media-controls-mute-button,
+.student-course-learning__player video::-webkit-media-controls-volume-slider {
+  display: none !important;
+}
+
+.student-course-learning__fullscreen-error {
+  position: absolute;
+  z-index: 5;
+  top: 12px;
+  left: 12px;
+  max-width: calc(100% - 170px);
+  padding: 8px 12px;
+  border-radius: 7px;
+  background: rgba(9, 21, 47, .95);
+  color: #fff;
+  font-size: 13px;
+}
+
+.student-course-learning__custom-controls {
+  position: absolute;
+  z-index: 3;
+  right: clamp(22px, 2.5%, 32px);
+  bottom: clamp(28px, 4%, 38px);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 140ms ease;
+}
+
+.student-course-learning__custom-controls.is-visible,
+.student-course-learning__custom-controls.is-keyboard-focused {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+@media (hover: none) {
+  .student-course-learning__custom-controls {
+    opacity: 1;
+    pointer-events: auto;
+  }
+}
+
+.student-course-learning__volume-button,
+.student-course-learning__fullscreen-button {
+  display: grid;
+  width: 36px;
+  height: 36px;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: #fff;
+  cursor: pointer;
+}
+
+.student-course-learning__volume-button:hover,
+.student-course-learning__volume-button:focus-visible,
+.student-course-learning__fullscreen-button:hover,
+.student-course-learning__fullscreen-button:focus-visible {
+  background: rgba(255, 255, 255, .16);
+}
+
+.student-course-learning__volume-button svg,
+.student-course-learning__fullscreen-button svg {
+  width: 19px;
+  height: 19px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 2.5;
+}
+
 .student-course-learning__attention-overlay {
   position: absolute;
   z-index: 2;
@@ -8154,6 +8242,21 @@ button.student-category {
   padding: clamp(16px, 4vw, 36px);
   background: rgba(9, 21, 47, .97);
   color: #fff;
+}
+
+.student-course-learning__attention-overlay--question {
+  inset: 50% auto auto 50%;
+  z-index: 4;
+  width: min(520px, calc(100% - 32px));
+  max-height: calc(100% - 32px);
+  box-sizing: border-box;
+  padding: clamp(16px, 3vw, 28px);
+  transform: translate(-50%, -50%);
+  border: 1px solid #cbd5e1;
+  border-radius: 12px;
+  background: #fff;
+  color: #111827;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, .45);
 }
 
 .student-course-learning__attention-overlay h3,
@@ -8176,8 +8279,17 @@ button.student-category {
   cursor: pointer;
 }
 
+.student-course-learning__attention-overlay--question .student-course-learning__attention-options label {
+  border-color: #9ca3af;
+  color: #111827;
+}
+
 .student-course-learning__attention-options input {
   margin-top: 3px;
+}
+
+.student-course-learning__attention-overlay--question .student-course-learning__attention-options input {
+  accent-color: #1f2937;
 }
 
 .student-course-learning__attention-overlay button {
@@ -8193,6 +8305,16 @@ button.student-category {
   cursor: pointer;
 }
 
+.student-course-learning__attention-overlay--question button {
+  border: 1px solid #9ca3af;
+  background: #f3f4f6;
+  color: #111827;
+}
+
+.student-course-learning__attention-overlay--question button:not(:disabled):hover {
+  background: #e5e7eb;
+}
+
 .student-course-learning__attention-overlay button:disabled {
   cursor: not-allowed;
   opacity: .6;
@@ -8204,12 +8326,19 @@ button.student-category {
   font-size: 13px;
 }
 
+.student-course-learning__video-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 26px;
+}
+
 .student-course-learning__video-nav {
   display: flex;
   flex: 0 0 auto;
   justify-content: flex-end;
   gap: 10px;
-  margin-top: 26px;
 }
 
 .student-course-learning__video-nav button {
@@ -8240,8 +8369,8 @@ button.student-category {
 
 .student-course-learning__video-completion {
   display: flex;
-  justify-content: flex-end;
-  margin-top: 12px;
+  flex: 0 0 auto;
+  justify-content: flex-start;
 }
 
 .student-course-learning__video-completion .student-button:disabled:not(.student-button--quiet) {
@@ -8388,7 +8517,7 @@ button.student-category {
     padding: 22px 14px 28px;
   }
 
-  .student-course-learning__video-nav {
+  .student-course-learning__video-actions {
     margin-top: 18px;
   }
 

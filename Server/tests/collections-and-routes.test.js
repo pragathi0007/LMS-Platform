@@ -1293,6 +1293,12 @@ function installRegistrationEmailVerificationTestDoubles() {
       for (const [key, value] of Object.entries(update.$inc || {})) document[key] += value
       return document
     }),
+    stub(RegistrationEmailVerification, 'deleteOne', async (filter) => {
+      const [entry] = [...documents.entries()].filter(([, document]) => challengeMatches(document, filter))
+      if (!entry) return { deletedCount: 0 }
+      documents.delete(entry[0])
+      return { deletedCount: 1 }
+    }),
     stub(RegistrationEmailVerification, 'updateOne', async (filter, update) => {
       const document = [...documents.values()].find((item) => challengeMatches(item, filter))
       if (!document) return { matchedCount: 0 }
@@ -2696,6 +2702,48 @@ test('registration email OTP is hashed, expires, is resend-safe, and can be used
     assert.equal(reusedResponse.status, 400)
     assert.match((await reusedResponse.json()).message, /already been used/i)
 
+  } finally {
+    restoreGmail()
+    restoreIdentityFind()
+    store.restore()
+    restoreDb()
+  }
+})
+
+test('registration can restart after an account is deleted but its email verification remains', async () => {
+  const store = installRegistrationEmailVerificationTestDoubles()
+  const restoreDb = stubDatabase({
+    collection: () => ({ find: () => ({ toArray: async () => [] }) }),
+  })
+  const restoreIdentityFind = stub(AccountIdentity, 'find', () => queryResult([]))
+  const sentCodes = []
+  const restoreGmail = stubGmailOtpProvider(sentCodes)
+  try {
+    const email = 'deleted-account@example.invalid'
+    const consumedVerification = new RegistrationEmailVerification({
+      email,
+      hashedOtp: 'consumed-verification-hash',
+      expiresAt: new Date(Date.now() - 60_000),
+      cleanupAt: new Date(Date.now() + 60 * 60 * 1000),
+      requestWindowStartedAt: new Date(Date.now() - 2 * 60 * 60 * 1000),
+      lastSentAt: new Date(Date.now() - 2 * 60 * 60 * 1000),
+      verifiedAt: new Date(Date.now() - 2 * 60 * 60 * 1000),
+      consumedAt: new Date(Date.now() - 60 * 60 * 1000),
+    })
+    await consumedVerification.save()
+
+    const response = await request('/auth/registration/email/send', {
+      body: { email },
+      headers: { 'x-forwarded-for': '198.51.100.40' },
+    })
+
+    assert.equal(response.status, 200)
+    assert.equal(sentCodes.length, 1)
+    assert.equal(store.documents.size, 1)
+    const [newVerification] = store.documents.values()
+    assert.notEqual(String(newVerification._id), String(consumedVerification._id))
+    assert.equal(newVerification.consumedAt, null)
+    assert.equal(newVerification.verifiedAt, null)
   } finally {
     restoreGmail()
     restoreIdentityFind()
@@ -4548,8 +4596,11 @@ test('student course listing stays on the published student API and omits quiz a
           },
         }],
         contentItems: [{
+          _id: '68a000000000000000000033',
           type: 'video-lesson',
           title: 'Content item lesson',
+          videoUrl: 'https://example.com/future-video.mp4',
+          transcriptCues: [{ startTimeMs: 0, endTimeMs: 1000, text: 'Future lesson transcript.' }],
           attentionCheck: {
             enabled: true,
             minIntervalSeconds: 45,
@@ -4590,8 +4641,10 @@ test('student course listing stays on the published student API and omits quiz a
     assert.equal(result.courses[0].title, 'Published course')
     assert.equal(result.courses[0].category, 'Programming')
     assert.equal(result.courses[0].thumbnailUrl, 'https://res.cloudinary.com/test/image/upload/python.jpg')
-    assert.equal('correctOptionIndex' in result.courses[0].quizzes[0].questions[0], false)
-    assert.equal('correctOptionIndices' in result.courses[0].modules[0].quiz.questions[0], false)
+    assert.deepEqual(result.courses[0].quizzes[0].questions, [])
+    assert.deepEqual(result.courses[0].modules[0].quiz.questions, [])
+    assert.equal('videoUrl' in result.courses[0].modules[0].contentItems[0], false)
+    assert.deepEqual(result.courses[0].modules[0].contentItems[0].transcriptCues, undefined)
     assert.deepEqual(result.courses[0].modules[0].lessons[0].attentionCheck, {
       enabled: true,
       questionsDuringVideo: 1,
@@ -5300,8 +5353,9 @@ test('student enrollment list is scoped to the authenticated student account typ
 test('student enrollment response includes playable course data without quiz answers', async () => {
   const studentId = '68a000000000000000000031'
   const lessonId = '68a000000000000000000052'
-  const legacyLessonId = '68a000000000000000000053'
+  const legacyLessonId = lessonId
   const pendingLessonId = '68a000000000000000000054'
+  const futureLessonId = '68a000000000000000000060'
   const restoreStudent = stub(Student, 'findById', async () => ({
     _id: studentId,
     role: 'student',
@@ -5356,7 +5410,8 @@ test('student enrollment response includes playable course data without quiz ans
                 questions: [{ selectedForPlayback: true }],
               },
             },
-            { _id: pendingLessonId, type: 'video-lesson', title: 'Lesson 2' },
+            { _id: pendingLessonId, type: 'video-lesson', title: 'Lesson 2', videoUrl: 'https://example.com/next.mp4' },
+            { _id: futureLessonId, type: 'video-lesson', title: 'Lesson 3', videoUrl: 'https://example.com/locked.mp4' },
             { type: 'quiz', quiz: { questions: [{ prompt: 'Question', correctOptionIndices: [1] }] } },
           ],
         }],
@@ -5378,6 +5433,8 @@ test('student enrollment response includes playable course data without quiz ans
     assert.equal(result.enrollments[0].courseId.category, 'Science')
     assert.equal(result.enrollments[0].courseId.difficulty, 'intermediate')
     assert.equal(result.enrollments[0].courseId.modules[0].contentItems[0].videoUrl, 'https://res.cloudinary.com/test/video/upload/lesson.mp4')
+    assert.equal(result.enrollments[0].courseId.modules[0].contentItems[1].videoUrl, 'https://example.com/next.mp4')
+    assert.equal('videoUrl' in result.enrollments[0].courseId.modules[0].contentItems[2], false)
     assert.equal(result.enrollments[0].courseId.modules[0].contentItems[0].durationSeconds, 190)
     assert.deepEqual(result.enrollments[0].courseId.modules[0].contentItems[0].attentionCheck, {
       enabled: true,
@@ -5396,16 +5453,16 @@ test('student enrollment response includes playable course data without quiz ans
     assert.deepEqual(result.enrollments[0].startedLessonIds, [lessonId])
     assert.deepEqual(result.enrollments[0].courseProgress, {
       completedActivities: 1,
-      totalActivities: 2,
-      percentage: 50,
+      totalActivities: 3,
+      percentage: 33,
       isComplete: false,
-      videos: { completed: 1, total: 2 },
+      videos: { completed: 1, total: 3 },
       quizzes: { completed: 0, total: 0 },
       assignments: { completed: 0, total: 0 },
     })
     assert.equal(result.enrollments[0].status, 'active')
     assert.equal(result.enrollments[0].lessonCompletionDates[lessonId], '2026-11-11T00:00:00.000Z')
-    assert.equal('correctOptionIndices' in result.enrollments[0].courseId.modules[0].contentItems[2].quiz.questions[0], false)
+    assert.deepEqual(result.enrollments[0].courseId.modules[0].contentItems[3].quiz.questions, [])
   } finally {
     restoreEnrollmentUpdate()
     restoreQuizAttempts()
@@ -5671,12 +5728,104 @@ test('student playback activity is limited to owned video lessons and bounded du
   }
 })
 
+test('student can access the next video after passing its quiz and submitting the preceding assignment', async () => {
+  const studentId = '68a000000000000000000031'
+  const courseId = '68a000000000000000000061'
+  const enrollmentId = '68a000000000000000000071'
+  const firstVideoId = '68a000000000000000000081'
+  const quizId = '68a000000000000000000082'
+  const secondVideoId = '68a000000000000000000083'
+  const assignmentId = '68a000000000000000000084'
+  const nextVideoId = '68a000000000000000000085'
+  const activityDate = new Date().toISOString().slice(0, 10)
+  let updateDocument
+  const restores = [
+    stub(Student, 'findById', async () => ({
+      _id: studentId,
+      role: 'student',
+      studentType: 'independent',
+      approvalStatus: 'approved',
+      status: 'active',
+      isActive: true,
+    })),
+    stub(Enrollment, 'findOne', () => ({
+      populate() { return this },
+      lean: async () => ({
+        _id: enrollmentId,
+        userId: studentId,
+        courseId: {
+          _id: courseId,
+          modules: [{
+            contentItems: [
+              { _id: firstVideoId, type: 'video-lesson' },
+              { _id: '68a000000000000000000086', type: 'quiz', quiz: { _id: quizId } },
+              { _id: secondVideoId, type: 'video-lesson' },
+              { _id: assignmentId, type: 'assignment' },
+              { _id: nextVideoId, type: 'video-lesson' },
+            ],
+          }],
+        },
+        completedLessonIds: [firstVideoId, secondVideoId],
+      }),
+    })),
+    stub(QuizAttempt, 'find', (query) => {
+      assert.deepEqual(query, {
+        userId: studentId,
+        enrollmentId,
+        quizId: { $in: [quizId] },
+        status: 'submitted',
+        passed: true,
+      })
+      return {
+        select() { return this },
+        lean: async () => [{ quizId, status: 'submitted', passed: true }],
+      }
+    }),
+    stub(AssignmentSubmission, 'find', (query) => {
+      assert.deepEqual(query, {
+        userId: studentId,
+        enrollmentId,
+        assignmentId: { $in: [assignmentId] },
+      })
+      return {
+        select() { return this },
+        lean: async () => [{
+          assignmentId,
+          reviewStatus: 'pending',
+          submittedAt: new Date(),
+        }],
+      }
+    }),
+    stub(Enrollment, 'updateOne', async (_query, update) => {
+      updateDocument = update
+      return { matchedCount: 1 }
+    }),
+  ]
+
+  try {
+    const response = await request(`/enrollments/${enrollmentId}/learning-activity`, {
+      role: 'student',
+      subject: studentId,
+      method: 'POST',
+      body: { lessonId: nextVideoId, seconds: 15, activityDate },
+    })
+    assert.equal(response.status, 200)
+    assert.deepEqual(updateDocument.$addToSet, {
+      [`dailyLearningActivity.${activityDate}.videoLessonIds`]: nextVideoId,
+    })
+  } finally {
+    restores.reverse().forEach((restore) => restore())
+  }
+})
+
 test('student learning content returns the enrolled course with every published module item and hides quiz answers', async () => {
   const studentId = '68a000000000000000000031'
   const courseId = '68a000000000000000000041'
   const enrollmentId = '68a000000000000000000051'
   const questionId = '68a000000000000000000052'
   const assignmentId = '68a000000000000000000057'
+  const futureLessonId = '68a000000000000000000060'
+  const postAssignmentLessonId = '68a000000000000000000061'
   const course = {
     _id: courseId,
     title: 'Mixed content course',
@@ -5687,7 +5836,7 @@ test('student learning content returns the enrolled course with every published 
       _id: '68a000000000000000000053',
       title: 'Module 1',
       lessons: [{
-        _id: '68a000000000000000000059',
+        _id: '68a000000000000000000054',
         title: 'Video',
         videoUrl: 'https://example.com/video.mp4',
         transcriptCues: [{ startTimeMs: 0, endTimeMs: 1800, text: 'The sentence spoken in the video.' }],
@@ -5706,11 +5855,23 @@ test('student learning content returns the enrolled course with every published 
           },
         },
         { _id: '68a000000000000000000055', type: 'quiz', title: 'Quiz', quiz: { _id: '68a000000000000000000056', questions: [{ _id: questionId, prompt: 'Question?', options: ['A', 'B'], correctOptionIndices: [0] }] } },
-        { _id: '68a000000000000000000057', type: 'assignment', title: 'Assignment', dueDate: new Date('2026-12-01T00:00:00.000Z'), points: 10 },
+        { _id: futureLessonId, type: 'video-lesson', title: 'Future video', videoUrl: 'https://example.com/future.mp4' },
+        { _id: '68a000000000000000000057', type: 'assignment', title: 'Assignment', description: 'Future assignment instructions', dueDate: new Date('2026-12-01T00:00:00.000Z'), points: 10 },
+        { _id: postAssignmentLessonId, type: 'video-lesson', title: 'Next video after assignment', videoUrl: 'https://example.com/after-assignment.mp4' },
         { _id: '68a000000000000000000058', type: 'note', title: 'Notes', resources: [{ title: 'Handout', url: 'https://res.cloudinary.com/test/raw/upload/handout.pdf', resourceType: 'raw', format: 'pdf' }] },
       ],
     }],
   }
+  const enrollment = {
+    _id: enrollmentId,
+    userId: studentId,
+    status: 'active',
+    courseId,
+    createdAt: new Date('2026-11-10T12:00:00.000Z'),
+    completedLessonIds: [],
+    lessonPlaybackPositions: { '68a000000000000000000054': 42 },
+  }
+  let quizPassed = false
   const restores = [
     stub(Student, 'findById', async () => ({
       _id: studentId,
@@ -5729,14 +5890,7 @@ test('student learning content returns the enrolled course with every published 
       })
       return {
         sort() { return this },
-        lean: async () => ({
-          _id: enrollmentId,
-          userId: studentId,
-          status: 'active',
-          courseId,
-          createdAt: new Date('2026-11-10T12:00:00.000Z'),
-          lessonPlaybackPositions: { '68a000000000000000000054': 42 },
-        }),
+        lean: async () => enrollment,
       }
     }),
     stub(Course, 'findById', (id) => {
@@ -5780,7 +5934,9 @@ test('student learning content returns the enrolled course with every published 
     stub(QuizAttempt, 'find', () => ({
       select() { return this },
       sort() { return this },
-      lean: async () => [],
+      lean: async () => (quizPassed
+        ? [{ quizId: '68a000000000000000000056', status: 'submitted', passed: true }]
+        : []),
     })),
   ]
 
@@ -5795,26 +5951,34 @@ test('student learning content returns the enrolled course with every published 
     assert.deepEqual(result.enrollment.lessonPlaybackPositions, { '68a000000000000000000054': 42 })
     assert.deepEqual(result.enrollment.courseProgress, {
       completedActivities: 0,
-      totalActivities: 3,
+      totalActivities: 5,
       percentage: 0,
       isComplete: false,
-      videos: { completed: 0, total: 1 },
+      videos: { completed: 0, total: 3 },
       quizzes: { completed: 0, total: 1 },
       assignments: { completed: 0, total: 1 },
     })
     assert.deepEqual(result.enrollment.courseId.modules[0].contentItems.map((item) => item.type), [
       'video-lesson',
       'quiz',
+      'video-lesson',
       'assignment',
+      'video-lesson',
       'note',
     ])
-    assert.equal(result.enrollment.courseId.modules[0].contentItems[2].points, 10)
-    assert.equal(result.enrollment.courseId.modules[0].contentItems[2].dueDate, '2026-11-17T12:00:00.000Z')
-    assert.equal(result.enrollment.courseId.modules[0].contentItems[3].resources[0].url, 'https://res.cloudinary.com/test/raw/upload/handout.pdf')
+    assert.equal(result.enrollment.courseId.modules[0].contentItems[3].points, 10)
+    assert.equal(result.enrollment.courseId.modules[0].contentItems[3].dueDate, '2026-11-17T12:00:00.000Z')
+    assert.equal(result.enrollment.courseId.modules[0].contentItems[5].resources[0].url, 'https://res.cloudinary.com/test/raw/upload/handout.pdf')
     assert.deepEqual(result.enrollment.courseId.modules[0].contentItems[0].transcriptCues, [
       { startTimeMs: 0, endTimeMs: 1800, text: 'The sentence spoken in the video.' },
     ])
-    assert.equal('correctOptionIndices' in result.enrollment.courseId.modules[0].contentItems[1].quiz.questions[0], false)
+    assert.equal(result.enrollment.courseId.modules[0].contentItems[0].videoUrl, 'https://example.com/video.mp4')
+    assert.equal('videoUrl' in result.enrollment.courseId.modules[0].contentItems[2], false)
+    assert.deepEqual(result.enrollment.courseId.modules[0].contentItems[1].quiz.questions, [])
+    assert.equal(
+      result.enrollment.courseId.modules[0].contentItems[3].description,
+      'Future assignment instructions',
+    )
     assert.deepEqual(result.enrollment.courseId.modules[0].contentItems[0].attentionCheck, {
       enabled: true,
       questionsDuringVideo: 1,
@@ -5826,6 +5990,34 @@ test('student learning content returns the enrolled course with every published 
     assert.equal(result.assignmentSubmissions[0].reviewComment, 'Please wait for review.')
     assert.equal(result.assignmentSubmissions[0].marksObtained, 8)
     assert.equal(result.assignmentSubmissions[0].feedback, 'Clear explanation.')
+
+    enrollment.completedLessonIds = ['68a000000000000000000054']
+    const unlockedResponse = await request(`/courses/${courseId}/learning-content`, {
+      role: 'student',
+      subject: studentId,
+    })
+    assert.equal(unlockedResponse.status, 200)
+    const unlockedResult = await unlockedResponse.json()
+    const unlockedQuiz = unlockedResult.enrollment.courseId.modules[0].contentItems[1].quiz
+    assert.equal(unlockedQuiz.questions[0].prompt, 'Question?')
+    assert.equal('correctOptionIndices' in unlockedQuiz.questions[0], false)
+    assert.equal(
+      'videoUrl' in unlockedResult.enrollment.courseId.modules[0].contentItems[2],
+      false,
+    )
+
+    enrollment.completedLessonIds = ['68a000000000000000000054', futureLessonId]
+    quizPassed = true
+    const nextVideoResponse = await request(`/courses/${courseId}/learning-content`, {
+      role: 'student',
+      subject: studentId,
+    })
+    assert.equal(nextVideoResponse.status, 200)
+    const nextVideoResult = await nextVideoResponse.json()
+    const postAssignmentVideo = nextVideoResult.enrollment.courseId.modules[0].contentItems[4]
+    assert.equal(postAssignmentVideo._id, postAssignmentLessonId)
+    assert.equal(postAssignmentVideo.videoUrl, 'https://example.com/after-assignment.mp4')
+    assert.notEqual(postAssignmentVideo._progressionLocked, true)
   } finally {
     restores.reverse().forEach((restore) => restore())
   }
@@ -5839,33 +6031,38 @@ test('student attention checks serve private questions from legacy and content i
   const contentItemLessonId = '68a000000000000000000059'
   const course = {
     _id: courseId,
-    modules: [{
-      lessons: [{
-        _id: legacyLessonId,
-        title: 'Legacy video',
-        attentionCheck: {
-          enabled: true,
-          questionsDuringVideo: 1,
-          minIntervalSeconds: 10,
-          maxIntervalSeconds: 60,
-          questions: [{ _id: '68a000000000000000000055', prompt: 'Legacy question?', options: ['A', 'B'], correctOptionIndices: [1], selectedForPlayback: true }],
-        },
-      }],
-      contentItems: [{
-        _id: contentItemLessonId,
-        type: 'video-lesson',
-        title: 'Modern video',
-        attentionCheck: {
-          enabled: true,
-          questionsDuringVideo: 1,
-          minIntervalSeconds: 10,
-          maxIntervalSeconds: 60,
-          questions: [{ _id: '68a000000000000000000056', prompt: 'Modern question?', options: ['C', 'D'], correctOptionIndices: [0], selectedForPlayback: true }],
-        },
-      }],
-    }],
+    modules: [
+      {
+        lessons: [{
+          _id: legacyLessonId,
+          title: 'Legacy video',
+          attentionCheck: {
+            enabled: true,
+            questionsDuringVideo: 1,
+            minIntervalSeconds: 10,
+            maxIntervalSeconds: 60,
+            questions: [{ _id: '68a000000000000000000055', prompt: 'Legacy question?', options: ['A', 'B'], correctOptionIndices: [1], selectedForPlayback: true }],
+          },
+        }],
+      },
+      {
+        contentItems: [{
+          _id: contentItemLessonId,
+          type: 'video-lesson',
+          title: 'Modern video',
+          attentionCheck: {
+            enabled: true,
+            questionsDuringVideo: 1,
+            minIntervalSeconds: 10,
+            maxIntervalSeconds: 60,
+            questions: [{ _id: '68a000000000000000000056', prompt: 'Modern question?', options: ['C', 'D'], correctOptionIndices: [0], selectedForPlayback: true }],
+          },
+        }],
+      },
+    ],
   }
   const createdResponses = []
+  const enrollment = { _id: enrollmentId, userId: studentId, courseId, completedLessonIds: [] }
   let createdId = 0
   const restores = [
     stub(Student, 'findById', () => queryResult({
@@ -5878,7 +6075,7 @@ test('student attention checks serve private questions from legacy and content i
     })),
     stub(Enrollment, 'findOne', () => ({
       sort() { return this },
-      lean: async () => ({ _id: enrollmentId, userId: studentId, courseId }),
+      lean: async () => enrollment,
     })),
     stub(Course, 'findById', () => ({ select() { return this }, lean: async () => course })),
     stub(VideoAttentionResponse, 'findOne', () => ({
@@ -5913,6 +6110,7 @@ test('student attention checks serve private questions from legacy and content i
       assert.deepEqual(result.question.options, lessonId === legacyLessonId ? ['A', 'B'] : ['C', 'D'])
       assert.equal('correctOptionIndices' in result.question, false)
       assert.equal('correctOptionIndices' in result, false)
+      if (lessonId === legacyLessonId) enrollment.completedLessonIds = [legacyLessonId]
     }
     assert.equal(createdResponses.length, 3)
     assert.deepEqual(createdResponses.map((entry) => entry.videoPositionSeconds), [35, 35, 35])
@@ -6032,6 +6230,10 @@ test('student attention check submissions persist selected answers and server re
       sort() { return this },
       lean: async () => ({ _id: enrollmentId, userId: studentId, courseId }),
     })),
+    stub(Course, 'findById', () => ({
+      select() { return this },
+      lean: async () => ({ modules: [{ lessons: [{ _id: lessonId }] }] }),
+    })),
     stub(VideoAttentionResponse, 'findOne', (query) => {
       assert.equal(String(query._id), responseId)
       assert.equal(query.status, undefined)
@@ -6104,6 +6306,10 @@ test('student attention checks record incorrect and unanswered responses using t
     stub(Enrollment, 'findOne', () => ({
       sort() { return this },
       lean: async () => ({ _id: enrollmentId, userId: studentId, courseId }),
+    })),
+    stub(Course, 'findById', () => ({
+      select() { return this },
+      lean: async () => ({ modules: [{ lessons: [{ _id: lessonId }] }] }),
     })),
     stub(VideoAttentionResponse, 'findOne', (query) => ({
       select: async () => responses.get(String(query._id)),
@@ -6434,6 +6640,75 @@ test('student quiz attempts start, score on the server, and reject duplicate sub
   }
 })
 
+test('student quiz status and start are blocked until preceding video is complete', async () => {
+  const studentId = '68a000000000000000000031'
+  const courseId = '68a000000000000000000091'
+  const enrollmentId = '68a000000000000000000092'
+  const videoId = '68a000000000000000000093'
+  const quizId = '68a000000000000000000094'
+  let attemptCreated = false
+  const course = {
+    _id: courseId,
+    quizzes: [],
+    modules: [{
+      contentItems: [
+        { _id: videoId, type: 'video-lesson', title: 'Watch first' },
+        { _id: '68a000000000000000000095', type: 'quiz', title: 'Quiz', quiz: { _id: quizId, questions: [{ prompt: 'Question' }] } },
+      ],
+    }],
+  }
+  const restores = [
+    stub(Student, 'findById', async () => ({
+      _id: studentId,
+      role: 'student',
+      studentType: 'independent',
+      approvalStatus: 'approved',
+      status: 'active',
+      isActive: true,
+    })),
+    stub(Enrollment, 'findOne', () => ({
+      sort() { return this },
+      lean: async () => ({
+        _id: enrollmentId,
+        userId: studentId,
+        courseId,
+        status: 'active',
+        completedLessonIds: [],
+      }),
+    })),
+    stub(Course, 'findById', () => ({
+      select() { return this },
+      lean: async () => course,
+    })),
+    stub(QuizAttempt, 'create', async () => {
+      attemptCreated = true
+      throw new Error('A locked quiz attempt must not be created.')
+    }),
+    stub(QuizAttemptState, 'findOneAndUpdate', async () => {
+      throw new Error('A locked quiz must not reserve an attempt.')
+    }),
+  ]
+
+  try {
+    const status = await request(`/courses/${courseId}/quizzes/${quizId}/attempts/status`, {
+      role: 'student',
+      subject: studentId,
+    })
+    assert.equal(status.status, 409)
+
+    const started = await request(`/courses/${courseId}/quizzes/${quizId}/attempts/start`, {
+      role: 'student',
+      subject: studentId,
+      body: {},
+    })
+    assert.equal(started.status, 409)
+    assert.match((await started.json()).message, /previous course activity/i)
+    assert.equal(attemptCreated, false)
+  } finally {
+    restores.reverse().forEach((restore) => restore())
+  }
+})
+
 test('student quiz locks after three failures and resets the cycle after 24 hours', async () => {
   const studentId = '68a000000000000000000031'
   const courseId = '68a000000000000000000081'
@@ -6652,6 +6927,65 @@ test('student assignment upload is stored only for an assignment in the enrolled
   }
 })
 
+test('student assignment upload is blocked until preceding video activities are complete', async () => {
+  const studentId = '68a000000000000000000031'
+  const courseId = '68a000000000000000000071'
+  const enrollmentId = '68a000000000000000000072'
+  const lessonId = '68a000000000000000000076'
+  const assignmentId = '68a000000000000000000073'
+  const restores = [
+    stub(Student, 'findById', async () => ({
+      _id: studentId,
+      role: 'student',
+      studentType: 'independent',
+      approvalStatus: 'approved',
+      status: 'active',
+      isActive: true,
+    })),
+    stub(Enrollment, 'findOne', () => ({
+      sort() { return this },
+      lean: async () => ({
+        _id: enrollmentId,
+        userId: studentId,
+        courseId,
+        status: 'active',
+        createdAt: new Date(),
+        completedLessonIds: [],
+      }),
+    })),
+    stub(Course, 'findById', () => ({
+      select() { return this },
+      lean: async () => ({
+        _id: courseId,
+        modules: [{
+          contentItems: [
+            { _id: lessonId, type: 'video-lesson', title: 'Watch first' },
+            { _id: assignmentId, type: 'assignment', title: 'Submit report' },
+          ],
+        }],
+      }),
+    })),
+    stub(AssignmentSubmission, 'create', async () => {
+      assert.fail('A locked assignment must not accept a submission.')
+    }),
+  ]
+  try {
+    const response = await studentAssignmentUpload(
+      `/courses/${courseId}/assignments/${assignmentId}/submissions`,
+      {
+        studentId,
+        fileName: 'report.pdf',
+        mimeType: 'application/pdf',
+        contents: Buffer.from('%PDF-1.7\nstudent work'),
+      },
+    )
+    assert.equal(response.status, 409)
+    assert.match((await response.json()).message, /complete the previous course activity/i)
+  } finally {
+    restores.reverse().forEach((restore) => restore())
+  }
+})
+
 test('student assignment upload is rejected after one week from enrollment', async () => {
   const studentId = '68a000000000000000000031'
   const courseId = '68a000000000000000000071'
@@ -6768,10 +7102,11 @@ test('student assignment download is restricted to the enrolled owner and return
   }
 })
 
-test('student lesson progress updates only a lesson in the student enrollment', async () => {
+test('student lesson completion is not blocked by watched-position races', async () => {
   const studentId = '68a000000000000000000031'
   const enrollmentId = '68a000000000000000000051'
   const lessonId = '68a000000000000000000052'
+  const playbackUpdatedAt = new Date()
   let enrollmentQuery
   let updateQuery
   let updateDocument
@@ -6784,7 +7119,7 @@ test('student lesson progress updates only a lesson in the student enrollment', 
     isActive: true,
   }))
   const restoreEnrollmentFind = stub(Enrollment, 'findOne', (query) => {
-    enrollmentQuery = query
+    enrollmentQuery = { ...query }
     return {
       populate() { return this },
       lean: async () => ({
@@ -6793,7 +7128,10 @@ test('student lesson progress updates only a lesson in the student enrollment', 
         status: 'active',
         completedLessonIds: [],
         startedLessonIds: [],
-        lessonPlaybackPositions: {},
+        lessonPlaybackPositions: { [lessonId]: 0 },
+        lessonPlaybackStates: {
+          [lessonId]: { watchedPositionSeconds: 0, updatedAt: playbackUpdatedAt, isPlaying: false },
+        },
         lessonCompletionDates: {},
         courseId: {
           modules: [{
@@ -6844,6 +7182,7 @@ test('student lesson progress updates only a lesson in the student enrollment', 
       completedLessonIds: [lessonId],
       startedLessonIds: [lessonId],
       lessonPlaybackPositions: { [lessonId]: 30 },
+      lessonWatchedPositions: { [lessonId]: 30 },
       courseProgress: {
         completedActivities: 1,
         totalActivities: 2,
@@ -6862,13 +7201,24 @@ test('student lesson progress updates only a lesson in the student enrollment', 
       collegeId: { $exists: false },
       status: { $ne: 'cancelled' },
     })
-    assert.deepEqual(updateQuery, enrollmentQuery)
+    assert.deepEqual({
+      _id: updateQuery._id,
+      userId: updateQuery.userId,
+      collegeId: updateQuery.collegeId,
+      status: updateQuery.status,
+    }, enrollmentQuery)
+    assert.equal(updateQuery[`lessonPlaybackPositions.${lessonId}`], undefined)
+    assert.equal(updateQuery[`lessonPlaybackStates.${lessonId}.updatedAt`], undefined)
     assert.deepEqual(updateDocument.$addToSet, {
       startedLessonIds: lessonId,
       completedLessonIds: lessonId,
     })
     assert.ok(updateDocument.$set[`lessonCompletionDates.${lessonId}`] instanceof Date)
-    assert.deepEqual(updateDocument.$max, { [`lessonPlaybackPositions.${lessonId}`]: 30 })
+    assert.equal(updateDocument.$set[`lessonPlaybackPositions.${lessonId}`], 30)
+    assert.equal(updateDocument.$set[`lessonPlaybackStates.${lessonId}.isPlaying`], false)
+    assert.deepEqual(updateDocument.$max, {
+      [`lessonPlaybackStates.${lessonId}.watchedPositionSeconds`]: 30,
+    })
   } finally {
     restoreQuizAttempts()
     restoreAssignmentSubmissions()
@@ -6876,6 +7226,108 @@ test('student lesson progress updates only a lesson in the student enrollment', 
     restoreEnrollmentUpdate()
     restoreEnrollmentFind()
     restoreStudent()
+  }
+})
+
+test('student video progress allows forward seeking and persists the furthest position', async () => {
+  const studentId = '68a000000000000000000031'
+  const enrollmentId = '68a000000000000000000096'
+  const courseId = '68a000000000000000000097'
+  const lessonId = '68a000000000000000000098'
+  const nextLessonId = '68a000000000000000000099'
+  let state = {
+    watchedPositionSeconds: 0,
+    updatedAt: new Date(),
+    isPlaying: false,
+  }
+  let position = 0
+  let updateCount = 0
+  const restores = [
+    stub(Student, 'findById', async () => ({
+      _id: studentId,
+      role: 'student',
+      studentType: 'independent',
+      approvalStatus: 'approved',
+      status: 'active',
+      isActive: true,
+    })),
+    stub(Enrollment, 'findOne', () => ({
+      populate() { return this },
+      lean: async () => ({
+        _id: enrollmentId,
+        userId: studentId,
+        courseId: {
+          _id: courseId,
+          modules: [{
+            contentItems: [{
+              _id: lessonId,
+              type: 'video-lesson',
+              title: 'Video',
+              durationSeconds: 30,
+            }, {
+              _id: nextLessonId,
+              type: 'video-lesson',
+              title: 'Locked video',
+              durationSeconds: 30,
+            }],
+          }],
+        },
+        status: 'active',
+        completedLessonIds: [],
+        startedLessonIds: [],
+        lessonPlaybackPositions: { [lessonId]: position },
+        lessonPlaybackStates: { [lessonId]: state },
+      }),
+    })),
+    stub(Enrollment, 'updateOne', async (_query, update) => {
+      updateCount += 1
+      position = update.$set[`lessonPlaybackPositions.${lessonId}`]
+      state = {
+        watchedPositionSeconds: update.$max[`lessonPlaybackStates.${lessonId}.watchedPositionSeconds`],
+        updatedAt: update.$set[`lessonPlaybackStates.${lessonId}.updatedAt`],
+        isPlaying: update.$set[`lessonPlaybackStates.${lessonId}.isPlaying`],
+      }
+      return { matchedCount: 1 }
+    }),
+  ]
+
+  try {
+    const lockedLesson = await request(`/enrollments/${enrollmentId}/progress`, {
+      role: 'student',
+      subject: studentId,
+      method: 'PATCH',
+      body: { lessonId: nextLessonId, started: true },
+    })
+    assert.equal(lockedLesson.status, 409)
+    assert.equal(updateCount, 0)
+
+    const forwardSeek = await request(`/enrollments/${enrollmentId}/progress`, {
+      role: 'student',
+      subject: studentId,
+      method: 'PATCH',
+      body: { lessonId, positionSeconds: 30, isPlaying: true },
+    })
+    assert.equal(forwardSeek.status, 200)
+    assert.equal(updateCount, 1)
+    assert.equal(position, 30)
+    assert.equal(state.watchedPositionSeconds, 30)
+
+    state = { ...state, updatedAt: new Date(Date.now() - 10_000), isPlaying: true }
+    const normalProgress = await request(`/enrollments/${enrollmentId}/progress`, {
+      role: 'student',
+      subject: studentId,
+      method: 'PATCH',
+      body: { lessonId, positionSeconds: 12, isPlaying: true },
+    })
+    assert.equal(normalProgress.status, 200)
+    assert.equal(updateCount, 2)
+    assert.equal(position, 12)
+    assert.equal(state.watchedPositionSeconds, 30)
+    const savedProgress = await normalProgress.json()
+    assert.equal(savedProgress.lessonPlaybackPositions[lessonId], 12)
+    assert.equal(savedProgress.lessonWatchedPositions[lessonId], 30)
+  } finally {
+    restores.reverse().forEach((restore) => restore())
   }
 })
 
@@ -6895,6 +7347,12 @@ for (const studentType of ['independent', 'college']) {
       ...(collegeId ? { collegeId } : {}),
       completedLessonIds: [],
       startedLessonIds: [],
+      lessonPlaybackPositions: Object.fromEntries(lessonIds.map((id) => [String(id), 30])),
+      lessonPlaybackStates: Object.fromEntries(lessonIds.map((id) => [String(id), {
+        watchedPositionSeconds: 30,
+        updatedAt: new Date(),
+        isPlaying: false,
+      }])),
       courseId: {
         _id: courseId,
         title: 'Verified completion course',
@@ -7284,6 +7742,7 @@ test('student lesson start is persisted without marking the lesson complete', as
       completedLessonIds: [],
       startedLessonIds: [lessonId],
       lessonPlaybackPositions: {},
+      lessonWatchedPositions: {},
     })
     assert.deepEqual(updateDocument, { $addToSet: { startedLessonIds: lessonId } })
   } finally {
@@ -7315,6 +7774,13 @@ test('student video playback position is stored per lesson and validated', async
       completedLessonIds: [],
       startedLessonIds: [],
       lessonPlaybackPositions: { [lessonId]: 18 },
+      lessonPlaybackStates: {
+        [lessonId]: {
+          watchedPositionSeconds: 18,
+          updatedAt: new Date(Date.now() - 13_000),
+          isPlaying: true,
+        },
+      },
       courseId: {
         modules: [{ contentItems: [{ _id: lessonId, type: 'video-lesson' }] }],
       },
@@ -7338,6 +7804,7 @@ test('student video playback position is stored per lesson and validated', async
       completedLessonIds: [],
       startedLessonIds: [lessonId],
       lessonPlaybackPositions: { [lessonId]: 37 },
+      lessonWatchedPositions: { [lessonId]: 37 },
     })
     assert.deepEqual(updateDocument.$addToSet, { startedLessonIds: lessonId })
     assert.equal(updateDocument.$set[`lessonPlaybackPositions.${lessonId}`], 37)
@@ -8275,8 +8742,14 @@ test('main admin permanent deletion removes the student, identity, and enrollmen
       status: 'active',
       isActive: true,
     })),
-    stub(Student, 'findOne', () => queryResult({ _id: new mongoose.Types.ObjectId(studentId) })),
+    stub(Student, 'findOne', () => queryResult({
+      _id: new mongoose.Types.ObjectId(studentId),
+      email: 'deleted.student@example.invalid',
+    })),
     stub(AccountIdentity, 'deleteOne', async (filter) => { operations.push(['identity', filter]) }),
+    stub(RegistrationEmailVerification, 'deleteOne', async (filter) => {
+      operations.push(['registration-email-verification', filter])
+    }),
     stub(Enrollment, 'deleteMany', async (filter) => { operations.push(['enrollments', filter]) }),
     stub(AssignmentSubmission, 'deleteMany', async (filter) => { operations.push(['assignment-submissions', filter]) }),
     stub(QuizAttempt, 'deleteMany', async (filter) => { operations.push(['quiz-attempts', filter]) }),
@@ -8297,6 +8770,7 @@ test('main admin permanent deletion removes the student, identity, and enrollmen
     assert.equal(response.status, 200)
     assert.deepEqual(operations.map(([name]) => name), [
       'identity',
+      'registration-email-verification',
       'enrollments',
       'assignment-submissions',
       'quiz-attempts',
@@ -8307,8 +8781,9 @@ test('main admin permanent deletion removes the student, identity, and enrollmen
       'referral-codes',
       'student',
     ])
-    assert.equal(String(operations[1][1].userId), studentId)
-    assert.equal(String(operations[9][1]._id), studentId)
+    assert.equal(operations[1][1].email, 'deleted.student@example.invalid')
+    assert.equal(String(operations[2][1].userId), studentId)
+    assert.equal(String(operations[10][1]._id), studentId)
   } finally {
     restores.reverse().forEach((restore) => restore())
   }
@@ -8332,9 +8807,12 @@ test('bulk college student deletion handles one student and routes to the bulk e
       assert.equal(String(filter.collegeId), collegeId.toString())
       assert.equal(filter.studentType, 'college')
       assert.equal(filter.role, 'student')
-      return queryResult([{ _id: studentId }])
+      return queryResult([{ _id: studentId, email: 'deleted.college.student@example.invalid' }])
     }),
     stub(AccountIdentity, 'deleteMany', async (filter) => { operations.push(['identity', filter]) }),
+    stub(RegistrationEmailVerification, 'deleteMany', async (filter) => {
+      operations.push(['registration-email-verifications', filter])
+    }),
     stub(Enrollment, 'deleteMany', async (filter) => { operations.push(['enrollments', filter]) }),
     stub(AssignmentSubmission, 'deleteMany', async (filter) => { operations.push(['assignment-submissions', filter]) }),
     stub(QuizAttempt, 'deleteMany', async (filter) => { operations.push(['quiz-attempts', filter]) }),
@@ -8359,6 +8837,7 @@ test('bulk college student deletion handles one student and routes to the bulk e
     assert.match(result.message, /Deleted 1 college students/)
     assert.deepEqual(operations.map(([name]) => name), [
       'identity',
+      'registration-email-verifications',
       'enrollments',
       'assignment-submissions',
       'quiz-attempts',
@@ -8371,8 +8850,9 @@ test('bulk college student deletion handles one student and routes to the bulk e
     ])
     assert.equal(operations[0][1].accountCollection, 'clg_students')
     assert.deepEqual(operations[0][1].accountId.$in.map(String), [studentId.toString()])
-    assert.deepEqual(operations[1][1].userId.$in.map(String), [studentId.toString()])
-    assert.deepEqual(operations[9][1]._id.$in.map(String), [studentId.toString()])
+    assert.deepEqual(operations[1][1].email.$in, ['deleted.college.student@example.invalid'])
+    assert.deepEqual(operations[2][1].userId.$in.map(String), [studentId.toString()])
+    assert.deepEqual(operations[10][1]._id.$in.map(String), [studentId.toString()])
   } finally {
     restores.reverse().forEach((restore) => restore())
   }
@@ -8397,9 +8877,13 @@ test('bulk college student deletion handles multiple/all selected students in th
     stub(CollegeStudent, 'find', (filter) => {
       assert.deepEqual(filter._id.$in.map(String), studentIds.map(String))
       assert.equal(String(filter.collegeId), collegeId.toString())
-      return queryResult(studentIds.map((_id) => ({ _id })))
+      return queryResult(studentIds.map((_id, index) => ({
+        _id,
+        email: `deleted.college.student.${index}@example.invalid`,
+      })))
     }),
     stub(AccountIdentity, 'deleteMany', async () => ({})),
+    stub(RegistrationEmailVerification, 'deleteMany', async () => ({})),
     stub(Enrollment, 'deleteMany', async () => ({})),
     stub(AssignmentSubmission, 'deleteMany', async () => ({})),
     stub(QuizAttempt, 'deleteMany', async () => ({})),
