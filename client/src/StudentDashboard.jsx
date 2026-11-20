@@ -844,6 +844,12 @@ function getCachedStudentPageCourseContent(courseId) {
   return cacheKey ? studentCourseContentCache.get(cacheKey)?.content || null : null
 }
 
+function hasFreshStudentPageCourseContent(courseId) {
+  const cacheKey = getStudentCourseContentCacheKey(courseId)
+  const cached = cacheKey ? studentCourseContentCache.get(cacheKey) : null
+  return Boolean(cached && Date.now() - cached.savedAt < studentLearningPageCacheTtlMs)
+}
+
 function seedStudentCourseLearning(enrollment) {
   const courseId = enrollment?.courseId?._id
   const cacheKey = getStudentCourseContentCacheKey(courseId)
@@ -3150,7 +3156,7 @@ function StudentCourseLearning({
       .sort((left, right) => (
         new Date(right.submittedAt || 0).getTime() - new Date(left.submittedAt || 0).getTime()
       ))[0]
-    return latestSubmission?.reviewStatus === 'approved'
+    return Boolean(latestSubmission)
   }
   const initialFrontierIndex = activityItems.findIndex((item) => !isInitiallyCompleted(item))
   const requestedActivityItem = requestedActivityId && ['quiz', 'assignment'].includes(requestedActivityType)
@@ -3296,7 +3302,7 @@ function StudentCourseLearning({
     }
     if (item.type === 'quiz') return hasPassedQuiz(item.quiz?._id || item._learningKey)
     if (item.type === 'assignment') {
-      return getLatestAssignmentSubmission(item._id || item._learningKey)?.reviewStatus === 'approved'
+      return Boolean(getLatestAssignmentSubmission(item._id || item._learningKey))
     }
     return false
   }
@@ -5099,6 +5105,11 @@ function StudentCourseLearning({
                         onLogout={onLogout}
                         showHeader={false}
                       />
+                    ) : courseContentStatus === 'loading' ? (
+                      <div className="student-course-learning__video-state student-course-learning__video-state--loading" role="status" aria-busy="true">
+                        <span className="student-loader" aria-hidden="true" />
+                        <span>Loading quiz…</span>
+                      </div>
                     ) : <EmptyState icon="check" title="Quiz is not available" description="This quiz does not contain any questions." />
                   ) : activeContentItem?.type === 'assignment' ? (
                     <StudentAssignmentPanel
@@ -5876,7 +5887,7 @@ function StudentCourseLearningPage({
   const [enrollment, setEnrollment] = useState(initialEnrollment)
   const [loading, setLoading] = useState(!initialEnrollment)
   const [courseContentStatus, setCourseContentStatus] = useState(() => (
-    getCachedStudentPageCourseContent(courseId) ? 'ready' : 'loading'
+    hasFreshStudentPageCourseContent(courseId) ? 'ready' : 'loading'
   ))
   const [error, setError] = useState('')
   const courseContentRequestSequence = useRef(0)
@@ -5897,7 +5908,7 @@ function StudentCourseLearningPage({
     const initialCourseEnrollment = getInitialStudentCourseLearningEnrollment(courseId)
     setEnrollment(initialCourseEnrollment)
     setLoading(!initialCourseEnrollment)
-    setCourseContentStatus(initialCourseContent ? 'ready' : 'loading')
+    setCourseContentStatus(initialCourseContent && hasFreshStudentPageCourseContent(courseId) ? 'ready' : 'loading')
     setError('')
     fetchStudentPageCourseContent(courseId, onLogout)
       .then(({ enrollment: courseEnrollment, assignmentSubmissions, quizAttempts }) => {
@@ -5934,6 +5945,7 @@ function StudentCourseLearningPage({
       const requestSequence = ++courseContentRequestSequence.current
       const cacheKey = getStudentCourseContentCacheKey(courseId)
       if (cacheKey) studentCourseContentCache.delete(cacheKey)
+      setCourseContentStatus('loading')
       try {
         const content = await fetchStudentCourseContent(courseId, onLogout)
         if (!active || requestSequence !== courseContentRequestSequence.current) return
@@ -5945,6 +5957,7 @@ function StudentCourseLearningPage({
       } catch (loadError) {
         if (active && requestSequence === courseContentRequestSequence.current) {
           setError(loadError instanceof Error ? loadError.message : 'Your course could not be loaded.')
+          setCourseContentStatus('error')
         }
       }
     }
